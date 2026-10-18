@@ -3,8 +3,10 @@ mod auth;
 mod overview_body;
 mod patch_index;
 mod paths;
+mod review_session;
 mod sync;
 mod theme;
+mod ui;
 
 use std::sync::Arc;
 use std::time::Duration;
