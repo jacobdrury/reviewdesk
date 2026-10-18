@@ -12,7 +12,7 @@ Review Desk is **local-first** for Inbox and cached pull-request data:
 - Persistence uses **embedded Turso** (SQLite-compatible, in-process). **No Turso Cloud account** or remote database is required for local features.
 - Schema stays **vanilla SQLite** so we can fall back to plain SQLite later if needed.
 
-Full decision record: [ADR-0001: Local-first persistence with embedded Turso (LocalStore)](docs/adr/0001-localstore-turso-local-first.md).
+Decision records: [ADR-0001: LocalStore-first](docs/adr/0001-localstore-turso-local-first.md), [ADR-0004: Provider write-through and cache scope](docs/adr/0004-provider-writethrough-and-localstore-cache.md).
 
 Agents: see root [AGENTS.md](AGENTS.md) and [GLOSSARY.md](GLOSSARY.md).
 
@@ -25,4 +25,4 @@ cargo test
 cargo run -p reviewdesk
 ```
 
-Provider auth: `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token` (see `crates/reviewdesk/src/auth.rs`).
+Provider auth: `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Scopes and classic-vs-fine-grained gaps: [docs/auth-github.md](docs/auth-github.md).

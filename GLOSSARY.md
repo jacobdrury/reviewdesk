@@ -9,12 +9,24 @@ The product: a desktop app for reviewing code changes from a Provider.
 _Avoid_: Diff Desk, the app, the client
 
 **Provider**:
-A host that exposes pull requests and their patches. The first provider is github.com.
+A host that exposes pull requests, patches, notifications, and review writeback. The first provider is github.com.
 _Avoid_: forge, backend, integration, SCM, GitLab (as the default; GitLab is a later provider)
 
 **Inbox**:
-The notifications home: Provider events the reviewer should triage (review requests, comments, mentions, CI and merge state changes on watched pull requests).
+The notifications home: a flat, unread-first list of notification threads the reviewer should triage (review requests, comments, mentions, CI and merge state changes on pull request subjects).
 _Avoid_: queue, todo list, feed, PR list (that surface is Pull requests)
+
+**Notification thread**:
+One Provider notification unit listed in the Inbox: a pull request subject with a latest reason and unread state. Not one row per comment and not an open-PR search snapshot.
+_Avoid_: notification event, inbox item (as the type name), feed item, search hit
+
+**Done**:
+The Inbox triage action that removes a notification thread from the Inbox via Provider writeback.
+_Avoid_: archive, dismiss, clear (when meaning this Provider action)
+
+**Mark read**:
+The Inbox triage action that clears unread on a notification thread via Provider writeback, including when the row is opened.
+_Avoid_: seen, acknowledge (as the product verb)
 
 **Pull requests**:
 The list surface of pull requests, with optional Views for filter, group, and sort. Distinct from Inbox.
@@ -33,7 +45,7 @@ The textual diff of a pull request, loaded for display on the Diff surface.
 _Avoid_: diff (as the data), changeset file list alone
 
 **Review pane**:
-The surface for a selected pull request: Overview, peer tabs Pipelines / Conversation / Changes, and the Metadata panel.
+The right side of the shell for a selected pull request: Overview, peer tabs (Files, Pipelines, Conversation), and the Metadata panel.
 _Avoid_: detail pane, main pane, content area
 
 **Overview**:
@@ -43,6 +55,10 @@ _Avoid_: details tab, PR header, sidebar
 **Metadata panel**:
 A foldable, hideable Review pane panel (open by default on Overview) for pull-request status and mutations: labels, assignees, reviewers, draft↔ready, branches, review-gate summary, merge and auto-merge, plus a compact Check rollup that activates Pipelines. Folds to a status strip; hide restores only from Review pane chrome.
 _Avoid_: sidebar, details pane, PR header, properties panel
+
+**Conversation**:
+The Review pane surface that shows Threads and non-diff timeline comments for the selected pull request.
+_Avoid_: comments tab, activity, timeline (as the surface name)
 
 **Pipelines**:
 The Review pane tab that shows the Check rollup and a newest-first list of Pipelines for the pull request head. Not a workflow-file browser, in-app job-log viewer, or merge box.
@@ -61,9 +77,21 @@ The combined status-check state for the pull request head (success, pending, fai
 _Avoid_: CI badge, combined status (as the product name), build status
 
 **Diff surface**:
-The UI that shows a Patch and accepts Annotations. Lives under the Changes tab of the Review pane. Read-only for provider writeback in the first slice.
-_Avoid_: editor, diff view (as the domain name)
+The UI that shows a Patch and the Threads anchored on it. Lives under the Files tab of the Review pane.
+_Avoid_: editor, diff view (as the domain name), Annotation
 
-**Annotation**:
-A review remark anchored to a location on the Diff surface. In the first slice it exists only in memory.
-_Avoid_: comment (when meaning the in-app stub), suggestion, note
+**Thread**:
+An anchored conversation of Review comments on a pull request, shared by Conversation and the Diff surface. Resolve state and outdatedness belong to the Thread.
+_Avoid_: Annotation, comment thread (as the type name), discussion
+
+**Review comment**:
+One remark in a Thread (or a draft on a Pending review before Submit). Diff-anchored remarks use path plus line range/side or file-level; they are never a separate “Annotation” product type.
+_Avoid_: Annotation, note, comment (when meaning the domain type)
+
+**Suggestion**:
+A Review comment whose body proposes replacement text for its Diff selection via a suggestion block. Compose and display only in product language; applying a Suggestion onto the branch is out of scope for day-to-day readiness.
+_Avoid_: Annotation, inline patch, code fix (as the type name)
+
+**Pending review**:
+The viewer’s single unsubmitted review session on a pull request. Draft Review comments and replies attach here until Submit as comment, approve, or request changes (or Discard clears the whole session).
+_Avoid_: draft Annotation, in-memory Annotation, review draft (as the type name)
