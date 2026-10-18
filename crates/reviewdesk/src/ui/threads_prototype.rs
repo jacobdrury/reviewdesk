@@ -33,7 +33,8 @@ pub(crate) fn render_conversation(
                 .min_h_0()
                 .px_4()
                 .pt_3()
-                .gap_4()
+                .pb_2()
+                .gap_3()
                 .children(threads.into_iter().map(|thread| {
                     render_linear_thread(
                         thread,
@@ -271,6 +272,11 @@ fn render_linear_thread(
     v_flex()
         .w_full()
         .gap_2()
+        .p_3()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.4))
         .when(resolved, |el| {
             el.child(
                 h_flex()
@@ -308,21 +314,14 @@ fn render_linear_thread(
             el.child(
                 v_flex()
                     .w_full()
-                    .pl(px(28.))
+                    .pl(px(12.))
                     .gap_2()
-                    .border_l_1()
+                    .border_l_2()
                     .border_color(cx.theme().border)
-                    .ml(px(12.))
+                    .ml(px(10.))
                     .children(replies.iter().map(|comment| {
-                        render_comment_row(
-                            comment,
-                            thread,
-                            false,
-                            show_resolve_controls,
-                            entity.clone(),
-                            cx,
-                        )
-                        .into_any_element()
+                        render_reply_card(comment, thread, show_resolve_controls, entity.clone(), cx)
+                            .into_any_element()
                     })),
             )
         })
@@ -330,9 +329,11 @@ fn render_linear_thread(
             el.child(
                 h_flex()
                     .w_full()
-                    .pl(px(28.))
-                    .ml(px(12.))
+                    .pl(px(12.))
+                    .ml(px(10.))
                     .gap_2()
+                    .border_l_2()
+                    .border_color(cx.theme().border)
                     .child(avatar_chip("you", cx))
                     .child(
                         v_flex()
@@ -346,7 +347,7 @@ fn render_linear_thread(
                                     .rounded_md()
                                     .border_1()
                                     .border_color(cx.theme().border)
-                                    .bg(cx.theme().secondary.opacity(0.25))
+                                    .bg(cx.theme().background)
                                     .child(
                                         div()
                                             .text_sm()
@@ -372,6 +373,30 @@ fn render_linear_thread(
                     ),
             )
         })
+}
+
+fn render_reply_card(
+    comment: &StubComment,
+    thread: &StubThread,
+    show_resolve_controls: bool,
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .p_2()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().background)
+        .child(render_comment_row(
+            comment,
+            thread,
+            false,
+            show_resolve_controls,
+            entity,
+            cx,
+        ))
 }
 
 fn render_comment_row(
@@ -523,7 +548,7 @@ fn render_code_context(lines: &'static [CodeLine], cx: &App) -> impl IntoElement
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().secondary.opacity(0.35))
+        .bg(cx.theme().background)
         .overflow_x_hidden()
         .children(lines.iter().map(|line| {
             let bg = if line.highlighted {
