@@ -14,4 +14,4 @@ Single-context: root `GLOSSARY.md` and `docs/adr/`. See `docs/agents/domain.md`.
 
 ### UI performance
 
-Snappy scroll, layout, and disclosure for Overview, Diff, Inbox, and any scrollable pane. Read `docs/agents/ui-performance.md` before making those choices.
+Snappy scroll, layout, and disclosure for Overview, Diff, Inbox, and any scrollable pane. Read `docs/agents/ui-performance.md` before making those choices — it names **Zed** as the GPUI reference (look-here table, Files dual-pane policy, bounded flex under pinned chrome).
