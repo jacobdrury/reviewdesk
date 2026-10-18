@@ -99,6 +99,25 @@ create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_l
     (
         5,
         "
+create table reviewdesk_views (
+    id text not null primary key,
+    name text not null,
+    kind text not null,
+    position integer not null,
+    filter_json text not null,
+    group_by text not null,
+    sort_json text not null
+);
+create index idx_views_position on reviewdesk_views(position);
+create table reviewdesk_preferences (
+    key text not null primary key,
+    value text not null
+);
+",
+    ),
+    (
+        6,
+        "
 create table reviewdesk_notification_threads (
     id text not null primary key,
     pull_request_id text not null,
@@ -113,7 +132,7 @@ create index idx_notification_threads_unread on reviewdesk_notification_threads(
 ",
     ),
     (
-        6,
+        7,
         "
 create table if not exists pull_request_threads (
     pull_request_id text not null primary key,

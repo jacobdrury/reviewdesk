@@ -14,6 +14,9 @@ use crate::review_threads::{
 /// Host that exposes pull requests, their patches, and the notification Inbox.
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// Login of the single signed-in identity, used to bind "I am author / reviewer" Views.
+    async fn current_user(&self) -> Result<String, ProviderError>;
+
     async fn list_pull_requests(
         &self,
         options: &PullRequestListOptions,

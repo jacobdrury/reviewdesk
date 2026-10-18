@@ -158,6 +158,10 @@ mod tests {
 
     #[async_trait]
     impl Provider for MemoryProvider {
+        async fn current_user(&self) -> Result<String, ProviderError> {
+            Ok("test-user".into())
+        }
+
         async fn list_pull_requests(
             &self,
             _options: &PullRequestListOptions,

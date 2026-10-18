@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::id::PullRequestId;
 
@@ -18,7 +19,8 @@ impl Default for PullRequestListOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DraftFilter {
     ReadyOnly,
     DraftsOnly,
@@ -31,7 +33,8 @@ pub struct PullRequestLabel {
     pub color: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReviewState {
     Pending,
     Approved,
@@ -42,19 +45,21 @@ pub enum ReviewState {
 }
 
 /// Sort direction for Pull requests queries and future saved views.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortDirection {
     Asc,
     Desc,
 }
 
 /// Fields supported for Pull requests ordering in v1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PullRequestListSortField {
     UpdatedAt,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullRequestListSort {
     pub field: PullRequestListSortField,
     pub direction: SortDirection,
