@@ -646,7 +646,12 @@ fn render_review_stage(
     stage = stage.child(render_review_tabs(proto.review_tab, chrome.dense(), cx));
 
     if chrome.metadata_under_tabs() {
-        stage = stage.child(render_metadata_band(proto.metadata_open, chrome.dense(), cx));
+        stage = stage.child(render_metadata_band(
+            proto,
+            proto.metadata_open,
+            chrome.dense(),
+            cx,
+        ));
     }
 
     let body = render_tab_body(proto, cx);
@@ -665,7 +670,7 @@ fn render_review_stage(
                                 resizable_panel()
                                     .size(px(chrome.metadata_default_width()))
                                     .size_range(px(200.)..px(420.))
-                                    .child(render_metadata_panel(chrome, true, cx)),
+                                    .child(render_metadata_panel(proto, chrome, true, cx)),
                             )
                         }),
                 ),
@@ -688,7 +693,7 @@ fn render_review_stage(
                                 resizable_panel()
                                     .size(px(160.))
                                     .size_range(px(120.)..px(320.))
-                                    .child(render_metadata_panel(chrome, false, cx)),
+                                    .child(render_metadata_panel(proto, chrome, false, cx)),
                             )
                         }),
                 ),
@@ -827,11 +832,13 @@ fn stub_tab(
 }
 
 fn render_metadata_band(
+    proto: &PrototypeChrome,
     open: bool,
     dense: bool,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let py = if dense { px(4.) } else { px(8.) };
+    let provider_link = provider_link_short_and_url(&proto.view);
     v_flex()
         .w_full()
         .border_b_1()
@@ -881,6 +888,30 @@ fn render_metadata_band(
                     .px_3()
                     .pb_2()
                     .gap_4()
+                    .when_some(provider_link, |row, (short, url)| {
+                        row.child(
+                            v_flex()
+                                .gap_0()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Link"),
+                                )
+                                .child(
+                                    div()
+                                        .id("metadata-band-provider-link")
+                                        .text_sm()
+                                        .text_color(cx.theme().link)
+                                        .underline()
+                                        .cursor_pointer()
+                                        .child(short)
+                                        .on_click(move |_, _, cx| {
+                                            cx.open_url(&url);
+                                        }),
+                                ),
+                        )
+                    })
                     .children(STUB_METADATA_ROWS.iter().take(4).map(|(k, v)| {
                         v_flex()
                             .gap_0()
@@ -897,6 +928,7 @@ fn render_metadata_band(
 }
 
 fn render_metadata_panel(
+    proto: &PrototypeChrome,
     chrome: ChromeVariant,
     vertical: bool,
     cx: &mut Context<ReviewDesk>,
@@ -907,11 +939,10 @@ fn render_metadata_panel(
         "Metadata"
     };
     let header_py = if chrome.dense() { px(4.) } else { px(8.) };
+    let provider_link = provider_link_short_and_url(&proto.view);
     let mut panel = v_flex().size_full().min_h_0();
     if vertical {
-        panel = panel
-            .border_l_1()
-            .border_color(cx.theme().border);
+        panel = panel.border_l_1().border_color(cx.theme().border);
     } else {
         panel = panel
             .border_t_1()
@@ -953,6 +984,30 @@ fn render_metadata_panel(
                 .min_h_0()
                 .p_3()
                 .gap_3()
+                .when_some(provider_link, |el, (short, url)| {
+                    el.child(
+                        v_flex()
+                            .gap_0()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Link"),
+                            )
+                            .child(
+                                div()
+                                    .id("metadata-provider-link")
+                                    .text_sm()
+                                    .text_color(cx.theme().link)
+                                    .underline()
+                                    .cursor_pointer()
+                                    .child(short)
+                                    .on_click(move |_, _, cx| {
+                                        cx.open_url(&url);
+                                    }),
+                            ),
+                    )
+                })
                 .children(STUB_METADATA_ROWS.iter().map(|(k, v)| {
                     v_flex()
                         .gap_0()
@@ -972,6 +1027,27 @@ fn render_metadata_panel(
                         .on_click(|_, _, _| {}),
                 ),
         )
+}
+
+/// Short provider id (`owner/repo#n`) plus URL for the Metadata link row.
+fn provider_link_short_and_url(view: &SessionView) -> Option<(String, String)> {
+    let id = view.selected_id.as_ref()?;
+    let short = id.as_str().to_string();
+    if let LoadState::Ready(detail) = &view.detail
+        && !detail.web_url.is_empty()
+    {
+        return Some((short, detail.web_url.clone()));
+    }
+    let url = github_url_from_short_id(&short).unwrap_or_else(|| short.clone());
+    Some((short, url))
+}
+
+fn github_url_from_short_id(short: &str) -> Option<String> {
+    let (path, number) = short.rsplit_once('#')?;
+    if path.is_empty() || number.is_empty() {
+        return None;
+    }
+    Some(format!("https://github.com/{path}/pull/{number}"))
 }
 
 fn render_chrome_switcher(

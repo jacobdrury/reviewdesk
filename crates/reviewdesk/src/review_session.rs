@@ -713,7 +713,6 @@ impl ReviewSession {
             title: &detail.title,
             author: &detail.author_login,
             is_draft: detail.is_draft,
-            web_url: &detail.web_url,
             labels: &labels,
             reviewers: &reviewers,
             body: &detail.body,
