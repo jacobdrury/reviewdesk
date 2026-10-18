@@ -14,6 +14,8 @@ use gpui_kit::component::{
     tab::{Tab, TabBar},
     v_flex,
 };
+use std::collections::HashSet;
+
 use gpui_kit::{
     App, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle,
@@ -225,6 +227,7 @@ const STUB_PRS: &[StubPr] = &[
 enum ListRow {
     /// `depth` 0 = primary group (repo / status); 1 = nested (status under repo).
     Group {
+        key: String,
         label: String,
         count: usize,
         depth: u8,
@@ -241,6 +244,7 @@ pub(crate) struct PrototypeChrome {
     pub list_demo: ListDemoMode,
     pub selected_stub_id: Option<&'static str>,
     pub selected_repo: Option<&'static str>,
+    pub collapsed_groups: HashSet<String>,
     pub view: SessionView,
     pub diff: Entity<DiffState>,
     pub inbox_scroll: UniformListScrollHandle,
@@ -1069,6 +1073,7 @@ fn render_pull_requests(
             .into_any_element(),
         ListDemoMode::Populated => {
             let rows = build_list_rows(view, proto.selected_repo);
+            let rows = visible_list_rows(rows, &proto.collapsed_groups);
             if rows.is_empty() {
                 return pane.child(zero_match_state(view, cx)).into_any_element();
             }
@@ -1461,6 +1466,7 @@ fn render_pr_rows(
     let scroll = proto.inbox_scroll.clone();
     let selected = proto.selected_stub_id;
     let entity = proto.entity.clone();
+    let collapsed = proto.collapsed_groups.clone();
     let row_count = rows.len();
 
     div()
@@ -1473,6 +1479,7 @@ fn render_pr_rows(
                     .map(|ix| {
                         match &rows[ix] {
                             ListRow::Group {
+                                key,
                                 label,
                                 count,
                                 depth,
@@ -1487,7 +1494,19 @@ fn render_pr_rows(
                                 let is_draft = label.as_str() == "Draft";
                                 let indent = if *depth > 0 { 20. } else { 0. };
                                 let pt = if *depth == 0 { 14. } else { 8. };
-                                let mut header = h_flex().w_full().items_center().gap_2();
+                                let is_collapsed = collapsed.contains(key);
+                                let chevron = if is_collapsed {
+                                    IconName::ChevronRight
+                                } else {
+                                    IconName::ChevronDown
+                                };
+                                let group_key = key.clone();
+                                let owner = entity.clone();
+                                let mut header = h_flex().w_full().items_center().gap_2().child(
+                                    Icon::new(chevron)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                );
                                 if is_status {
                                     header = header.child(
                                         Icon::new(review_icon(label, is_draft))
@@ -1510,6 +1529,17 @@ fn render_pr_rows(
                                     .pr_4()
                                     .pt(px(pt))
                                     .pb(px(6.))
+                                    .cursor_pointer()
+                                    .rounded_md()
+                                    .hover(|style| {
+                                        style.bg(cx.theme().secondary.opacity(0.3))
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        let key = group_key.clone();
+                                        let _ = owner.update(cx, |this, cx| {
+                                            this.toggle_collapsed_group(key, cx);
+                                        });
+                                    })
                                     .child(
                                         header
                                             .child(
@@ -2351,7 +2381,9 @@ fn build_list_rows(view: StubViewId, repo_scope: Option<&str>) -> Vec<ListRow> {
                 _ => true,
             })
             .collect();
+        let group_key = format!("{group_by}:{key}");
         rows.push(ListRow::Group {
+            key: group_key,
             label: key,
             count: group_prs.len(),
             depth: 0,
@@ -2376,6 +2408,7 @@ fn build_nested_repo_status_rows(prs: &[StubPr]) -> Vec<ListRow> {
     for repo in repos {
         let repo_prs: Vec<StubPr> = prs.iter().copied().filter(|pr| pr.repo == repo).collect();
         rows.push(ListRow::Group {
+            key: format!("repo:{repo}"),
             label: repo.to_string(),
             count: repo_prs.len(),
             depth: 0,
@@ -2394,6 +2427,7 @@ fn build_nested_repo_status_rows(prs: &[StubPr]) -> Vec<ListRow> {
                 .filter(|pr| pr.review_state == state)
                 .collect();
             rows.push(ListRow::Group {
+                key: format!("repo:{repo}/status:{state}"),
                 label: state.to_string(),
                 count: state_prs.len(),
                 depth: 1,
@@ -2404,6 +2438,47 @@ fn build_nested_repo_status_rows(prs: &[StubPr]) -> Vec<ListRow> {
         }
     }
     rows
+}
+
+/// Drop children of collapsed groups from the visible uniform_list (Zed flatten pattern).
+fn visible_list_rows(rows: Vec<ListRow>, collapsed: &HashSet<String>) -> Vec<ListRow> {
+    let mut out = Vec::with_capacity(rows.len());
+    let mut skip_until_depth: Option<u8> = None;
+
+    for row in rows {
+        match row {
+            ListRow::Group {
+                key,
+                label,
+                count,
+                depth,
+            } => {
+                if let Some(skip_depth) = skip_until_depth {
+                    if depth > skip_depth {
+                        continue;
+                    }
+                    skip_until_depth = None;
+                }
+                let collapse_this = collapsed.contains(&key);
+                if collapse_this {
+                    skip_until_depth = Some(depth);
+                }
+                out.push(ListRow::Group {
+                    key,
+                    label,
+                    count,
+                    depth,
+                });
+            }
+            ListRow::Pr { pr } => {
+                if skip_until_depth.is_some() {
+                    continue;
+                }
+                out.push(ListRow::Pr { pr });
+            }
+        }
+    }
+    out
 }
 
 /// Keep session Overview/Changes in sync when the prototype tab changes.

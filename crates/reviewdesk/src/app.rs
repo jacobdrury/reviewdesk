@@ -1,5 +1,6 @@
 //! Thin GPUI shell: chrome, Effect driver, and Render over [`ReviewSession`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
@@ -66,6 +67,8 @@ pub struct ReviewDesk {
     selected_stub_id: Option<&'static str>,
     /// `None` = global Pull requests; `Some(repo)` filters the list to that repo.
     selected_repo: Option<&'static str>,
+    /// Collapsed group keys (headers + nested sub-headers).
+    collapsed_groups: HashSet<String>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -104,6 +107,7 @@ impl ReviewDesk {
             list_demo: ListDemoMode::Populated,
             selected_stub_id: None,
             selected_repo: None,
+            collapsed_groups: HashSet::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -316,6 +320,13 @@ impl ReviewDesk {
         cx.notify();
     }
 
+    pub(crate) fn toggle_collapsed_group(&mut self, key: String, cx: &mut Context<Self>) {
+        if !self.collapsed_groups.remove(&key) {
+            self.collapsed_groups.insert(key);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn cycle_list_demo(&mut self, cx: &mut Context<Self>) {
         self.list_demo = self.list_demo.next();
         self.selected_stub_id = None;
@@ -422,6 +433,7 @@ impl Render for ReviewDesk {
                 list_demo: self.list_demo,
                 selected_stub_id: self.selected_stub_id,
                 selected_repo: self.selected_repo,
+                collapsed_groups: self.collapsed_groups.clone(),
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),
