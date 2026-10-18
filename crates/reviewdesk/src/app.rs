@@ -27,7 +27,8 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::overview_body::{
-    compose_overview_markdown, parse_body_segments, parse_details_fence, BodySegment, DetailsBlock,
+    compose_overview_markdown, details_effective_open, parse_body_segments, parse_details_fence,
+    BodySegment, DetailsBlock,
     DetailsFence,
 };
 use crate::patch_index::{index_patch, PatchIndex};
@@ -237,15 +238,11 @@ impl ReviewDesk {
     }
 
     fn details_is_open(&self, block: &DetailsBlock) -> bool {
-        self.details_open
-            .get(&block.id)
-            .copied()
-            .unwrap_or(block.default_open)
+        details_effective_open(block, self.details_open.get(&block.id).copied())
     }
 
-    fn toggle_details(&mut self, id: usize, default_open: bool, cx: &mut Context<Self>) {
-        let open = self.details_open.get(&id).copied().unwrap_or(default_open);
-        self.details_open.insert(id, !open);
+    fn toggle_details(&mut self, id: usize, currently_open: bool, cx: &mut Context<Self>) {
+        self.details_open.insert(id, !currently_open);
         cx.notify();
     }
 
@@ -1015,7 +1012,6 @@ impl MarkdownPlugin for DetailsTogglePlugin {
             .expect("reviewdesk-details node data");
         let owner = self.owner.clone();
         let id = fence.id;
-        let default_open = fence.default_open;
         let open = fence.open;
         div()
             .id(("pr-details-toggle", id))
@@ -1029,7 +1025,7 @@ impl MarkdownPlugin for DetailsTogglePlugin {
             .hover(|style| style.bg(cx.theme().secondary_hover))
             .on_click(move |_, _, cx| {
                 let _ = owner.update(cx, |this, cx| {
-                    this.toggle_details(id, default_open, cx);
+                    this.toggle_details(id, open, cx);
                 });
             })
             .child(
