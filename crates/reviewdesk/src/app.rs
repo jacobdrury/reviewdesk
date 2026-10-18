@@ -21,11 +21,14 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
     WeakEntity, Window, WindowAppearance,
 };
+use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    InboxItem, InboxOptions, InboxQuery, LocalStoreError, Patch, Provider, ProviderError,
+    PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
+use crate::sync::{load_detail_via_store, load_patch_via_store, sync_inbox_from_provider, AppLocalStore};
 use crate::overview_body::{
     compose_overview_markdown, parse_body_segments, parse_details_fence, BodySegment, DetailsBlock,
     DetailsFence,
@@ -67,11 +70,20 @@ struct Annotation {
     body: SharedString,
 }
 
+#[derive(Clone, Default)]
+struct InboxSyncState {
+    syncing: bool,
+    last_success: Option<DateTime<Utc>>,
+    error: Option<String>,
+}
+
 pub struct ReviewDesk {
     provider: Arc<dyn Provider>,
+    store: Arc<AppLocalStore>,
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
     inbox: LoadState<Vec<InboxItem>>,
+    inbox_sync: InboxSyncState,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
@@ -92,9 +104,14 @@ pub struct ReviewDesk {
     skip_next_activation_sync: bool,
 }
 
+fn map_store_error(error: LocalStoreError) -> ProviderError {
+    ProviderError::other(error.to_string())
+}
+
 impl ReviewDesk {
     pub fn new(
         provider: Arc<dyn Provider>,
+        store: Arc<AppLocalStore>,
         runtime: Arc<tokio::runtime::Runtime>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -103,9 +120,11 @@ impl ReviewDesk {
         let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split));
         let mut this = Self {
             provider,
+            store,
             runtime: runtime.handle().clone(),
             _runtime: runtime,
-            inbox: LoadState::Idle,
+            inbox: LoadState::Ready(Vec::new()),
+            inbox_sync: InboxSyncState::default(),
             selected_id: None,
             review_tab: ReviewTab::Overview,
             detail: LoadState::Idle,
@@ -136,9 +155,88 @@ impl ReviewDesk {
             }
             this.sync_theme(window, cx);
         }));
-        this.refresh_inbox(cx);
+        this.reload_inbox_from_store(cx);
+        this.sync_inbox_from_provider(cx);
         this.start_inbox_timer(cx);
         this
+    }
+
+    fn sync_status_label(&self) -> SharedString {
+        if self.inbox_sync.syncing {
+            return "Syncing Inbox…".into();
+        }
+        if let Some(error) = &self.inbox_sync.error {
+            return format!("Sync failed: {error}").into();
+        }
+        if let Some(at) = self.inbox_sync.last_success {
+            return format!("Inbox synced {}", format_sync_time(at)).into();
+        }
+        "Inbox not synced yet".into()
+    }
+
+    fn reload_inbox_from_store(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let previous = self.selected_id.clone();
+
+        self._inbox_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move { store.query_inbox(&InboxQuery::default()).await })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(items) => {
+                        if let Some(selected) = &previous {
+                            if !items.iter().any(|item| &item.id == selected) {
+                                this.clear_selection(cx);
+                            }
+                        }
+                        this.inbox = LoadState::Ready(items);
+                    }
+                    Err(error) => {
+                        this.inbox = LoadState::Error(map_store_error(error));
+                    }
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    fn sync_inbox_from_provider(&mut self, cx: &mut Context<Self>) {
+        self.inbox_sync.syncing = true;
+        self.inbox_sync.error = None;
+        cx.notify();
+
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let options = InboxOptions::default();
+
+        self._inbox_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    sync_inbox_from_provider(provider.as_ref(), &store, &options).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.inbox_sync.syncing = false;
+                match result {
+                    Ok(()) => {
+                        this.inbox_sync.last_success = Some(Utc::now());
+                        this.inbox_sync.error = None;
+                        this.reload_inbox_from_store(cx);
+                    }
+                    Err(error) => {
+                        this.inbox_sync.error = Some(error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        });
     }
 
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -156,7 +254,7 @@ impl ReviewDesk {
             cx.background_executor().timer(INBOX_REFRESH).await;
             if this
                 .update(cx, |this, cx| {
-                    this.refresh_inbox(cx);
+                    this.sync_inbox_from_provider(cx);
                 })
                 .is_err()
             {
@@ -166,37 +264,7 @@ impl ReviewDesk {
     }
 
     fn refresh_inbox(&mut self, cx: &mut Context<Self>) {
-        self.inbox = LoadState::Loading;
-        cx.notify();
-
-        let provider = self.provider.clone();
-        let runtime = self.runtime.clone();
-        let options = InboxOptions::default();
-        let previous = self.selected_id.clone();
-
-        self._inbox_task = cx.spawn(async move |this, cx| {
-            let result = runtime
-                .spawn(async move { provider.list_inbox(&options).await })
-                .await
-                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
-
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(items) => {
-                        if let Some(selected) = &previous {
-                            if !items.iter().any(|item| &item.id == selected) {
-                                this.clear_selection(cx);
-                            }
-                        }
-                        this.inbox = LoadState::Ready(items);
-                    }
-                    Err(error) => {
-                        this.inbox = LoadState::Error(error);
-                    }
-                }
-                cx.notify();
-            });
-        });
+        self.sync_inbox_from_provider(cx);
     }
 
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -215,8 +283,8 @@ impl ReviewDesk {
         }
         self.selected_id = Some(id.clone());
         self.review_tab = ReviewTab::Overview;
-        self.detail = LoadState::Loading;
-        self.patch_files = LoadState::Loading;
+        self.detail = LoadState::Idle;
+        self.patch_files = LoadState::Idle;
         self.selected_file = None;
         self.overview_segments.clear();
         self.details_open.clear();
@@ -242,12 +310,46 @@ impl ReviewDesk {
 
     fn load_detail(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
+        let store = self.store.clone();
         let runtime = self.runtime.clone();
         let request_id = id.clone();
+
         self._detail_task = cx.spawn(async move |this, cx| {
             let fetch_id = request_id.clone();
+            let cache_id = fetch_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_pull_request_detail(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            if let Ok(Some(detail)) = cached {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.details_open.clear();
+                    this.overview_segments = parse_body_segments(&detail.body);
+                    this.detail = LoadState::Ready(detail);
+                    cx.notify();
+                });
+                return;
+            }
+
+            let _ = this.update(cx, |this, cx| {
+                if this.selected_id.as_ref() != Some(&request_id) {
+                    return;
+                }
+                this.detail = LoadState::Loading;
+                cx.notify();
+            });
+
             let result = runtime
-                .spawn(async move { provider.fetch_pull_request(&fetch_id).await })
+                .spawn(async move {
+                    load_detail_via_store(provider.as_ref(), &store, &fetch_id).await
+                })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
@@ -273,12 +375,44 @@ impl ReviewDesk {
 
     fn load_patch(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
+        let store = self.store.clone();
         let runtime = self.runtime.clone();
         let request_id = id.clone();
+
         self._patch_task = cx.spawn(async move |this, cx| {
             let fetch_id = request_id.clone();
+            let cache_id = fetch_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_patch(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            if let Ok(Some(patch)) = cached {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.patch_files = apply_parsed_patch(this, &patch, cx);
+                    cx.notify();
+                });
+                return;
+            }
+
+            let _ = this.update(cx, |this, cx| {
+                if this.selected_id.as_ref() != Some(&request_id) {
+                    return;
+                }
+                this.patch_files = LoadState::Loading;
+                cx.notify();
+            });
+
             let result = runtime
-                .spawn(async move { provider.fetch_patch(&fetch_id).await })
+                .spawn(async move {
+                    load_patch_via_store(provider.as_ref(), &store, &fetch_id).await
+                })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
@@ -287,19 +421,7 @@ impl ReviewDesk {
                     return;
                 }
                 this.patch_files = match result {
-                    Ok(patch) => match parse_patch(&patch) {
-                        Ok(files) => {
-                            if let Some(first) = files.first() {
-                                let path = first.path().clone();
-                                this.selected_file = Some(path.clone());
-                                this.diff.update(cx, |state, cx| {
-                                    state.set_files([first.clone()], cx);
-                                });
-                            }
-                            LoadState::Ready(files)
-                        }
-                        Err(error) => LoadState::Error(error),
-                    },
+                    Ok(patch) => apply_parsed_patch(this, &patch, cx),
                     Err(error) => LoadState::Error(error),
                 };
                 cx.notify();
@@ -402,18 +524,36 @@ impl ReviewDesk {
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_inbox(cx))),
                     ),
             )
+            .child(
+                div()
+                    .px_3()
+                    .py(px(2.))
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(self.sync_status_label()),
+                    ),
+            )
             .child(match &self.inbox {
                 LoadState::Idle | LoadState::Loading => v_flex()
                     .size_full()
                     .items_center()
                     .justify_center()
-                    .gap_2()
-                    .child(Spinner::new().small())
+                    .px_4()
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Loading Inbox…"),
+                            .text_center()
+                            .child(if self.inbox_sync.syncing {
+                                "Syncing pull requests…"
+                            } else {
+                                "No pull requests waiting for your review."
+                            }),
                     )
                     .into_any_element(),
                 LoadState::Error(error) => {
@@ -947,6 +1087,30 @@ impl MarkdownPlugin for DetailsTogglePlugin {
     }
 }
 
+fn apply_parsed_patch(
+    this: &mut ReviewDesk,
+    patch: &Patch,
+    cx: &mut Context<ReviewDesk>,
+) -> LoadState<Vec<DiffFile>> {
+    match parse_patch(patch) {
+        Ok(files) => {
+            if let Some(first) = files.first() {
+                let path = first.path().clone();
+                this.selected_file = Some(path);
+                this.diff.update(cx, |state, cx| {
+                    state.set_files([first.clone()], cx);
+                });
+            }
+            LoadState::Ready(files)
+        }
+        Err(error) => LoadState::Error(error),
+    }
+}
+
+fn format_sync_time(at: DateTime<Utc>) -> String {
+    at.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
 fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
     DiffFile::parse(patch.as_str()).map_err(|error| {
         ProviderError::other(format!(
@@ -963,10 +1127,24 @@ impl Render for ReviewDesk {
             .size_full()
             .child(
                 TitleBar::new().child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .child("Review Desk"),
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .items_center()
+                        .pr_2()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_medium()
+                                .child("Review Desk"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .truncate()
+                                .child(self.sync_status_label()),
+                        ),
                 ),
             )
             .child(
