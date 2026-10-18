@@ -21,7 +21,7 @@ use crate::map::{
 };
 use crate::notification::{NotificationThreadPayload, map_notification_thread};
 use crate::pipelines_map::{PipelinesData, map_pipelines};
-use crate::query::pull_request_search_query;
+use crate::query::pull_request_search_queries;
 use crate::threads_map::{
     ReviewConnection, ReviewThreadConnection, ReviewThreadNode, ReviewThreadsData,
     ReviewThreadsPullRequest, diff_side_to_rest, find_viewer_pending_review_id,
@@ -560,13 +560,18 @@ impl Provider for GitHubProvider {
         &self,
         options: &PullRequestListOptions,
     ) -> Result<Vec<PullRequestListItem>, ProviderError> {
-        let q = pull_request_search_query(options);
-        let data: SearchData = self
-            .graphql(PULL_REQUEST_SEARCH_QUERY, json!({ "q": q }))
-            .await?;
         let mut items = Vec::new();
-        for node in data.search.nodes.into_iter().flatten() {
-            items.push(map_pull_request_list_item(&node)?);
+        let mut seen = std::collections::HashSet::new();
+        for q in pull_request_search_queries(options) {
+            let data: SearchData = self
+                .graphql(PULL_REQUEST_SEARCH_QUERY, json!({ "q": q }))
+                .await?;
+            for node in data.search.nodes.into_iter().flatten() {
+                let item = map_pull_request_list_item(&node)?;
+                if seen.insert(item.id.clone()) {
+                    items.push(item);
+                }
+            }
         }
         Ok(items)
     }

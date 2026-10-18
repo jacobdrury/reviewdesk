@@ -1356,23 +1356,22 @@ impl ReviewSession {
         let last_used = last_used.ok().flatten();
         self.repo_scope = scoped_repository.ok().flatten();
 
-        let mut views = views;
-        if views.is_empty() {
-            views = View::seed_set();
-            let launch = resolve_launch_view_id(&views, last_used.as_ref());
-            self.active_view_id = Some(launch.clone());
-            self.load_working_from_active_view();
-            return vec![Effect::PersistViews {
-                views,
-                last_used: Some(launch),
-                scoped_repository: self.repo_scope.clone(),
-            }];
-        }
+        let seeded = views.is_empty();
+        let views = if seeded { View::seed_set() } else { views };
 
+        // Ready before load_working so seed filters (Needs my review, etc.) apply immediately.
         self.views = LoadState::Ready(Arc::from(views.clone()));
         let launch = resolve_launch_view_id(&views, last_used.as_ref());
-        self.activate_view(launch);
-        Vec::new()
+        self.activate_view(launch.clone());
+
+        if !seeded {
+            return Vec::new();
+        }
+        vec![Effect::PersistViews {
+            views,
+            last_used: Some(launch),
+            scoped_repository: self.repo_scope.clone(),
+        }]
     }
 
     fn on_views_persist_finished(&mut self, views: Result<Vec<View>, ProviderError>) {
@@ -1941,7 +1940,7 @@ pub fn review_tab_for_reason(reason: NotificationReason) -> ReviewTab {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use reviewdesk_core::ReviewState;
+    use reviewdesk_core::{DraftFilter, ReviewState};
 
     const MULTI_FILE: &str = "diff --git a/new b/new\nnew file mode 100644\n--- /dev/null\n+++ b/new\n@@ -0,0 +1 @@\n+added\ndiff --git a/old b/old\ndeleted file mode 100644\n--- a/old\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\n";
 
@@ -2361,6 +2360,35 @@ mod tests {
             session.active_view_id.as_ref().map(|id| id.as_str()),
             Some(reviewdesk_core::VIEW_ID_NEEDS_MY_REVIEW)
         );
+        let pane = session.view().pull_requests_pane;
+        assert!(pane.working_filter.i_am_reviewer);
+        assert!(!pane.working_filter.i_am_author);
+        assert_eq!(pane.working_filter.drafts, DraftFilter::ReadyOnly);
+    }
+
+    #[test]
+    fn repo_scope_keeps_active_view_and_working_filters() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::PullRequestsViewsBootstrapFinished {
+            views: Ok(View::seed_set()),
+            last_used: Ok(None),
+            scoped_repository: Ok(None),
+        });
+        let before = session.view().pull_requests_pane.working_filter.clone();
+        let active = session.active_view_id.clone();
+        let _ = session.apply(Intent::SetRepoScope {
+            repo: Some("acme/widgets".into()),
+        });
+        assert_eq!(session.active_view_id, active);
+        assert_eq!(session.view().pull_requests_pane.working_filter, before);
+        assert_eq!(
+            session.view().pull_requests_pane.repo_scope.as_deref(),
+            Some("acme/widgets")
+        );
+        let _ = session.apply(Intent::SetRepoScope { repo: None });
+        assert_eq!(session.active_view_id, active);
+        assert_eq!(session.view().pull_requests_pane.working_filter, before);
+        assert_eq!(session.view().pull_requests_pane.repo_scope, None);
     }
 
     #[test]
