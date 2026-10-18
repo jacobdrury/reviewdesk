@@ -26,7 +26,11 @@ pub enum Intent {
     Boot,
     RefreshPullRequests,
     SelectPullRequest(PullRequestId),
+    BackToPullRequests,
     SetReviewTab(ReviewTab),
+    ToggleMetadataDock,
+    FoldMetadata,
+    HideMetadata,
     ToggleDetails {
         id: usize,
         currently_open: bool,
@@ -77,7 +81,34 @@ pub enum Effect {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewTab {
     Overview,
-    Files,
+    Pipelines,
+    Conversation,
+    Changes,
+}
+
+/// Right-dock visibility policy for the Metadata panel.
+///
+/// `Open` is the full panel; `Folded` collapses to a status+merge strip;
+/// `Hidden` removes the panel entirely (restored only from Review pane chrome).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataDock {
+    Open,
+    Folded,
+    Hidden,
+}
+
+impl MetadataDock {
+    /// Auto policy when the active tab changes: open on Overview, folded
+    /// elsewhere. A hidden dock stays hidden — hide restores via chrome only.
+    fn for_tab(self, tab: ReviewTab) -> Self {
+        if self == MetadataDock::Hidden {
+            return MetadataDock::Hidden;
+        }
+        match tab {
+            ReviewTab::Overview => MetadataDock::Open,
+            _ => MetadataDock::Folded,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +163,7 @@ pub struct SessionView {
     pub pull_requests_sync: PullRequestsSyncView,
     pub selected_id: Option<PullRequestId>,
     pub review_tab: ReviewTab,
+    pub metadata_dock: MetadataDock,
     pub detail: LoadState<PullRequestDetail>,
     pub overview_markdown: Option<SharedString>,
     pub patch_index: LoadState<()>,
@@ -165,6 +197,7 @@ pub struct ReviewSession {
     pull_requests_sync_generation: u64,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
+    metadata_dock: MetadataDock,
     detail: LoadState<PullRequestDetail>,
     patch_index: LoadState<PatchIndex>,
     file_cache: HashMap<SharedString, DiffFile>,
@@ -189,6 +222,7 @@ impl ReviewSession {
             pull_requests_sync_generation: 0,
             selected_id: None,
             review_tab: ReviewTab::Overview,
+            metadata_dock: MetadataDock::Open,
             detail: LoadState::Idle,
             patch_index: LoadState::Idle,
             file_cache: HashMap::new(),
@@ -211,8 +245,28 @@ impl ReviewSession {
             Intent::Boot => self.boot(),
             Intent::RefreshPullRequests => self.begin_pull_requests_sync(),
             Intent::SelectPullRequest(id) => self.select_pull_request(id),
+            Intent::BackToPullRequests => {
+                self.clear_selection();
+                Vec::new()
+            }
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
+                self.metadata_dock = self.metadata_dock.for_tab(tab);
+                Vec::new()
+            }
+            Intent::ToggleMetadataDock => {
+                self.metadata_dock = match self.metadata_dock {
+                    MetadataDock::Open => MetadataDock::Hidden,
+                    MetadataDock::Folded | MetadataDock::Hidden => MetadataDock::Open,
+                };
+                Vec::new()
+            }
+            Intent::FoldMetadata => {
+                self.metadata_dock = MetadataDock::Folded;
+                Vec::new()
+            }
+            Intent::HideMetadata => {
+                self.metadata_dock = MetadataDock::Hidden;
                 Vec::new()
             }
             Intent::ToggleDetails { id, currently_open } => {
@@ -301,6 +355,7 @@ impl ReviewSession {
             pull_requests_sync: self.pull_requests_sync.clone(),
             selected_id: self.selected_id.clone(),
             review_tab: self.review_tab,
+            metadata_dock: self.metadata_dock,
             detail: self.detail.clone(),
             overview_markdown,
             patch_index,
@@ -380,6 +435,7 @@ impl ReviewSession {
         }
         self.selected_id = Some(id.clone());
         self.review_tab = ReviewTab::Overview;
+        self.metadata_dock = MetadataDock::Open;
         self.reset_subordinate_state();
         vec![
             Effect::FetchDetail { id: id.clone() },
@@ -1014,5 +1070,128 @@ mod tests {
 
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-2")));
         assert!(session.view().annotations.is_empty());
+    }
+
+    fn selected_session(id: &str) -> ReviewSession {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id(id)));
+        session
+    }
+
+    #[test]
+    fn selecting_pull_request_opens_metadata_on_overview() {
+        let mut session = selected_session("pr-1");
+        let view = session.view();
+        assert_eq!(view.review_tab, ReviewTab::Overview);
+        assert_eq!(view.metadata_dock, MetadataDock::Open);
+    }
+
+    #[test]
+    fn set_review_tab_switches_tab_without_effects() {
+        let cases = [
+            ReviewTab::Overview,
+            ReviewTab::Pipelines,
+            ReviewTab::Conversation,
+            ReviewTab::Changes,
+        ];
+        for tab in cases {
+            let mut session = selected_session("pr-1");
+            let effects = session.apply(Intent::SetReviewTab(tab));
+            assert!(effects.is_empty(), "SetReviewTab should emit no effects");
+            assert_eq!(session.view().review_tab, tab);
+        }
+    }
+
+    #[test]
+    fn metadata_folds_when_leaving_overview_and_reopens_on_return() {
+        let non_overview = [
+            ReviewTab::Pipelines,
+            ReviewTab::Conversation,
+            ReviewTab::Changes,
+        ];
+        for tab in non_overview {
+            let mut session = selected_session("pr-1");
+            let _ = session.apply(Intent::SetReviewTab(tab));
+            assert_eq!(
+                session.view().metadata_dock,
+                MetadataDock::Folded,
+                "leaving Overview for {tab:?} should fold Metadata"
+            );
+
+            let _ = session.apply(Intent::SetReviewTab(ReviewTab::Overview));
+            assert_eq!(
+                session.view().metadata_dock,
+                MetadataDock::Open,
+                "returning to Overview should reopen Metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn chrome_toggle_restores_metadata_after_fold() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::SetReviewTab(ReviewTab::Changes));
+        assert_eq!(session.view().metadata_dock, MetadataDock::Folded);
+
+        let _ = session.apply(Intent::ToggleMetadataDock);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
+    }
+
+    #[test]
+    fn chrome_toggle_restores_metadata_after_hide() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::HideMetadata);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+
+        let _ = session.apply(Intent::ToggleMetadataDock);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
+    }
+
+    #[test]
+    fn chrome_toggle_hides_open_metadata() {
+        let mut session = selected_session("pr-1");
+        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
+
+        let _ = session.apply(Intent::ToggleMetadataDock);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+    }
+
+    #[test]
+    fn fold_keeps_strip_while_hide_removes_it() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::FoldMetadata);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Folded);
+
+        let _ = session.apply(Intent::HideMetadata);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+    }
+
+    #[test]
+    fn hidden_metadata_is_sticky_across_tabs() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::HideMetadata);
+
+        let _ = session.apply(Intent::SetReviewTab(ReviewTab::Pipelines));
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+
+        // Returning to Overview must not auto-open a deliberately hidden dock.
+        let _ = session.apply(Intent::SetReviewTab(ReviewTab::Overview));
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+    }
+
+    #[test]
+    fn back_to_pull_requests_clears_selection() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::DetailLocalFinished {
+            id: pr_id("pr-1"),
+            result: Ok(Some(sample_detail("pr-1", "body"))),
+        });
+        assert!(session.view().selected_id.is_some());
+
+        let effects = session.apply(Intent::BackToPullRequests);
+        assert!(effects.is_empty());
+        let view = session.view();
+        assert!(view.selected_id.is_none());
+        assert!(matches!(view.detail, LoadState::Idle));
     }
 }
