@@ -4,6 +4,7 @@ mod detail_patch;
 mod threads;
 mod error;
 mod migrate;
+mod notification;
 mod pull_request_list;
 mod store;
 

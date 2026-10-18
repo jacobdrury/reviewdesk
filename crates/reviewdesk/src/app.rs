@@ -12,7 +12,8 @@ use gpui_kit::{
     Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div,
 };
 use reviewdesk_core::{
-    DiffAnchor, LocalStoreError, PendingDiffReviewComment, Provider, ProviderError, PullRequestId,
+    DiffAnchor, LocalStoreError, NotificationListOptions, NotificationQuery,
+    NotificationThreadId, PendingDiffReviewComment, Provider, ProviderError, PullRequestId,
     PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent,
 };
 use tokio::runtime::Handle;
@@ -24,14 +25,15 @@ use crate::review_writeback::{
     refresh_threads_from_provider, submit_pending_review,
 };
 use crate::sync::{
-    AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
-    refresh_pull_request_detail, sync_pull_requests_from_provider,
+    AppLocalStore, load_detail_via_store, load_patch_via_store,
+    mark_notification_done_via_provider, mark_notification_read_via_provider, refresh_patch,
+    refresh_pull_request_detail, sync_inbox_from_provider, sync_pull_requests_from_provider,
 };
 use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{render_pull_requests, render_review_pane};
+use crate::ui::{render_review_pane, render_sidebar};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -56,10 +58,16 @@ pub struct ReviewDesk {
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
     diff: Entity<DiffState>,
+    inbox_scroll: UniformListScrollHandle,
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    _inbox_reload_task: Task<()>,
+    _inbox_sync_task: Task<()>,
+    _inbox_poll_timer: Task<()>,
     _pull_requests_reload_task: Task<()>,
     _pull_requests_sync_task: Task<()>,
+    _notification_read_task: Task<()>,
+    _notification_done_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _threads_task: Task<()>,
@@ -87,10 +95,16 @@ impl ReviewDesk {
             runtime: runtime.handle().clone(),
             _runtime: runtime,
             diff,
+            inbox_scroll: UniformListScrollHandle::new(),
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            _inbox_reload_task: Task::ready(()),
+            _inbox_sync_task: Task::ready(()),
+            _inbox_poll_timer: Task::ready(()),
             _pull_requests_reload_task: Task::ready(()),
             _pull_requests_sync_task: Task::ready(()),
+            _notification_read_task: Task::ready(()),
+            _notification_done_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _threads_task: Task::ready(()),
@@ -145,6 +159,14 @@ impl ReviewDesk {
                     self.run_discard_pending_review(id, cx)
                 }
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
+                Effect::QueryInbox => self.run_query_inbox(cx),
+                Effect::SyncInbox {
+                    generation,
+                    if_modified_since,
+                } => self.run_sync_inbox(generation, if_modified_since, cx),
+                Effect::ArmInboxPollTimer { interval } => self.arm_inbox_poll_timer(interval, cx),
+                Effect::MarkNotificationRead { id } => self.run_mark_notification_read(id, cx),
+                Effect::MarkNotificationDone { id } => self.run_mark_notification_done(id, cx),
             }
         }
     }
@@ -212,6 +234,108 @@ impl ReviewDesk {
             let _ = this.update(cx, |this, cx| {
                 this.dispatch(
                     Intent::PullRequestListSyncFinished { generation, result },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_query_inbox(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        self._inbox_reload_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    store
+                        .query_notifications(&NotificationQuery::default())
+                        .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+            let result = result.map_err(map_store_error);
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(Intent::InboxQueryFinished { result }, cx);
+            });
+        });
+    }
+
+    fn run_sync_inbox(
+        &mut self,
+        generation: u64,
+        if_modified_since: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let options = NotificationListOptions {
+            all: false,
+            if_modified_since,
+        };
+        self._inbox_sync_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    sync_inbox_from_provider(provider.as_ref(), &store, &options).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(Intent::InboxSyncFinished { generation, result }, cx);
+            });
+        });
+    }
+
+    fn arm_inbox_poll_timer(&mut self, interval: std::time::Duration, cx: &mut Context<Self>) {
+        self._inbox_poll_timer = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(interval).await;
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(Intent::RefreshInbox, cx);
+            });
+        });
+    }
+
+    fn run_mark_notification_read(&mut self, id: NotificationThreadId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let finish_id = id.clone();
+        self._notification_read_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    mark_notification_read_via_provider(provider.as_ref(), &store, &id).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::NotificationReadFinished {
+                        id: finish_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_mark_notification_done(&mut self, id: NotificationThreadId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let finish_id = id.clone();
+        self._notification_done_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    mark_notification_done_via_provider(provider.as_ref(), &store, &id).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::NotificationDoneFinished {
+                        id: finish_id,
+                        result,
+                    },
                     cx,
                 );
             });
@@ -559,8 +683,14 @@ impl Render for ReviewDesk {
                         render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx)
                             .into_any_element()
                     } else {
-                        render_pull_requests(&view, &self.pull_requests_scroll, entity, cx)
-                            .into_any_element()
+                        render_sidebar(
+                            &view,
+                            &self.inbox_scroll,
+                            &self.pull_requests_scroll,
+                            entity,
+                            cx,
+                        )
+                        .into_any_element()
                     }),
             )
     }

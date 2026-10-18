@@ -6,6 +6,7 @@ mod credentials;
 mod error;
 mod id;
 mod local_store;
+mod notification;
 mod patch;
 mod provider;
 mod pull_request;
@@ -16,6 +17,10 @@ pub use credentials::Credentials;
 pub use error::ProviderError;
 pub use id::PullRequestId;
 pub use local_store::{LocalStore, LocalStoreError};
+pub use notification::{
+    NotificationListOptions, NotificationPage, NotificationQuery, NotificationReason,
+    NotificationThread, NotificationThreadId, NotificationThreadIdError,
+};
 pub use patch::Patch;
 pub use provider::Provider;
 pub use pull_request::{PullRequestDetail, Reviewer};

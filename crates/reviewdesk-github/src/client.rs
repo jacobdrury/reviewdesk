@@ -1,9 +1,12 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
+use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, Patch, PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail,
-    PullRequestId, PullRequestListItem, PullRequestListOptions, PullRequestThreads,
-    ReviewSubmitEvent,
+    Credentials, NotificationListOptions, NotificationPage, NotificationThreadId, Patch,
+    PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListOptions, PullRequestThreads, ReviewSubmitEvent,
 };
 use serde_json::json;
 
@@ -13,11 +16,13 @@ use crate::map::{
     GraphQlResponse, PullRequestData, SearchData, map_pull_request_detail,
     map_pull_request_list_item,
 };
+use crate::notification::{NotificationThreadPayload, map_notification_thread};
 use crate::query::pull_request_search_query;
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "reviewdesk";
+const REST_ACCEPT: &str = "application/vnd.github+json";
 
 const PULL_REQUEST_SEARCH_QUERY: &str = r#"
 query PullRequestSearch($q: String!) {
@@ -212,6 +217,88 @@ impl Provider for GitHubProvider {
         map_pull_request_detail(&node)
     }
 
+    async fn list_notifications(
+        &self,
+        options: &NotificationListOptions,
+    ) -> Result<NotificationPage, ProviderError> {
+        let url = format!("{API_BASE}/notifications?all={}", options.all);
+        let mut request = self
+            .client
+            .get(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT);
+        if let Some(since) = &options.if_modified_since {
+            request = request.header("If-Modified-Since", since);
+        }
+
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+
+        let status = response.status();
+        let poll_interval = poll_interval_from_headers(response.headers());
+        let last_modified = last_modified_from_headers(response.headers());
+
+        if status == StatusCode::NOT_MODIFIED {
+            return Ok(NotificationPage {
+                threads: Vec::new(),
+                poll_interval,
+                last_modified,
+                not_modified: true,
+            });
+        }
+
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+
+        let payloads: Vec<NotificationThreadPayload> = serde_json::from_str(&body)
+            .map_err(|e| ProviderError::other(format!("notifications decode: {e}")))?;
+        let threads = payloads
+            .iter()
+            .filter_map(map_notification_thread)
+            .collect();
+
+        Ok(NotificationPage {
+            threads,
+            poll_interval,
+            last_modified,
+            not_modified: false,
+        })
+    }
+
+    async fn mark_notification_read(&self, id: &NotificationThreadId) -> Result<(), ProviderError> {
+        let url = format!("{API_BASE}/notifications/threads/{}", id.as_str());
+        let response = self
+            .client
+            .patch(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        ensure_success(response).await
+    }
+
+    async fn mark_notification_done(&self, id: &NotificationThreadId) -> Result<(), ProviderError> {
+        let url = format!("{API_BASE}/notifications/threads/{}", id.as_str());
+        let response = self
+            .client
+            .delete(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        ensure_success(response).await
+    }
+
     async fn fetch_pull_request_threads(
         &self,
         _id: &PullRequestId,
@@ -250,4 +337,28 @@ impl Provider for GitHubProvider {
             "GitHub pending review discard is not implemented yet",
         ))
     }
+}
+
+fn poll_interval_from_headers(headers: &HeaderMap) -> Option<Duration> {
+    headers
+        .get("x-poll-interval")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+}
+
+fn last_modified_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("last-modified")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+}
+
+async fn ensure_success(response: reqwest::Response) -> Result<(), ProviderError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(from_status(status.as_u16(), &body))
 }

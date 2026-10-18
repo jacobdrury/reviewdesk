@@ -3,9 +3,12 @@
 use std::sync::Arc;
 
 use reviewdesk_core::{
-    LocalStore, LocalStoreError, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    LocalStore, LocalStoreError, NotificationListOptions, NotificationQuery, NotificationThread,
+    NotificationThreadId, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
     PullRequestListItem, PullRequestListOptions, PullRequestListQuery, PullRequestThreads,
 };
+
+use crate::review_session::InboxSyncOutcome;
 use tokio::sync::Mutex;
 
 /// Wraps a [`LocalStore`] so all access is serialized (Turso same-connection rule).
@@ -83,6 +86,38 @@ impl AppLocalStore {
     ) -> Result<(), LocalStoreError> {
         let _guard = self.store_lock.lock().await;
         self.inner.put_patch(id, patch).await
+    }
+
+    pub async fn query_notifications(
+        &self,
+        query: &NotificationQuery,
+    ) -> Result<Vec<NotificationThread>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.query_notifications(query).await
+    }
+
+    async fn sync_notifications_locked(
+        &self,
+        threads: &[NotificationThread],
+    ) -> Result<(), LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.sync_notifications(threads).await
+    }
+
+    async fn set_notification_read_locked(
+        &self,
+        id: &NotificationThreadId,
+    ) -> Result<(), LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.set_notification_read(id).await
+    }
+
+    async fn remove_notification_locked(
+        &self,
+        id: &NotificationThreadId,
+    ) -> Result<(), LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.remove_notification(id).await
     }
 }
 
@@ -172,18 +207,73 @@ pub async fn refresh_patch(
     Ok(patch)
 }
 
+/// Polls the Inbox from the Provider and reconciles into LocalStore when modified.
+pub async fn sync_inbox_from_provider(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    options: &NotificationListOptions,
+) -> Result<InboxSyncOutcome, ProviderError> {
+    let page = provider.list_notifications(options).await?;
+    if !page.not_modified {
+        store
+            .sync_notifications_locked(&page.threads)
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+    }
+    Ok(InboxSyncOutcome {
+        poll_interval: page.poll_interval,
+        last_modified: page.last_modified,
+        not_modified: page.not_modified,
+    })
+}
+
+/// Marks a notification thread read on the Provider, then write-through to LocalStore.
+pub async fn mark_notification_read_via_provider(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &NotificationThreadId,
+) -> Result<(), ProviderError> {
+    provider.mark_notification_read(id).await?;
+    store
+        .set_notification_read_locked(id)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(())
+}
+
+/// Removes a notification thread on the Provider (Done), then write-through to LocalStore.
+pub async fn mark_notification_done_via_provider(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &NotificationThreadId,
+) -> Result<(), ProviderError> {
+    provider.mark_notification_done(id).await?;
+    store
+        .remove_notification_locked(id)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex as StdMutex;
 
     use async_trait::async_trait;
+    use chrono::TimeZone;
     use chrono::Utc;
-    use reviewdesk_core::{PullRequestLabel, ReviewState};
+    use reviewdesk_core::{
+        NotificationListOptions, NotificationPage, NotificationReason, NotificationThread,
+        NotificationThreadId, PullRequestLabel, ReviewState,
+    };
 
     use super::*;
 
     struct RecordingStore {
         pull_requests: StdMutex<Vec<PullRequestListItem>>,
+        notifications: StdMutex<Vec<NotificationThread>>,
+        read_ids: StdMutex<Vec<String>>,
+        removed_ids: StdMutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -233,6 +323,43 @@ mod tests {
             Ok(None)
         }
 
+        async fn sync_notifications(
+            &self,
+            threads: &[NotificationThread],
+        ) -> Result<(), LocalStoreError> {
+            *self.notifications.lock().expect("lock") = threads.to_vec();
+            Ok(())
+        }
+
+        async fn query_notifications(
+            &self,
+            _query: &NotificationQuery,
+        ) -> Result<Vec<NotificationThread>, LocalStoreError> {
+            Ok(self.notifications.lock().expect("lock").clone())
+        }
+
+        async fn set_notification_read(
+            &self,
+            id: &NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            self.read_ids
+                .lock()
+                .expect("lock")
+                .push(id.as_str().to_string());
+            Ok(())
+        }
+
+        async fn remove_notification(
+            &self,
+            id: &NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            self.removed_ids
+                .lock()
+                .expect("lock")
+                .push(id.as_str().to_string());
+            Ok(())
+        }
+
         async fn put_pull_request_threads(
             &self,
             _id: &PullRequestId,
@@ -251,6 +378,9 @@ mod tests {
 
     struct StubProvider {
         pull_requests: Vec<PullRequestListItem>,
+        notifications: NotificationPage,
+        read_calls: StdMutex<Vec<String>>,
+        done_calls: StdMutex<Vec<String>>,
     }
 
     #[async_trait]
@@ -271,6 +401,35 @@ mod tests {
             _id: &PullRequestId,
         ) -> Result<PullRequestDetail, ProviderError> {
             Err(ProviderError::other("not used"))
+        }
+
+        async fn list_notifications(
+            &self,
+            _options: &NotificationListOptions,
+        ) -> Result<NotificationPage, ProviderError> {
+            Ok(self.notifications.clone())
+        }
+
+        async fn mark_notification_read(
+            &self,
+            id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            self.read_calls
+                .lock()
+                .expect("lock")
+                .push(id.as_str().to_string());
+            Ok(())
+        }
+
+        async fn mark_notification_done(
+            &self,
+            id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            self.done_calls
+                .lock()
+                .expect("lock")
+                .push(id.as_str().to_string());
+            Ok(())
         }
 
         async fn fetch_pull_request_threads(
@@ -305,6 +464,18 @@ mod tests {
         }
     }
 
+    fn sample_notification(id: &str) -> NotificationThread {
+        NotificationThread {
+            id: NotificationThreadId::new(id).expect("id"),
+            pull_request_id: PullRequestId::new("acme/widgets#1").expect("pr"),
+            title: "Title".to_string(),
+            repo_label: "acme/widgets".to_string(),
+            reason: NotificationReason::ReviewRequested,
+            unread: true,
+            updated_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        }
+    }
+
     fn sample_item(id: &str) -> PullRequestListItem {
         PullRequestListItem {
             id: PullRequestId::new(id).expect("id"),
@@ -327,11 +498,22 @@ mod tests {
     async fn sync_pull_requests_from_provider_writes_into_store() {
         let recording = Arc::new(RecordingStore {
             pull_requests: StdMutex::new(Vec::new()),
+            notifications: StdMutex::new(Vec::new()),
+            read_ids: StdMutex::new(Vec::new()),
+            removed_ids: StdMutex::new(Vec::new()),
         });
         let store = AppLocalStore::new(recording.clone());
         let item = sample_item("acme/widgets#1");
         let provider = StubProvider {
             pull_requests: vec![item.clone()],
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
         };
 
         sync_pull_requests_from_provider(&provider, &store, &PullRequestListOptions::default())
@@ -343,5 +525,115 @@ mod tests {
             .await
             .expect("query");
         assert_eq!(rows, vec![item]);
+    }
+
+    #[tokio::test]
+    async fn sync_inbox_from_provider_writes_into_store() {
+        let recording = Arc::new(RecordingStore {
+            pull_requests: StdMutex::new(Vec::new()),
+            notifications: StdMutex::new(Vec::new()),
+            read_ids: StdMutex::new(Vec::new()),
+            removed_ids: StdMutex::new(Vec::new()),
+        });
+        let store = AppLocalStore::new(recording.clone());
+        let thread = sample_notification("thread-1");
+        let provider = StubProvider {
+            pull_requests: Vec::new(),
+            notifications: NotificationPage {
+                threads: vec![thread.clone()],
+                poll_interval: None,
+                last_modified: Some("Wed, 01 Jan 2026 00:00:00 GMT".into()),
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+        };
+
+        let outcome =
+            sync_inbox_from_provider(&provider, &store, &NotificationListOptions::default())
+                .await
+                .expect("sync");
+
+        assert_eq!(
+            outcome.last_modified.as_deref(),
+            Some("Wed, 01 Jan 2026 00:00:00 GMT")
+        );
+        let rows = store
+            .query_notifications(&NotificationQuery::default())
+            .await
+            .expect("query");
+        assert_eq!(rows, vec![thread]);
+    }
+
+    #[tokio::test]
+    async fn mark_notification_read_write_through() {
+        let recording = Arc::new(RecordingStore {
+            pull_requests: StdMutex::new(Vec::new()),
+            notifications: StdMutex::new(Vec::new()),
+            read_ids: StdMutex::new(Vec::new()),
+            removed_ids: StdMutex::new(Vec::new()),
+        });
+        let store = AppLocalStore::new(recording.clone());
+        let id = NotificationThreadId::new("thread-1").expect("id");
+        let provider = StubProvider {
+            pull_requests: Vec::new(),
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+        };
+
+        mark_notification_read_via_provider(&provider, &store, &id)
+            .await
+            .expect("read");
+
+        assert_eq!(
+            *provider.read_calls.lock().expect("lock"),
+            vec!["thread-1".to_string()]
+        );
+        assert_eq!(
+            *recording.read_ids.lock().expect("lock"),
+            vec!["thread-1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_notification_done_write_through() {
+        let recording = Arc::new(RecordingStore {
+            pull_requests: StdMutex::new(Vec::new()),
+            notifications: StdMutex::new(Vec::new()),
+            read_ids: StdMutex::new(Vec::new()),
+            removed_ids: StdMutex::new(Vec::new()),
+        });
+        let store = AppLocalStore::new(recording.clone());
+        let id = NotificationThreadId::new("thread-9").expect("id");
+        let provider = StubProvider {
+            pull_requests: Vec::new(),
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+        };
+
+        mark_notification_done_via_provider(&provider, &store, &id)
+            .await
+            .expect("done");
+
+        assert_eq!(
+            *provider.done_calls.lock().expect("lock"),
+            vec!["thread-9".to_string()]
+        );
+        assert_eq!(
+            *recording.removed_ids.lock().expect("lock"),
+            vec!["thread-9".to_string()]
+        );
     }
 }

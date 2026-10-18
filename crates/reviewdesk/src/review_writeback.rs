@@ -94,8 +94,8 @@ mod tests {
 
     use async_trait::async_trait;
     use reviewdesk_core::{
-        DiffAnchor, DiffLineSide, Patch, PendingReview, PullRequestDetail, PullRequestListItem,
-        PullRequestListOptions,
+        DiffAnchor, DiffLineSide, NotificationListOptions, NotificationPage, NotificationThreadId,
+        Patch, PendingReview, PullRequestDetail, PullRequestListItem, PullRequestListOptions,
         ReviewComment, ReviewCommentId, Thread, ThreadId, ThreadStatus, suggestion_from_body,
     };
     use reviewdesk_localstore::TursoLocalStore;
@@ -142,6 +142,27 @@ mod tests {
             &self,
             _id: &PullRequestId,
         ) -> Result<PullRequestDetail, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn list_notifications(
+            &self,
+            _options: &NotificationListOptions,
+        ) -> Result<NotificationPage, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn mark_notification_read(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn mark_notification_done(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
             Err(ProviderError::other("unused"))
         }
 
