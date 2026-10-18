@@ -247,6 +247,14 @@ const STUB_PRS: &[StubPr] = &[
     },
 ];
 
+/// Left pad for list rows: base + nest step × depth (groups and PRs share this).
+const LIST_ROW_BASE_PL: f32 = 16.;
+const LIST_NEST_STEP: f32 = 20.;
+
+fn list_row_pl(depth: u8) -> f32 {
+    LIST_ROW_BASE_PL + LIST_NEST_STEP * f32::from(depth)
+}
+
 #[derive(Clone)]
 enum ListRow {
     /// `depth` 0 = primary group (repo / status); 1 = nested (status under repo).
@@ -256,7 +264,8 @@ enum ListRow {
         count: usize,
         depth: u8,
     },
-    Pr { pr: StubPr },
+    /// `depth` = parent group depth + 1 so peers at one nest level share a column grid.
+    Pr { pr: StubPr, depth: u8 },
 }
 
 pub(crate) struct PrototypeChrome {
@@ -1105,7 +1114,6 @@ fn render_pr_rows(
                                         | "Draft"
                                 );
                                 let is_draft = label.as_str() == "Draft";
-                                let indent = if *depth > 0 { 20. } else { 0. };
                                 let pt = if *depth == 0 { 14. } else { 8. };
                                 let is_collapsed = collapsed.contains(key);
                                 let chevron = if is_collapsed {
@@ -1138,7 +1146,7 @@ fn render_pr_rows(
                                 div()
                                     .id(SharedString::from(format!("group-{ix}")))
                                     .w_full()
-                                    .pl(px(16. + indent))
+                                    .pl(px(list_row_pl(*depth)))
                                     .pr_4()
                                     .pt(px(pt))
                                     .pb(px(6.))
@@ -1156,16 +1164,21 @@ fn render_pr_rows(
                                     .child(
                                         header
                                             .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_medium()
-                                                    .child(label.clone()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(count.to_string()),
+                                                h_flex()
+                                                    .items_center()
+                                                    .gap_1()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .font_medium()
+                                                            .child(label.clone()),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child(count.to_string()),
+                                                    ),
                                             )
                                             .child(div().flex_1())
                                             .child(
@@ -1176,14 +1189,16 @@ fn render_pr_rows(
                                     )
                                     .into_any_element()
                             }
-                            ListRow::Pr { pr } => {
+                            ListRow::Pr { pr, depth } => {
                                 let pr = *pr;
+                                let depth = *depth;
                                 let is_sel = selected == Some(pr.id);
                                 let owner = entity.clone();
                                 div()
                                     .id(SharedString::from(pr.id))
                                     .w_full()
-                                    .px_4()
+                                    .pl(px(list_row_pl(depth)))
+                                    .pr_4()
                                     .py(px(7.))
                                     .border_b_1()
                                     .border_color(cx.theme().border.opacity(0.55))
@@ -1843,7 +1858,7 @@ fn build_list_rows(view: StubViewId, repo_scope: Option<&str>) -> Vec<ListRow> {
     let Some(group_by) = view.group_by() else {
         return prs
             .into_iter()
-            .map(|pr| ListRow::Pr { pr })
+            .map(|pr| ListRow::Pr { pr, depth: 0 })
             .collect();
     };
 
@@ -1882,7 +1897,7 @@ fn build_list_rows(view: StubViewId, repo_scope: Option<&str>) -> Vec<ListRow> {
             depth: 0,
         });
         for pr in group_prs {
-            rows.push(ListRow::Pr { pr });
+            rows.push(ListRow::Pr { pr, depth: 1 });
         }
     }
     rows
@@ -1926,7 +1941,8 @@ fn build_nested_repo_status_rows(prs: &[StubPr]) -> Vec<ListRow> {
                 depth: 1,
             });
             for pr in state_prs {
-                rows.push(ListRow::Pr { pr });
+                // Same nest level under every status subgroup → one shared column grid.
+                rows.push(ListRow::Pr { pr, depth: 2 });
             }
         }
     }
@@ -1963,11 +1979,11 @@ fn visible_list_rows(rows: Vec<ListRow>, collapsed: &HashSet<String>) -> Vec<Lis
                     depth,
                 });
             }
-            ListRow::Pr { pr } => {
+            ListRow::Pr { pr, depth } => {
                 if skip_until_depth.is_some() {
                     continue;
                 }
-                out.push(ListRow::Pr { pr });
+                out.push(ListRow::Pr { pr, depth });
             }
         }
     }
