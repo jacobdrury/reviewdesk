@@ -1215,7 +1215,7 @@ fn render_pr_rows(
 }
 
 /// Linear Issues/backlog row → PR.
-/// Fixed left columns so files / # / time / status stack vertically across rows.
+/// Dense fixed left columns (flex_none so they don't spread across the row).
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let author_initial = pr
         .author
@@ -1228,34 +1228,34 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let mut row = h_flex()
         .w_full()
         .items_center()
-        .gap_3()
-        // Tight fixed-width meta cluster — no flex growth between cells.
+        .gap_2()
+        // Content-sized meta cluster — must not flex-grow or columns pull apart.
         .child(
             h_flex()
+                .flex_none()
                 .items_center()
-                .gap_1()
-                .flex_shrink_0()
+                .gap(px(6.))
                 .child(filesize_chip(pr.files, cx))
                 .child(
                     div()
-                        .w(px(40.))
-                        .flex_shrink_0()
+                        .flex_none()
+                        .w(px(32.))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(format!("#{}", pr.number)),
                 )
                 .child(
                     div()
-                        .w(px(24.))
-                        .flex_shrink_0()
+                        .flex_none()
+                        .w(px(20.))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(pr.updated),
                 )
                 .child(
                     div()
-                        .w(px(16.))
-                        .flex_shrink_0()
+                        .flex_none()
+                        .w(px(14.))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1367,13 +1367,13 @@ fn label_pill(name: &str, cx: &App) -> impl IntoElement {
         )
 }
 
-/// Compact PR size signal: fixed width so columns stay aligned (icon + up to 2 digits).
+/// Compact PR size signal: icon + count packed (no grow, fixed slot for 2 digits).
 fn filesize_chip(files: u32, cx: &App) -> impl IntoElement {
     h_flex()
-        .w(px(36.))
+        .flex_none()
+        .w(px(28.))
         .items_center()
-        .gap_1()
-        .flex_shrink_0()
+        .gap(px(2.))
         .child(
             Icon::new(IconName::File)
                 .xsmall()
@@ -1381,7 +1381,7 @@ fn filesize_chip(files: u32, cx: &App) -> impl IntoElement {
         )
         .child(
             div()
-                .w(px(16.))
+                .flex_none()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(files.to_string()),
