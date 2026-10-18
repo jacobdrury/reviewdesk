@@ -17,7 +17,8 @@ use gpui_kit::{
 use reviewdesk_core::{
     DiffAnchor, DraftFilter, LocalStoreError, NotificationListOptions, NotificationQuery,
     NotificationThreadId, PendingDiffReviewComment, Provider, ProviderError, PullRequestId,
-    PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent, View,
+    PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent, ThreadId, ThreadStatus,
+    TimelineConversationComment, View,
 };
 use tokio::runtime::Handle;
 
@@ -26,7 +27,8 @@ use crate::metadata_write::apply_metadata_write;
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::review_writeback::{
     add_pending_diff_review_comment, discard_pending_review, load_threads_via_store,
-    refresh_threads_from_provider, submit_pending_review,
+    publish_timeline_comment, refresh_threads_from_provider, set_thread_status,
+    submit_pending_review,
 };
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, load_pipelines_via_store,
@@ -182,6 +184,14 @@ impl ReviewDesk {
                 }
                 Effect::FetchPipelines { id } => self.run_fetch_pipelines(id, cx),
                 Effect::RerunPipeline { id, target } => self.run_rerun_pipeline(id, target, cx),
+                Effect::SetThreadStatusWrite {
+                    id,
+                    thread_id,
+                    status,
+                } => self.run_set_thread_status(id, thread_id, status, cx),
+                Effect::PublishTimelineCommentWrite { id, body } => {
+                    self.run_publish_timeline_comment(id, body, cx)
+                }
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
                 Effect::BootstrapPullRequestsViews => self.run_bootstrap_views(cx),
                 Effect::FetchViewerLogin => self.run_fetch_viewer_login(cx),
@@ -872,6 +882,83 @@ impl ReviewDesk {
                 this.dispatch(
                     Intent::RerunPipelineFinished {
                         id: finish_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_set_thread_status(
+        &mut self,
+        id: PullRequestId,
+        thread_id: String,
+        status: ThreadStatus,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_write_task = cx.spawn(async move |this, cx| {
+            let write_id = request_id.clone();
+            let tid = ThreadId::new(thread_id);
+            let result = runtime
+                .spawn(async move {
+                    set_thread_status(
+                        provider.as_ref(),
+                        &store,
+                        &write_id,
+                        &tid,
+                        status,
+                    )
+                    .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsWriteFinished {
+                        id: request_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_publish_timeline_comment(
+        &mut self,
+        id: PullRequestId,
+        body: String,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_write_task = cx.spawn(async move |this, cx| {
+            let write_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    publish_timeline_comment(
+                        provider.as_ref(),
+                        &store,
+                        &write_id,
+                        TimelineConversationComment { body },
+                    )
+                    .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsWriteFinished {
+                        id: request_id,
                         result,
                     },
                     cx,

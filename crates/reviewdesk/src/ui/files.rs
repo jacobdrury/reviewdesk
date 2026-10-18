@@ -15,10 +15,11 @@ use gpui_kit::{
     Context, ElementId, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
     UniformListScrollHandle, WeakEntity, div, px, uniform_list,
 };
-use reviewdesk_core::{DiffLineSide, ReviewSubmitEvent};
+use reviewdesk_core::DiffLineSide;
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView, ThreadView};
+use crate::ui::pending_review::render_pending_review_bar;
 
 pub(crate) fn render_files(
     view: &SessionView,
@@ -198,7 +199,7 @@ pub(crate) fn render_files(
                     let retry_path = selected_file.clone();
                     let mut diff_column = v_flex().size_full().min_h_0().min_w_0();
                     if view.has_pending_review {
-                        diff_column = diff_column.child(pending_review_bar(
+                        diff_column = diff_column.child(render_pending_review_bar(
                             pending_entity.clone(),
                             cx,
                         ));
@@ -313,99 +314,6 @@ pub(crate) fn render_files(
                 }),
         )
         .into_any_element()
-}
-
-fn pending_review_bar(
-    entity: WeakEntity<ReviewDesk>,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .px_3()
-        .py_2()
-        .gap_2()
-        .items_center()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().secondary)
-        .child(
-            div()
-                .text_xs()
-                .font_medium()
-                .text_color(cx.theme().muted_foreground)
-                .child("Pending review"),
-        )
-        .child(
-            Button::new("pending-submit-comment")
-                .outline()
-                .xsmall()
-                .label("Submit comment")
-                .on_click({
-                    let owner = entity.clone();
-                    move |_, _, cx| {
-                        let _ = owner.update(cx, |this, cx| {
-                            this.dispatch(
-                                Intent::SubmitPendingReview {
-                                    event: ReviewSubmitEvent::Comment,
-                                    summary_body: None,
-                                },
-                                cx,
-                            );
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("pending-approve")
-                .outline()
-                .xsmall()
-                .label("Approve")
-                .on_click({
-                    let owner = entity.clone();
-                    move |_, _, cx| {
-                        let _ = owner.update(cx, |this, cx| {
-                            this.dispatch(
-                                Intent::SubmitPendingReview {
-                                    event: ReviewSubmitEvent::Approve,
-                                    summary_body: None,
-                                },
-                                cx,
-                            );
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("pending-request-changes")
-                .outline()
-                .xsmall()
-                .label("Request changes")
-                .on_click({
-                    let owner = entity.clone();
-                    move |_, _, cx| {
-                        let _ = owner.update(cx, |this, cx| {
-                            this.dispatch(
-                                Intent::SubmitPendingReview {
-                                    event: ReviewSubmitEvent::RequestChanges,
-                                    summary_body: None,
-                                },
-                                cx,
-                            );
-                        });
-                    }
-                }),
-        )
-        .child(
-            Button::new("pending-discard")
-                .ghost()
-                .xsmall()
-                .label("Discard")
-                .on_click(move |_, _, cx| {
-                    let _ = entity.update(cx, |this, cx| {
-                        this.dispatch(Intent::DiscardPendingReview, cx);
-                    });
-                }),
-        )
 }
 
 fn diff_threads_for_file(threads: &[ThreadView], selected_file: Option<&str>) -> Vec<ThreadView> {

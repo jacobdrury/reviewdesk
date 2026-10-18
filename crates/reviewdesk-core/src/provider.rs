@@ -8,7 +8,8 @@ use crate::pipelines::{PipelinesSnapshot, RerunTarget};
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListOptions};
 use crate::review_threads::{
-    PendingDiffReviewComment, PullRequestThreads, ReviewSubmitEvent,
+    PendingDiffReviewComment, PullRequestThreads, ReviewSubmitEvent, ThreadId, ThreadStatus,
+    TimelineConversationComment,
 };
 
 /// Host that exposes pull requests, their patches, and the notification Inbox.
@@ -135,4 +136,19 @@ pub trait Provider: Send + Sync {
         id: &PullRequestId,
         target: &RerunTarget,
     ) -> Result<(), ProviderError>;
+
+    /// Resolve or reopen a Thread when the Provider allows.
+    async fn set_thread_status(
+        &self,
+        id: &PullRequestId,
+        thread_id: &ThreadId,
+        status: ThreadStatus,
+    ) -> Result<PullRequestThreads, ProviderError>;
+
+    /// Publish a timeline Conversation comment immediately (not Pending review).
+    async fn publish_timeline_comment(
+        &self,
+        id: &PullRequestId,
+        comment: TimelineConversationComment,
+    ) -> Result<PullRequestThreads, ProviderError>;
 }

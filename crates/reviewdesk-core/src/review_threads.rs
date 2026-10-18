@@ -89,6 +89,12 @@ pub enum ReviewSubmitEvent {
     RequestChanges,
 }
 
+/// Timeline Conversation remark (no diff anchor; publishes immediately).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineConversationComment {
+    pub body: String,
+}
+
 /// New diff-anchored remark on the viewer's Pending review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingDiffReviewComment {

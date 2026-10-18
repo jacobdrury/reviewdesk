@@ -366,6 +366,23 @@ mod tests {
         ) -> Result<(), ProviderError> {
             Err(ProviderError::other("unused"))
         }
+
+        async fn set_thread_status(
+            &self,
+            _id: &PullRequestId,
+            _thread_id: &reviewdesk_core::ThreadId,
+            _status: reviewdesk_core::ThreadStatus,
+        ) -> Result<reviewdesk_core::PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn publish_timeline_comment(
+            &self,
+            _id: &PullRequestId,
+            _comment: reviewdesk_core::TimelineConversationComment,
+        ) -> Result<reviewdesk_core::PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
     }
 
     fn pr_id(raw: &str) -> PullRequestId {

@@ -69,6 +69,15 @@ pub enum Intent {
         summary_body: Option<String>,
     },
     DiscardPendingReview,
+    ToggleHideResolvedThreads,
+    SetConversationReplyThread(Option<SharedString>),
+    SetThreadStatus {
+        thread_id: String,
+        status: ThreadStatus,
+    },
+    PublishTimelineComment {
+        body: String,
+    },
     RetryDetail,
     RetryPatch,
     PullRequestListQueryFinished {
@@ -224,6 +233,15 @@ pub enum Effect {
     RerunPipeline {
         id: PullRequestId,
         target: RerunTarget,
+    },
+    SetThreadStatusWrite {
+        id: PullRequestId,
+        thread_id: String,
+        status: ThreadStatus,
+    },
+    PublishTimelineCommentWrite {
+        id: PullRequestId,
+        body: String,
     },
     ArmPullRequestsRefreshTimer,
     BootstrapPullRequestsViews,
@@ -397,6 +415,9 @@ pub struct SessionView {
     pub threads_syncing: bool,
     pub metadata_write_pending: bool,
     pub metadata_write_error: Option<String>,
+    pub threads: LoadState<()>,
+    pub hide_resolved_threads: bool,
+    pub conversation_reply_thread: Option<SharedString>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -441,6 +462,8 @@ pub struct ReviewSession {
     diff_revision: u64,
     threads: LoadState<PullRequestThreads>,
     threads_syncing: bool,
+    hide_resolved_threads: bool,
+    conversation_reply_thread: Option<SharedString>,
     overview_segments: Vec<BodySegment>,
     details_open: HashMap<usize, bool>,
     overview_compose_cache: Option<OverviewComposeCache>,
@@ -485,6 +508,8 @@ impl ReviewSession {
             diff_revision: 0,
             threads: LoadState::Idle,
             threads_syncing: false,
+            hide_resolved_threads: false,
+            conversation_reply_thread: None,
             overview_segments: Vec::new(),
             details_open: HashMap::new(),
             overview_compose_cache: None,
@@ -565,6 +590,18 @@ impl ReviewSession {
                 summary_body,
             } => self.begin_submit_pending_review(event, summary_body),
             Intent::DiscardPendingReview => self.begin_discard_pending_review(),
+            Intent::ToggleHideResolvedThreads => {
+                self.hide_resolved_threads = !self.hide_resolved_threads;
+                Vec::new()
+            }
+            Intent::SetConversationReplyThread(thread_id) => {
+                self.conversation_reply_thread = thread_id;
+                Vec::new()
+            }
+            Intent::SetThreadStatus { thread_id, status } => {
+                self.begin_set_thread_status(thread_id, status)
+            }
+            Intent::PublishTimelineComment { body } => self.begin_publish_timeline_comment(body),
             Intent::RetryDetail => self.retry_detail(),
             Intent::RetryPatch => self.retry_patch(),
             Intent::PullRequestListQueryFinished { result } => {
@@ -694,6 +731,12 @@ impl ReviewSession {
             LoadState::Ready(_) => LoadState::Ready(()),
             LoadState::Error(error) => LoadState::Error(error.clone()),
         };
+        let threads = match &self.threads {
+            LoadState::Idle => LoadState::Idle,
+            LoadState::Loading => LoadState::Loading,
+            LoadState::Ready(_) => LoadState::Ready(()),
+            LoadState::Error(error) => LoadState::Error(error.clone()),
+        };
 
         SessionView {
             sidebar_tab: self.sidebar_tab,
@@ -731,6 +774,9 @@ impl ReviewSession {
             threads_syncing: self.threads_syncing,
             metadata_write_pending: self.metadata_write_pending,
             metadata_write_error: self.metadata_write_error.clone(),
+            threads,
+            hide_resolved_threads: self.hide_resolved_threads,
+            conversation_reply_thread: self.conversation_reply_thread.clone(),
         }
     }
 
@@ -965,6 +1011,8 @@ impl ReviewSession {
         self.file_list_paths = Arc::from([]);
         self.threads = LoadState::Idle;
         self.threads_syncing = false;
+        self.hide_resolved_threads = false;
+        self.conversation_reply_thread = None;
         self.bump_diff_revision();
     }
 
@@ -1529,6 +1577,57 @@ impl ReviewSession {
         }
         self.threads_syncing = true;
         vec![Effect::DiscardPendingReviewWrite { id }]
+    }
+
+    fn begin_set_thread_status(
+        &mut self,
+        thread_id: String,
+        status: ThreadStatus,
+    ) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        if !self.thread_allows_status_change(&thread_id, status) {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::SetThreadStatusWrite {
+            id,
+            thread_id,
+            status,
+        }]
+    }
+
+    fn thread_allows_status_change(&self, thread_id: &str, status: ThreadStatus) -> bool {
+        let LoadState::Ready(snapshot) = &self.threads else {
+            return false;
+        };
+        let Some(thread) = snapshot
+            .threads
+            .iter()
+            .find(|t| t.id.as_str() == thread_id)
+        else {
+            return false;
+        };
+        if matches!(thread.status, ThreadStatus::Outdated) {
+            return false;
+        }
+        thread.status != status
+    }
+
+    fn begin_publish_timeline_comment(&mut self, body: String) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::PublishTimelineCommentWrite {
+            id,
+            body: trimmed.to_string(),
+        }]
     }
 
     fn has_pending_review(&self) -> bool {
@@ -2253,6 +2352,74 @@ mod tests {
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-2")));
         assert!(!session.view().has_pending_review);
         assert!(session.view().shared_threads.is_empty());
+    }
+
+    #[test]
+    fn set_thread_status_emits_write_effect_when_allowed() {
+        use reviewdesk_core::{ReviewComment, ReviewCommentId, Thread, ThreadId};
+
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(PullRequestThreads {
+                threads: vec![Thread {
+                    id: ThreadId::new("t-1"),
+                    anchor: Some(DiffAnchor {
+                        path: "src/lib.rs".into(),
+                        side: DiffLineSide::Right,
+                        start_line: 1,
+                        end_line: 1,
+                    }),
+                    status: ThreadStatus::Open,
+                    comments: vec![ReviewComment {
+                        id: ReviewCommentId::new("c-1"),
+                        author_login: "alice".into(),
+                        body: "Fix".into(),
+                        is_pending: false,
+                        suggestion: None,
+                    }],
+                }],
+                pending_review: None,
+            }),
+        });
+
+        let effects = session.apply(Intent::SetThreadStatus {
+            thread_id: "t-1".into(),
+            status: ThreadStatus::Resolved,
+        });
+        assert_eq!(
+            effects,
+            vec![Effect::SetThreadStatusWrite {
+                id: pr_id("pr-1"),
+                thread_id: "t-1".into(),
+                status: ThreadStatus::Resolved,
+            }]
+        );
+    }
+
+    #[test]
+    fn publish_timeline_comment_emits_immediate_write_effect() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(PullRequestThreads {
+                threads: Vec::new(),
+                pending_review: None,
+            }),
+        });
+
+        let effects = session.apply(Intent::PublishTimelineComment {
+            body: "Hello".into(),
+        });
+        assert_eq!(
+            effects,
+            vec![Effect::PublishTimelineCommentWrite {
+                id: pr_id("pr-1"),
+                body: "Hello".into(),
+            }]
+        );
     }
 
     #[test]

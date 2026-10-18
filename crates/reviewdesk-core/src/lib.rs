@@ -45,7 +45,7 @@ pub use pull_request_list::{
 pub use review_threads::{
     DiffAnchor, DiffLineSide, PendingDiffReviewComment, PendingReview, PullRequestThreads,
     ReviewComment, ReviewCommentId, ReviewSubmitEvent, Thread, ThreadId, ThreadStatus,
-    suggestion_from_body,
+    TimelineConversationComment, suggestion_from_body,
 };
 pub use view_list::{
     PullRequestListRow, PullRequestsEmptyKind, build_pull_request_list_rows, distinct_repo_labels,

@@ -682,6 +682,23 @@ mod tests {
                 Err(ProviderError::other("rerun not allowed"))
             }
         }
+
+        async fn set_thread_status(
+            &self,
+            _id: &PullRequestId,
+            _thread_id: &reviewdesk_core::ThreadId,
+            _status: reviewdesk_core::ThreadStatus,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
+
+        async fn publish_timeline_comment(
+            &self,
+            _id: &PullRequestId,
+            _comment: reviewdesk_core::TimelineConversationComment,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
     }
 
     fn sample_notification(id: &str) -> NotificationThread {

@@ -563,6 +563,27 @@ impl Provider for GitHubProvider {
             "GitHub pending review discard is not implemented yet",
         ))
     }
+
+    async fn set_thread_status(
+        &self,
+        _id: &PullRequestId,
+        _thread_id: &reviewdesk_core::ThreadId,
+        _status: reviewdesk_core::ThreadStatus,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub thread resolve is not implemented yet",
+        ))
+    }
+
+    async fn publish_timeline_comment(
+        &self,
+        _id: &PullRequestId,
+        _comment: reviewdesk_core::TimelineConversationComment,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub timeline comments are not implemented yet",
+        ))
+    }
 }
 
 fn poll_interval_from_headers(headers: &HeaderMap) -> Option<Duration> {
