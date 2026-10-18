@@ -1,9 +1,12 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use reviewdesk_core::{LocalStore, LocalStoreError};
+use reviewdesk_core::{
+    LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId,
+};
 use turso::{Builder, Connection, Database};
 
+use crate::detail_patch;
 use crate::error::map_open;
 use crate::migrate;
 
@@ -40,5 +43,27 @@ impl TursoLocalStore {
 impl LocalStore for TursoLocalStore {
     async fn schema_version(&self) -> Result<u32, LocalStoreError> {
         migrate::applied_version(&self.conn).await
+    }
+
+    async fn put_pull_request_detail(
+        &self,
+        detail: &PullRequestDetail,
+    ) -> Result<(), LocalStoreError> {
+        detail_patch::put_pull_request_detail(&self.conn, detail).await
+    }
+
+    async fn get_pull_request_detail(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PullRequestDetail>, LocalStoreError> {
+        detail_patch::get_pull_request_detail(&self.conn, id).await
+    }
+
+    async fn put_patch(&self, id: &PullRequestId, patch: &Patch) -> Result<(), LocalStoreError> {
+        detail_patch::put_patch(&self.conn, id, patch).await
+    }
+
+    async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
+        detail_patch::get_patch(&self.conn, id).await
     }
 }

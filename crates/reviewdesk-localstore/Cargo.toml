@@ -8,6 +8,8 @@ description = "Turso-backed LocalStore for Review Desk"
 [dependencies]
 async-trait = { workspace = true }
 reviewdesk-core = { path = "../reviewdesk-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 turso = { workspace = true }
 
 [dev-dependencies]
