@@ -7,6 +7,7 @@ mod review_pane;
 mod shell_prototype;
 
 pub(crate) use files::render_files;
+#[allow(unused_imports)] // kept for non-prototype shell restore
 pub(crate) use inbox::render_inbox;
 pub(crate) use overview::render_overview;
 #[allow(unused_imports)] // kept for non-prototype shell restore

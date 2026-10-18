@@ -96,7 +96,7 @@ pub(crate) fn render_prototype_shell(
                 this.cycle_chrome(true, cx);
             }
         }))
-        .child(render_title_bar(chrome, proto.shell_nav, &sync_label, cx))
+        .child(render_title_bar(&sync_label, cx))
         .child(
             div()
                 .flex_1()
@@ -106,13 +106,7 @@ pub(crate) fn render_prototype_shell(
         .child(render_chrome_switcher(chrome, cx))
 }
 
-fn render_title_bar(
-    chrome: ChromeVariant,
-    shell_nav: ShellNav,
-    sync_label: &str,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let dense = chrome.dense();
+fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     gpui_kit::component::TitleBar::new().child(
         h_flex()
             .w_full()
@@ -124,15 +118,7 @@ fn render_title_bar(
                 h_flex()
                     .items_center()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_medium()
-                            .child("Review Desk"),
-                    )
-                    .when(chrome.title_bar_nav(), |el| {
-                        el.child(render_text_nav(shell_nav, dense, cx))
-                    })
+                    .child(div().text_sm().font_medium().child("Review Desk"))
                     .child(
                         div()
                             .text_xs()
@@ -150,72 +136,63 @@ fn render_title_bar(
     )
 }
 
-fn render_text_nav(
-    shell_nav: ShellNav,
-    dense: bool,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    h_flex()
-        .gap_1()
-        .child(nav_text_button("nav-inbox", ShellNav::Inbox, shell_nav, dense, cx))
-        .child(nav_text_button(
-            "nav-prs",
-            ShellNav::PullRequests,
-            shell_nav,
-            dense,
-            cx,
-        ))
-}
-
-fn nav_text_button(
-    id: &'static str,
-    target: ShellNav,
-    current: ShellNav,
-    dense: bool,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let selected = target == current;
-    Button::new(id)
-        .when(selected, |b| b.primary())
-        .when(!selected, |b| b.ghost())
-        .when(dense, |b| b.xsmall())
-        .when(!dense, |b| b.small())
-        .label(target.label())
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_shell_nav(target, cx);
-        }))
-}
-
 fn render_body(proto: PrototypeChrome, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     let chrome = proto.chrome;
+    let pr_count = match &proto.view.inbox {
+        LoadState::Ready(items) => items.len(),
+        _ => 0,
+    };
+
     if chrome.focus_stack() && proto.view.selected_id.is_some() {
-        return render_focus_review(proto, cx).into_any_element();
+        return h_flex()
+            .size_full()
+            .min_h_0()
+            .child(render_linear_sidebar(
+                proto.shell_nav,
+                pr_count,
+                chrome,
+                cx,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .h_full()
+                    .child(render_focus_review(proto, cx)),
+            )
+            .into_any_element();
     }
 
     h_flex()
         .size_full()
         .min_h_0()
-        .when(chrome.activity_rail(), |el| {
-            el.child(render_activity_rail(proto.shell_nav, cx))
-        })
-        .when(chrome.labeled_sidebar_nav(), |el| {
-            el.child(render_labeled_nav(proto.shell_nav, cx))
-        })
+        .child(render_linear_sidebar(
+            proto.shell_nav,
+            pr_count,
+            chrome,
+            cx,
+        ))
         .child(
-            div().flex_1().min_h_0().child(
-                h_resizable("proto-shell")
-                    .child(
-                        resizable_panel()
-                            .size(px(chrome.list_default_width()))
-                            .size_range(px(chrome.list_min_width())..px(480.))
-                            .child(render_list_pane(&proto, cx)),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size_range(px(420.)..px(2000.))
-                            .child(render_review_stage(&proto, cx)),
-                    ),
-            ),
+            h_flex()
+                .flex_1()
+                .min_h_0()
+                .h_full()
+                .child(
+                    div()
+                        .w(px(chrome.list_default_width()))
+                        .flex_shrink_0()
+                        .h_full()
+                        .min_h_0()
+                        .child(render_list_pane(&proto, cx)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .h_full()
+                        .child(render_review_stage(&proto, cx)),
+                ),
         )
         .into_any_element()
 }
@@ -256,88 +233,115 @@ fn render_focus_review(
         .child(div().flex_1().min_h_0().child(render_review_stage(&proto, cx)))
 }
 
-fn render_activity_rail(
+/// Linear-style primary nav: icon + label rows, selection pill, optional count.
+fn render_linear_sidebar(
     shell_nav: ShellNav,
+    pr_count: usize,
+    chrome: ChromeVariant,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
+    let pad = if chrome.dense() { px(6.) } else { px(8.) };
     v_flex()
-        .w(px(44.))
+        .w(px(chrome.sidebar_width()))
+        .flex_shrink_0()
         .h_full()
-        .items_center()
+        .min_h_0()
         .gap_1()
-        .py_2()
+        .px_2()
+        .py(pad)
         .border_r_1()
         .border_color(cx.theme().border)
         .bg(cx.theme().sidebar)
-        .child(rail_button(
-            "rail-inbox",
-            IconName::Bell,
-            ShellNav::Inbox,
-            shell_nav,
-            cx,
-        ))
-        .child(rail_button(
-            "rail-prs",
-            IconName::Inbox,
-            ShellNav::PullRequests,
-            shell_nav,
-            cx,
-        ))
-}
-
-fn rail_button(
-    id: &'static str,
-    icon: IconName,
-    target: ShellNav,
-    current: ShellNav,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let selected = target == current;
-    Button::new(id)
-        .when(selected, |b| b.primary())
-        .when(!selected, |b| b.ghost())
-        .xsmall()
-        .icon(icon)
-        .tooltip(target.label())
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_shell_nav(target, cx);
-        }))
-}
-
-fn render_labeled_nav(
-    shell_nav: ShellNav,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    v_flex()
-        .w(px(148.))
-        .h_full()
-        .gap_1()
-        .p_2()
-        .border_r_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().sidebar.opacity(0.5))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_xs()
+                .font_medium()
                 .text_color(cx.theme().muted_foreground)
-                .child("Navigate"),
+                .child("Review Desk"),
         )
-        .child(nav_text_button(
+        .child(linear_nav_row(
             "side-inbox",
+            IconName::Inbox,
             ShellNav::Inbox,
             shell_nav,
-            false,
+            None,
+            chrome.dense(),
             cx,
         ))
-        .child(nav_text_button(
+        .child(linear_nav_row(
             "side-prs",
+            IconName::Github,
             ShellNav::PullRequests,
             shell_nav,
-            false,
+            Some(pr_count),
+            chrome.dense(),
             cx,
         ))
+}
+
+fn linear_nav_row(
+    id: &'static str,
+    icon: IconName,
+    target: ShellNav,
+    current: ShellNav,
+    badge: Option<usize>,
+    dense: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let selected = target == current;
+    let row_py = if dense { px(4.) } else { px(6.) };
+    div()
+        .id(id)
+        .w_full()
+        .px_2()
+        .py(row_py)
+        .rounded_md()
+        .cursor_pointer()
+        .when(selected, |el| el.bg(cx.theme().sidebar_accent))
+        .when(!selected, |el| {
+            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.45)))
+        })
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_shell_nav(target, cx);
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    Icon::new(icon)
+                        .xsmall()
+                        .text_color(if selected {
+                            cx.theme().sidebar_accent_foreground
+                        } else {
+                            cx.theme().sidebar_foreground
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .text_color(if selected {
+                            cx.theme().sidebar_accent_foreground
+                        } else {
+                            cx.theme().sidebar_foreground
+                        })
+                        .child(target.label()),
+                )
+                .when_some(badge.filter(|n| *n > 0), |el, count| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(count.to_string()),
+                    )
+                }),
+        )
 }
 
 fn render_list_pane(
@@ -370,10 +374,8 @@ fn render_pull_requests(
     v_flex()
         .size_full()
         .min_h_0()
-        .when(!chrome.tone_split(), |el| {
-            el.border_r_1().border_color(cx.theme().border)
-        })
-        .when(chrome.tone_split(), |el| el.bg(cx.theme().sidebar))
+        .border_r_1()
+        .border_color(cx.theme().border)
         .child(
             h_flex()
                 .w_full()
@@ -390,27 +392,13 @@ fn render_pull_requests(
                         .child(header),
                 )
                 .child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(match &proto.view.inbox {
-                                    LoadState::Ready(items) => items.len().to_string(),
-                                    _ => String::new(),
-                                }),
-                        )
-                        .child(
-                            Button::new("prs-refresh")
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::RefreshCw)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(Intent::RefreshInbox, cx);
-                                })),
-                        ),
+                    Button::new("prs-refresh")
+                        .ghost()
+                        .xsmall()
+                        .icon(IconName::RefreshCw)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Intent::RefreshInbox, cx);
+                        })),
                 ),
         )
         .child(
@@ -559,10 +547,8 @@ fn render_notifications(
     v_flex()
         .size_full()
         .min_h_0()
-        .when(!chrome.tone_split(), |el| {
-            el.border_r_1().border_color(cx.theme().border)
-        })
-        .when(chrome.tone_split(), |el| el.bg(cx.theme().sidebar))
+        .border_r_1()
+        .border_color(cx.theme().border)
         .child(
             h_flex()
                 .w_full()
@@ -657,10 +643,6 @@ fn render_review_stage(
     }
 
     let mut stage = v_flex().size_full().min_h_0();
-    if chrome.tone_split() {
-        stage = stage.bg(cx.theme().background);
-    }
-
     stage = stage.child(render_review_tabs(proto.review_tab, chrome.dense(), cx));
 
     if chrome.metadata_under_tabs() {
@@ -935,8 +917,7 @@ fn render_metadata_panel(
     if vertical {
         panel = panel
             .border_l_1()
-            .border_color(cx.theme().border)
-            .when(chrome.tone_split(), |el| el.bg(cx.theme().sidebar));
+            .border_color(cx.theme().border);
     } else {
         panel = panel
             .border_t_1()

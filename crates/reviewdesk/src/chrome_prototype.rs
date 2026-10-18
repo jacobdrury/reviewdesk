@@ -5,10 +5,13 @@
 //! panel (open by default) sit together, and which density wins against the
 //! earlier Dock Dense notes (`prototype/zed-shell-chrome` variant A)?
 //!
+//! Standing preference from HITL: Linear-style labeled primary sidebar
+//! (Inbox + Pull requests). Variants only change Metadata placement / density.
+//!
 //! Three variants on the live app, cycled with the bottom bar (or `[` / `]`):
-//! - A (Dock Dense): activity rail + list + review + right Metadata dock
-//! - B (Header Metadata): title-bar nav; Metadata folds under the tab bar
-//! - C (Focus Stack): list or review fills the stage; Metadata is a bottom drawer
+//! - A (Linear + Dock Meta): dense sidebar; Metadata as a right dock
+//! - B (Linear + Header Meta): roomier; Metadata folds under the tab bar
+//! - C (Linear + Drawer): Metadata as a bottom drawer; opening a PR focuses review
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/primary-shell-chrome` (never merge as-is)
@@ -48,9 +51,9 @@ impl ChromeVariant {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::A => "Dock Dense",
-            Self::B => "Header Metadata",
-            Self::C => "Focus Stack",
+            Self::A => "Linear + Dock Meta",
+            Self::B => "Linear + Header Meta",
+            Self::C => "Linear + Drawer",
         }
     }
 
@@ -74,19 +77,18 @@ impl ChromeVariant {
         }
     }
 
-    pub fn list_default_width(self) -> f32 {
+    pub fn sidebar_width(self) -> f32 {
         match self {
-            Self::A => 240.,
-            Self::B => 300.,
-            Self::C => 320.,
+            Self::A => 200.,
+            Self::B | Self::C => 220.,
         }
     }
 
-    pub fn list_min_width(self) -> f32 {
+    pub fn list_default_width(self) -> f32 {
         match self {
-            Self::A => 200.,
-            Self::B => 240.,
-            Self::C => 260.,
+            Self::A => 280.,
+            Self::B => 320.,
+            Self::C => 340.,
         }
     }
 
@@ -95,21 +97,6 @@ impl ChromeVariant {
             Self::A => 260.,
             Self::B | Self::C => 280.,
         }
-    }
-
-    /// Narrow icon rail for Inbox / Pull requests (A only).
-    pub fn activity_rail(self) -> bool {
-        matches!(self, Self::A)
-    }
-
-    /// Inbox | Pull requests as text control in the title bar (B only).
-    pub fn title_bar_nav(self) -> bool {
-        matches!(self, Self::B)
-    }
-
-    /// Labeled sidebar nav instead of a rail (C only).
-    pub fn labeled_sidebar_nav(self) -> bool {
-        matches!(self, Self::C)
     }
 
     /// Opening a PR hides the list; Back restores it (C only).
@@ -138,10 +125,6 @@ impl ChromeVariant {
 
     pub fn uppercase_labels(self) -> bool {
         matches!(self, Self::A)
-    }
-
-    pub fn tone_split(self) -> bool {
-        matches!(self, Self::C)
     }
 }
 
