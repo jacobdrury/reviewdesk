@@ -10,9 +10,9 @@ use reviewdesk_core::Provider;
 use reviewdesk_github::GitHubProvider;
 use tokio::runtime::Runtime;
 
-use app::ReviewDesk;
+use app::{appearance_from_system, ReviewDesk};
 use auth::resolve_credentials;
-use theme::{apply_sync_result, discover_macos, Appearance};
+use theme::{apply_sync_result, discover_macos};
 
 fn main() {
     let credentials = match resolve_credentials() {
@@ -46,8 +46,9 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             // Boot with discovery before the first window so paint is not kit light.
-            // ReviewDesk re-syncs on create (real window appearance) and on focus.
-            let boot = discover_macos().sync(Appearance::Dark);
+            // Use system appearance (same mapping as the window path) for mode:system.
+            // ReviewDesk re-syncs on create and on later focus.
+            let boot = discover_macos().sync(appearance_from_system(cx.window_appearance()));
             apply_sync_result(cx, &boot);
 
             let options = WindowOptions {

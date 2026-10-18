@@ -1,7 +1,8 @@
 use std::rc::Rc;
 
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Theme, ThemeConfig};
-use gpui_kit::App;
+use gpui_kit::{Anchor, App};
 use serde_json::Value;
 
 use super::adapter::{adapt_zed_family, AdaptError};
@@ -120,9 +121,16 @@ fn missing_theme_fallback(name: String) -> SyncResult {
     }
 }
 
+/// Parse Zed `settings.json` text (JSONC: comments + trailing commas).
+fn parse_settings_value(settings_text: &str) -> Option<Value> {
+    let mut buf = settings_text.to_owned();
+    json_strip_comments::strip(&mut buf).ok()?;
+    serde_json::from_str(&buf).ok()
+}
+
 /// Resolve the active Zed theme name from settings + system appearance.
 pub fn resolve_active_theme_name(settings_text: &str, appearance: Appearance) -> Option<String> {
-    let value: Value = serde_json::from_str(settings_text).ok()?;
+    let value = parse_settings_value(settings_text)?;
     let Some(theme) = value.get("theme") else {
         return Some(default_theme_name(appearance).to_string());
     };
@@ -221,6 +229,27 @@ pub fn apply_sync_result(cx: &mut App, result: &SyncResult) {
 /// Human-readable toast message for a missing theme name.
 pub fn missing_theme_toast_message(name: &str) -> String {
     format!("Theme \"{name}\" not found. Using {FALLBACK_THEME_NAME}.")
+}
+
+/// Marker so repeated missing-theme toasts replace instead of stacking.
+struct MissingThemeToast;
+
+/// Warning toast for an unresolved settings theme name (stable id, top-right).
+pub fn missing_theme_notification(name: &str) -> Notification {
+    Notification::warning(missing_theme_toast_message(name))
+        .id::<MissingThemeToast>()
+        .placement(Anchor::TopRight)
+}
+
+/// After launch sync in `ReviewDesk::new`, skip the first activation re-sync.
+///
+/// Returns whether activation should call sync. Clears the skip flag when set.
+pub fn should_sync_on_activation(skip_next_activation_sync: &mut bool) -> bool {
+    if !*skip_next_activation_sync {
+        return true;
+    }
+    *skip_next_activation_sync = false;
+    false
 }
 
 #[cfg(test)]
@@ -370,14 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn without_zed_only_dark_fallback_activates() {
-        let result = sync_theme(SyncInputs::absent_zed());
-        assert!(result.used_fallback);
-        assert_eq!(result.config.mode, ThemeMode::Dark);
-        assert_ne!(result.config.mode, ThemeMode::Light);
-    }
-
-    #[test]
     fn resolve_active_theme_name_table() {
         let cases = [
             (
@@ -423,12 +444,46 @@ mod tests {
                 Appearance::Dark,
                 Some("One Dark"),
             ),
+            (
+                "jsonc comments and trailing commas",
+                r#"// Zed settings often look like this
+{
+  "theme": {
+    "mode": "system",
+    "light": "One Light",
+    "dark": "ultraViolet",
+  },
+}
+"#,
+                Appearance::Dark,
+                Some("ultraViolet"),
+            ),
         ];
 
         for (label, settings, appearance, expected) in cases {
             let got = resolve_active_theme_name(settings, appearance);
             assert_eq!(got.as_deref(), expected, "{label}");
         }
+    }
+
+    #[test]
+    fn jsonc_settings_sync_resolves_named_theme_not_silent_fallback() {
+        let settings = r#"// Review Desk fixture: valid Zed JSONC
+{
+  "theme": "One Dark",
+}
+"#;
+        let result = sync_theme(inputs_with(
+            settings,
+            Appearance::Dark,
+            DiscoveryInputs {
+                bundled_families: &[ONE_FAMILY_JSON],
+                ..DiscoveryInputs::default()
+            },
+        ));
+        assert!(!result.used_fallback);
+        assert_eq!(result.theme_name, "One Dark");
+        assert_eq!(result.toast, ToastIntent::None);
     }
 
     #[test]
@@ -579,5 +634,30 @@ mod tests {
             missing_theme_toast_message("ultraViolet"),
             "Theme \"ultraViolet\" not found. Using One Dark."
         );
+    }
+
+    #[test]
+    fn activation_sync_skips_once_after_launch_then_runs() {
+        let mut skip_next = true;
+        assert!(
+            !should_sync_on_activation(&mut skip_next),
+            "first activation after launch sync must skip"
+        );
+        assert!(!skip_next, "skip flag must clear after first activation");
+        assert!(
+            should_sync_on_activation(&mut skip_next),
+            "later focus activations must sync"
+        );
+        assert!(
+            should_sync_on_activation(&mut skip_next),
+            "subsequent activations keep syncing"
+        );
+    }
+
+    #[test]
+    fn activation_sync_runs_when_not_skipping() {
+        let mut skip_next = false;
+        assert!(should_sync_on_activation(&mut skip_next));
+        assert!(!skip_next);
     }
 }

@@ -137,7 +137,8 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
         insert_if_absent(&mut colors, "background", &surface);
         colors.insert("sidebar.background".into(), Value::String(surface.clone()));
         colors.insert("list.background".into(), Value::String(surface.clone()));
-        colors.insert("popover.background".into(), Value::String(surface));
+        colors.insert("popover.background".into(), Value::String(surface.clone()));
+        colors.insert("secondary.background".into(), Value::String(surface));
     }
 
     copy_string(
@@ -391,6 +392,11 @@ mod tests {
             ("sidebar", color(&config.colors, |c| &c.sidebar), "#2f343eff"),
             ("list", color(&config.colors, |c| &c.list), "#2f343eff"),
             ("popover", color(&config.colors, |c| &c.popover), "#2f343eff"),
+            (
+                "secondary",
+                color(&config.colors, |c| &c.secondary),
+                "#2f343eff",
+            ),
             ("tab", color(&config.colors, |c| &c.tab), "#2f343eff"),
             (
                 "tab_active",

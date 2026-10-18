@@ -13,6 +13,7 @@ path = "src/main.rs"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 gpui-kit = { version = "0.7.3", features = ["tree-sitter", "tree-sitter-languages"] }
+json-strip-comments = "3.1.2"
 reviewdesk-core = { path = "../reviewdesk-core" }
 reviewdesk-github = { path = "../reviewdesk-github" }
 serde = { workspace = true }

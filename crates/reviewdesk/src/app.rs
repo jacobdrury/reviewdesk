@@ -7,7 +7,6 @@ use gpui_kit::component::{
     diff::{Diff, DiffAnnotation, DiffFile, DiffLinePosition, DiffLineRange, DiffMode, DiffState},
     h_flex,
     list::ListItem,
-    notification::Notification,
     resizable::{h_resizable, resizable_panel},
     scroll::Scrollbar,
     spinner::Spinner,
@@ -26,12 +25,17 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::theme::{
-    apply_sync_result, discover_macos, missing_theme_toast_message, Appearance, ToastIntent,
+    apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
+    Appearance, ToastIntent,
 };
 use crate::INBOX_REFRESH;
 
 fn appearance_from_window(window: &Window) -> Appearance {
-    match window.appearance() {
+    appearance_from_system(window.appearance())
+}
+
+pub(crate) fn appearance_from_system(appearance: WindowAppearance) -> Appearance {
+    match appearance {
         WindowAppearance::Dark | WindowAppearance::VibrantDark => Appearance::Dark,
         WindowAppearance::Light | WindowAppearance::VibrantLight => Appearance::Light,
     }
@@ -78,6 +82,7 @@ pub struct ReviewDesk {
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
     _window_activation: Option<Subscription>,
+    skip_next_activation_sync: bool,
 }
 
 impl ReviewDesk {
@@ -110,10 +115,15 @@ impl ReviewDesk {
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
             _window_activation: None,
+            skip_next_activation_sync: false,
         };
         this.sync_theme(window, cx);
+        this.skip_next_activation_sync = true;
         this._window_activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                return;
+            }
+            if !should_sync_on_activation(&mut this.skip_next_activation_sync) {
                 return;
             }
             this.sync_theme(window, cx);
@@ -128,10 +138,7 @@ impl ReviewDesk {
         let result = discover_macos().sync(appearance);
         apply_sync_result(cx, &result);
         if let ToastIntent::MissingTheme { name } = &result.toast {
-            window.push_notification(
-                Notification::warning(missing_theme_toast_message(name)),
-                cx,
-            );
+            window.push_notification(missing_theme_notification(name), cx);
         }
         cx.notify();
     }
