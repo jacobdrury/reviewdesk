@@ -72,6 +72,7 @@ struct StubPr {
     review_state: &'static str,
     ci: &'static str,
     updated: &'static str,
+    labels: &'static [&'static str],
     is_draft: bool,
     i_am_reviewer: bool,
     i_am_author: bool,
@@ -87,6 +88,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Passing",
         updated: "2h",
+        labels: &["wayfinder:prototype"],
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: true,
@@ -100,6 +102,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Approved",
         ci: "Passing",
         updated: "1d",
+        labels: &["wayfinder:prototype", "shell"],
         is_draft: false,
         i_am_reviewer: false,
         i_am_author: true,
@@ -113,6 +116,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Changes requested",
         ci: "Failing",
         updated: "3h",
+        labels: &["wayfinder:grilling"],
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -126,6 +130,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Pending",
         updated: "4h",
+        labels: &["billing"],
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -139,6 +144,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Draft",
         ci: "—",
         updated: "5d",
+        labels: &["design", "billing"],
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -152,6 +158,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Approved",
         ci: "Passing",
         updated: "6h",
+        labels: &["ui"],
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -165,6 +172,7 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Draft",
         ci: "—",
         updated: "2d",
+        labels: &["theme"],
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -1157,41 +1165,47 @@ fn render_pr_rows(
                 range
                     .map(|ix| {
                         match &rows[ix] {
-                            ListRow::Group { label, count } => div()
-                                .id(SharedString::from(format!("group-{ix}")))
-                                .w_full()
-                                .px_4()
-                                .py(px(6.))
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            Icon::new(IconName::ChevronDown)
-                                                .xsmall()
-                                                .text_color(cx.theme().muted_foreground),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_medium()
-                                                .child(label.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(count.to_string()),
-                                        )
-                                        .child(div().flex_1())
-                                        .child(
-                                            Icon::new(IconName::Plus)
-                                                .xsmall()
-                                                .text_color(cx.theme().muted_foreground),
-                                        ),
-                                )
-                                .into_any_element(),
+                            ListRow::Group { label, count } => {
+                                let is_draft = label.as_str() == "Draft";
+                                let group_icon = review_icon(label, is_draft);
+                                let group_color =
+                                    review_status_color(label, is_draft, cx);
+                                div()
+                                    .id(SharedString::from(format!("group-{ix}")))
+                                    .w_full()
+                                    .px_4()
+                                    .py(px(6.))
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Icon::new(group_icon)
+                                                    .xsmall()
+                                                    .text_color(group_color),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_medium()
+                                                    .child(label.clone()),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(count.to_string()),
+                                            )
+                                            .child(div().flex_1())
+                                            .child(
+                                                Icon::new(IconName::Plus)
+                                                    .xsmall()
+                                                    .text_color(cx.theme().muted_foreground),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            }
                             ListRow::Pr { pr } => {
                                 let pr = *pr;
                                 let is_sel = selected == Some(pr.id);
@@ -1237,36 +1251,37 @@ fn render_pr_rows(
         .child(Scrollbar::vertical(&scroll))
 }
 
-/// Linear Issues row → PR: CI · short id · review · title · updated · author.
+/// Linear backlog row → PR:
+/// `#71` · status · title ··· [repo] [labels] · updated · author pfp
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
-    let short_id = format!("{}#{}", short_repo(pr.repo), pr.number);
     let author_initial = pr
         .author
         .chars()
         .next()
         .map(|c| c.to_ascii_uppercase().to_string())
         .unwrap_or_else(|| "?".into());
-    h_flex()
+    let status_color = review_status_color(pr.review_state, pr.is_draft, cx);
+
+    let mut row = h_flex()
         .w_full()
         .items_center()
         .gap_2()
         .child(
-            Icon::new(ci_icon(pr.ci))
+            Icon::new(IconName::Ellipsis)
                 .xsmall()
-                .text_color(cx.theme().muted_foreground),
+                .text_color(cx.theme().muted_foreground.opacity(0.55)),
         )
         .child(
             div()
-                .w(px(96.))
+                .w(px(40.))
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(short_id),
+                .child(format!("#{}", pr.number)),
         )
         .child(
             Icon::new(review_icon(pr.review_state, pr.is_draft))
                 .xsmall()
-                .text_color(cx.theme().muted_foreground),
+                .text_color(status_color),
         )
         .child(
             div()
@@ -1275,37 +1290,85 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
                 .text_sm()
                 .truncate()
                 .child(pr.title),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(pr.updated),
-        )
-        .child(
-            div()
-                .size(px(20.))
-                .rounded_md()
-                .bg(cx.theme().secondary)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(author_initial),
-                ),
-        )
+        );
+
+    // Right-side pills: repo first, then labels (Linear project/label pills).
+    row = row.child(row_pill(
+        Some(IconName::Folder),
+        short_repo(pr.repo),
+        cx,
+    ));
+    for label in pr.labels.iter().take(2) {
+        row = row.child(row_pill(None, label, cx));
+    }
+
+    if pr.ci == "Failing" {
+        row = row.child(
+            Icon::new(IconName::CircleX)
+                .xsmall()
+                .text_color(cx.theme().danger),
+        );
+    }
+
+    row.child(
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(pr.updated),
+    )
+    .child(
+        div()
+            .size(px(22.))
+            .rounded_full()
+            .bg(cx.theme().accent.opacity(0.45))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(cx.theme().accent_foreground)
+                    .child(author_initial),
+            ),
+    )
 }
 
-fn ci_icon(ci: &str) -> IconName {
-    match ci {
-        "Passing" => IconName::CircleCheck,
-        "Failing" => IconName::CircleX,
-        "Pending" => IconName::LoaderCircle,
-        _ => IconName::Dash,
+fn row_pill(icon: Option<IconName>, text: &str, cx: &App) -> impl IntoElement {
+    let mut pill = h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .py(px(1.))
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.45));
+    if let Some(icon) = icon {
+        pill = pill.child(
+            Icon::new(icon)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        );
+    }
+    pill.child(
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .truncate()
+            .child(text.to_string()),
+    )
+}
+
+fn review_status_color(state: &str, is_draft: bool, cx: &App) -> gpui_kit::Hsla {
+    if is_draft {
+        return cx.theme().muted_foreground;
+    }
+    match state {
+        "Approved" => cx.theme().success,
+        "Changes requested" => cx.theme().danger,
+        "Review required" => cx.theme().warning,
+        _ => cx.theme().muted_foreground,
     }
 }
 
@@ -1316,6 +1379,7 @@ fn review_icon(state: &str, is_draft: bool) -> IconName {
     match state {
         "Approved" => IconName::CircleCheck,
         "Changes requested" => IconName::CircleAlert,
+        "Review required" => IconName::LoaderCircle,
         _ => IconName::Dash,
     }
 }
