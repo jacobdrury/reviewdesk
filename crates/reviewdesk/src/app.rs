@@ -377,6 +377,7 @@ impl ReviewDesk {
         let entity = cx.entity().downgrade();
         v_flex()
             .size_full()
+            .min_h_0()
             .border_r_1()
             .border_color(cx.theme().border)
             .child(
@@ -404,7 +405,8 @@ impl ReviewDesk {
             )
             .child(match &self.inbox {
                 LoadState::Idle | LoadState::Loading => v_flex()
-                    .size_full()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
                     .justify_center()
                     .gap_2()
@@ -419,7 +421,8 @@ impl ReviewDesk {
                 LoadState::Error(error) => {
                     let message = error.to_string();
                     v_flex()
-                        .size_full()
+                        .flex_1()
+                        .min_h_0()
                         .items_center()
                         .justify_center()
                         .gap_3()
@@ -443,7 +446,8 @@ impl ReviewDesk {
                         .into_any_element()
                 }
                 LoadState::Ready(items) if items.is_empty() => v_flex()
-                    .size_full()
+                    .flex_1()
+                    .min_h_0()
                     .items_center()
                     .justify_center()
                     .px_4()
@@ -459,7 +463,8 @@ impl ReviewDesk {
                     let items = items.clone();
                     let selected = self.selected_id.clone();
                     div()
-                        .size_full()
+                        .flex_1()
+                        .min_h_0()
                         .relative()
                         .child(
                             uniform_list("inbox-list", items.len(), move |range, _, cx| {
@@ -536,6 +541,7 @@ impl ReviewDesk {
 
         v_flex()
             .size_full()
+            .min_h_0()
             .child(
                 TabBar::new("review-tabs")
                     .w_full()
@@ -554,10 +560,15 @@ impl ReviewDesk {
                     .child(Tab::new().label("Overview"))
                     .child(Tab::new().label("Files")),
             )
-            .child(match self.review_tab {
-                ReviewTab::Overview => self.render_overview(cx).into_any_element(),
-                ReviewTab::Files => self.render_files(cx).into_any_element(),
-            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(match self.review_tab {
+                        ReviewTab::Overview => self.render_overview(cx).into_any_element(),
+                        ReviewTab::Files => self.render_files(cx).into_any_element(),
+                    }),
+            )
             .into_any_element()
     }
 
@@ -566,6 +577,7 @@ impl ReviewDesk {
         match &self.detail {
             LoadState::Idle | LoadState::Loading => v_flex()
                 .size_full()
+                .min_h_0()
                 .items_center()
                 .justify_center()
                 .gap_2()
@@ -580,6 +592,7 @@ impl ReviewDesk {
                 let id = self.selected_id.clone();
                 v_flex()
                     .size_full()
+                    .min_h_0()
                     .items_center()
                     .justify_center()
                     .gap_3()
@@ -644,6 +657,7 @@ impl ReviewDesk {
                 let owner = cx.entity().downgrade();
                 div()
                     .size_full()
+                    .min_h_0()
                     .p_4()
                     .child(
                         TextView::markdown("pr-overview", markdown)
@@ -756,6 +770,7 @@ impl ReviewDesk {
                             .child(
                                 v_flex()
                                     .size_full()
+                                    .min_h_0()
                                     .border_r_1()
                                     .border_color(cx.theme().border)
                                     .child(
@@ -788,7 +803,8 @@ impl ReviewDesk {
                                         let selected_file = selected_file.clone();
                                         let file_entity = entity.clone();
                                         div()
-                                            .size_full()
+                                            .flex_1()
+                                            .min_h_0()
                                             .relative()
                                             .child(
                                                 uniform_list(
@@ -840,7 +856,12 @@ impl ReviewDesk {
                     )
                     .child(
                         resizable_panel().child(
-                            v_flex().size_full().min_w_0().p_2().child(
+                            v_flex()
+                                .size_full()
+                                .min_h_0()
+                                .min_w_0()
+                                .p_2()
+                                .child(
                                 Diff::new(&self.diff)
                                     .size_full()
                                     .soft_wrap(true)
