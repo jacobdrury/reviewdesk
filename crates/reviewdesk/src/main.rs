@@ -1,6 +1,7 @@
 mod app;
 mod auth;
 mod overview_body;
+mod patch_index;
 mod theme;
 
 use std::sync::Arc;

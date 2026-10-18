@@ -22,7 +22,7 @@ use gpui_kit::{
     WeakEntity, Window, WindowAppearance,
 };
 use reviewdesk_core::{
-    InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    InboxItem, InboxOptions, Provider, ProviderError, PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
@@ -31,6 +31,7 @@ use crate::overview_body::{
     BodySegment, DetailsBlock,
     DetailsFence,
 };
+use crate::patch_index::{index_patch, PatchIndex};
 use crate::theme::{
     apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
     Appearance, ToastIntent,
@@ -76,7 +77,9 @@ pub struct ReviewDesk {
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
-    patch_files: LoadState<Vec<DiffFile>>,
+    patch_index: LoadState<PatchIndex>,
+    file_cache: HashMap<SharedString, DiffFile>,
+    file_errors: HashMap<SharedString, ProviderError>,
     selected_file: Option<SharedString>,
     diff: Entity<DiffState>,
     annotations: HashMap<String, Vec<Annotation>>,
@@ -110,7 +113,9 @@ impl ReviewDesk {
             selected_id: None,
             review_tab: ReviewTab::Overview,
             detail: LoadState::Idle,
-            patch_files: LoadState::Idle,
+            patch_index: LoadState::Idle,
+            file_cache: HashMap::new(),
+            file_errors: HashMap::new(),
             selected_file: None,
             diff,
             annotations: HashMap::new(),
@@ -203,7 +208,9 @@ impl ReviewDesk {
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selected_id = None;
         self.detail = LoadState::Idle;
-        self.patch_files = LoadState::Idle;
+        self.patch_index = LoadState::Idle;
+        self.file_cache.clear();
+        self.file_errors.clear();
         self.selected_file = None;
         self.overview_segments.clear();
         self.details_open.clear();
@@ -217,7 +224,9 @@ impl ReviewDesk {
         self.selected_id = Some(id.clone());
         self.review_tab = ReviewTab::Overview;
         self.detail = LoadState::Loading;
-        self.patch_files = LoadState::Loading;
+        self.patch_index = LoadState::Loading;
+        self.file_cache.clear();
+        self.file_errors.clear();
         self.selected_file = None;
         self.overview_segments.clear();
         self.details_open.clear();
@@ -283,17 +292,14 @@ impl ReviewDesk {
                 if this.selected_id.as_ref() != Some(&request_id) {
                     return;
                 }
-                this.patch_files = match result {
-                    Ok(patch) => match parse_patch(&patch) {
-                        Ok(files) => {
-                            if let Some(first) = files.first() {
-                                let path = first.path().clone();
+                this.patch_index = match result {
+                    Ok(patch) => match index_patch(patch) {
+                        Ok(index) => {
+                            if let Some(path) = index.first_path() {
                                 this.selected_file = Some(path.clone());
-                                this.diff.update(cx, |state, cx| {
-                                    state.set_files([first.clone()], cx);
-                                });
+                                this.materialize_file(path, cx);
                             }
-                            LoadState::Ready(files)
+                            LoadState::Ready(index)
                         }
                         Err(error) => LoadState::Error(error),
                     },
@@ -304,16 +310,50 @@ impl ReviewDesk {
         });
     }
 
+    fn materialize_file(&mut self, path: SharedString, cx: &mut Context<Self>) {
+        if let Some(file) = self.file_cache.get(&path) {
+            self.diff
+                .update(cx, |state, cx| state.set_files([file.clone()], cx));
+            return;
+        }
+        if self.file_errors.contains_key(&path) {
+            self.diff.update(cx, |state, cx| state.set_files([], cx));
+            return;
+        }
+        let LoadState::Ready(index) = &self.patch_index else {
+            return;
+        };
+        match index.materialize(path.as_str()) {
+            Ok(file) => {
+                self.file_errors.remove(&path);
+                self.file_cache.insert(path.clone(), file.clone());
+                self.diff
+                    .update(cx, |state, cx| state.set_files([file], cx));
+            }
+            Err(error) => {
+                self.file_cache.remove(&path);
+                self.file_errors.insert(path, error);
+                self.diff.update(cx, |state, cx| state.set_files([], cx));
+            }
+        }
+    }
+
+    fn retry_file(&mut self, path: SharedString, cx: &mut Context<Self>) {
+        self.file_errors.remove(&path);
+        self.file_cache.remove(&path);
+        self.materialize_file(path, cx);
+        cx.notify();
+    }
+
     fn select_file(&mut self, path: SharedString, cx: &mut Context<Self>) {
-        let LoadState::Ready(files) = &self.patch_files else {
+        let LoadState::Ready(index) = &self.patch_index else {
             return;
         };
-        let Some(file) = files.iter().find(|file| file.path() == &path).cloned() else {
+        if !index.paths().any(|entry| entry.as_str() == path.as_str()) {
             return;
-        };
-        self.selected_file = Some(path);
-        self.diff
-            .update(cx, |state, cx| state.set_files([file], cx));
+        }
+        self.selected_file = Some(path.clone());
+        self.materialize_file(path, cx);
         cx.notify();
     }
 
@@ -669,7 +709,7 @@ impl ReviewDesk {
 
     fn render_files(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
-        match &self.patch_files {
+        match &self.patch_index {
             LoadState::Idle | LoadState::Loading => {
                 return v_flex()
                     .size_full()
@@ -710,7 +750,9 @@ impl ReviewDesk {
                                     return;
                                 };
                                 let _ = entity.update(cx, |this, cx| {
-                                    this.patch_files = LoadState::Loading;
+                                    this.patch_index = LoadState::Loading;
+                                    this.file_cache.clear();
+                                    this.file_errors.clear();
                                     cx.notify();
                                     this.load_patch(id, cx);
                                 });
@@ -721,11 +763,15 @@ impl ReviewDesk {
             LoadState::Ready(_) => {}
         }
 
-        let files = match &self.patch_files {
-            LoadState::Ready(files) => files.clone(),
+        let index = match &self.patch_index {
+            LoadState::Ready(index) => index.clone(),
             _ => unreachable!(),
         };
+        let file_paths: Vec<SharedString> = index.paths().cloned().collect();
         let selected_file = self.selected_file.clone();
+        let selected_file_error = selected_file
+            .as_ref()
+            .and_then(|path| self.file_errors.get(path).cloned());
         let mode = self.diff.read(cx).mode();
         let mode_label = match mode {
             DiffMode::Split => "Unified",
@@ -796,7 +842,7 @@ impl ReviewDesk {
                                             ),
                                     )
                                     .child({
-                                        let files = files.clone();
+                                        let file_paths = file_paths.clone();
                                         let selected_file = selected_file.clone();
                                         let file_entity = entity.clone();
                                         div()
@@ -806,12 +852,11 @@ impl ReviewDesk {
                                             .child(
                                                 uniform_list(
                                                     "file-list",
-                                                    files.len(),
+                                                    file_paths.len(),
                                                     move |range, _, _cx| {
                                                         range
                                                             .map(|ix| {
-                                                                let file = &files[ix];
-                                                                let path = file.path().clone();
+                                                                let path = file_paths[ix].clone();
                                                                 let selected = selected_file
                                                                     .as_ref()
                                                                     == Some(&path);
@@ -851,46 +896,81 @@ impl ReviewDesk {
                                     }),
                             ),
                     )
-                    .child(
+                    .child({
+                        let retry_path = selected_file.clone();
                         resizable_panel().child(
                             v_flex()
                                 .size_full()
                                 .min_h_0()
                                 .min_w_0()
                                 .p_2()
-                                .child(
-                                Diff::new(&self.diff)
-                                    .size_full()
-                                    .soft_wrap(true)
-                                    .annotations(annotations)
-                                    .render_annotation(move |annotation, _, cx| {
-                                        let body = comments
-                                            .iter()
-                                            .find(|(id, _)| id == annotation.id())
-                                            .map(|(_, body)| body.clone())
-                                            .unwrap_or_default();
-                                        v_flex()
-                                            .w_full()
-                                            .gap_1()
-                                            .p_2()
-                                            .rounded_md()
-                                            .bg(cx.theme().secondary)
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child("Annotation"),
-                                            )
-                                            .child(div().text_sm().child(body))
-                                    })
-                                    .on_add_annotation(move |range, _, _cx| {
-                                        let _ = add_entity.update(_cx, |this, cx| {
-                                            this.add_annotation(range, cx);
-                                        });
-                                    }),
-                            ),
-                        ),
-                    ),
+                                .children(match selected_file_error {
+                                    Some(error) => {
+                                        let path = retry_path.clone();
+                                        vec![
+                                            v_flex()
+                                                .size_full()
+                                                .items_center()
+                                                .justify_center()
+                                                .gap_3()
+                                                .px_4()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_center()
+                                                        .text_color(cx.theme().danger)
+                                                        .child(error.to_string()),
+                                                )
+                                                .child(
+                                                    Button::new("file-retry")
+                                                        .outline()
+                                                        .small()
+                                                        .label("Retry")
+                                                        .on_click(move |_, _, cx| {
+                                                            let Some(path) = path.clone() else {
+                                                                return;
+                                                            };
+                                                            let _ = entity.update(cx, |this, cx| {
+                                                                this.retry_file(path, cx);
+                                                            });
+                                                        }),
+                                                )
+                                                .into_any_element(),
+                                        ]
+                                    }
+                                    None => vec![Diff::new(&self.diff)
+                                        .size_full()
+                                        .soft_wrap(true)
+                                        .annotations(annotations)
+                                        .render_annotation(move |annotation, _, cx| {
+                                            let body = comments
+                                                .iter()
+                                                .find(|(id, _)| id == annotation.id())
+                                                .map(|(_, body)| body.clone())
+                                                .unwrap_or_default();
+                                            v_flex()
+                                                .w_full()
+                                                .gap_1()
+                                                .p_2()
+                                                .rounded_md()
+                                                .bg(cx.theme().secondary)
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child("Annotation"),
+                                                )
+                                                .child(div().text_sm().child(body))
+                                        })
+                                        .on_add_annotation(move |range, _, _cx| {
+                                            let _ = add_entity.update(_cx, |this, cx| {
+                                                this.add_annotation(range, cx);
+                                            });
+                                        })
+                                        .into_any_element()],
+                                }),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -962,16 +1042,6 @@ impl MarkdownPlugin for DetailsTogglePlugin {
                     .child(fence.summary.clone()),
             )
     }
-}
-
-fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
-    DiffFile::parse(patch.as_str()).map_err(|error| {
-        ProviderError::other(format!(
-            "failed to parse patch at line {}: {}",
-            error.line(),
-            error.message()
-        ))
-    })
 }
 
 impl Render for ReviewDesk {
