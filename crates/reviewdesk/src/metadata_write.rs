@@ -234,6 +234,21 @@ mod tests {
         ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
             Ok(None)
         }
+
+        async fn put_pipelines(
+            &self,
+            _id: &PullRequestId,
+            _snapshot: &reviewdesk_core::PipelinesSnapshot,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn get_pipelines(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<Option<reviewdesk_core::PipelinesSnapshot>, LocalStoreError> {
+            Ok(None)
+        }
     }
 
     struct StubProvider {
@@ -334,6 +349,21 @@ mod tests {
             &self,
             _id: &PullRequestId,
         ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn fetch_pipelines(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<reviewdesk_core::PipelinesSnapshot, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn rerun_check(
+            &self,
+            _id: &PullRequestId,
+            _target: &reviewdesk_core::RerunTarget,
+        ) -> Result<(), ProviderError> {
             Err(ProviderError::other("unused"))
         }
     }

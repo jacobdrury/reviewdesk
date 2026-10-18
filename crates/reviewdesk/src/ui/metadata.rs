@@ -16,6 +16,7 @@ use reviewdesk_core::{MergeableState, ReviewDecision};
 use crate::app::ReviewDesk;
 use crate::metadata_write::MetadataWrite;
 use crate::review_session::{Intent, LoadState, SessionView};
+use crate::ui::check_rollup::render_compact_check_rollup;
 
 /// Full Metadata dock shown on the right when the dock is `Open`.
 pub(crate) fn render_metadata_panel(
@@ -143,6 +144,8 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
             cx,
         ));
     }
+
+    panel = panel.child(render_compact_check_rollup(view, cx));
 
     if pending {
         panel = panel.child(
@@ -482,7 +485,8 @@ pub(crate) fn render_metadata_strip(
                 )
                 .child(div().text_xs().child(status))
                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(review_gate))
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(mergeable)),
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(mergeable))
+                .child(render_compact_check_rollup(view, cx)),
         )
         .child(
             Button::new("metadata-strip-expand")

@@ -5,9 +5,9 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
     codeowners_breakdown, parse_codeowners, Credentials, NotificationListOptions, NotificationPage,
-    NotificationThreadId, Patch, PendingDiffReviewComment, Provider, ProviderError,
-    PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListOptions,
-    PullRequestThreads, ReviewSubmitEvent,
+    NotificationThreadId, Patch, PendingDiffReviewComment, PipelinesSnapshot, Provider,
+    ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListOptions,
+    PullRequestThreads, RerunTarget, ReviewSubmitEvent,
 };
 use serde_json::json;
 
@@ -18,6 +18,7 @@ use crate::map::{
     map_pull_request_list_item,
 };
 use crate::notification::{NotificationThreadPayload, map_notification_thread};
+use crate::pipelines_map::{PipelinesData, map_pipelines};
 use crate::query::pull_request_search_query;
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -50,6 +51,48 @@ query PullRequestSearch($q: String!) {
         labels(first: 20) { nodes { name color } }
         reviewDecision
         viewerLatestReview { state }
+      }
+    }
+  }
+}
+"#;
+
+const PULL_REQUEST_PIPELINES_QUERY: &str = r#"
+query PullRequestPipelines($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      statusCheckRollup {
+        contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun {
+              databaseId
+              name
+              status
+              conclusion
+              startedAt
+              completedAt
+              isRequired(pullRequestNumber: $number)
+              checkSuite {
+                id
+                app { name }
+                workflowRun {
+                  databaseId
+                  runNumber
+                  createdAt
+                  workflow { name }
+                }
+              }
+            }
+            ... on StatusContext {
+              id
+              context
+              state
+              createdAt
+              isRequired(pullRequestNumber: $number)
+            }
+          }
+        }
       }
     }
   }
@@ -354,6 +397,50 @@ impl Provider for GitHubProvider {
             .await
             .map_err(|e| ProviderError::other(e.to_string()))?;
         map_write_response(response).await
+    }
+
+    async fn fetch_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<PipelinesSnapshot, ProviderError> {
+        let (owner, name, number) = parse_pull_request_id(id)?;
+        let data: PipelinesData = self
+            .graphql(
+                PULL_REQUEST_PIPELINES_QUERY,
+                json!({
+                    "owner": owner,
+                    "name": name,
+                    "number": number as i64,
+                }),
+            )
+            .await?;
+        map_pipelines(data, number)
+    }
+
+    async fn rerun_check(
+        &self,
+        id: &PullRequestId,
+        target: &RerunTarget,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, _number) = parse_pull_request_id(id)?;
+        let url = match target {
+            RerunTarget::WorkflowRun { run_id } => {
+                format!("{API_BASE}/repos/{owner}/{repo}/actions/runs/{run_id}/rerun")
+            }
+            RerunTarget::WorkflowJob { job_id } => {
+                format!("{API_BASE}/repos/{owner}/{repo}/actions/jobs/{job_id}/rerun")
+            }
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        ensure_success(response).await
     }
 
     async fn list_notifications(

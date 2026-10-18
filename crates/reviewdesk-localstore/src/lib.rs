@@ -5,6 +5,7 @@ mod threads;
 mod error;
 mod migrate;
 mod notification;
+mod pipelines;
 mod pull_request_list;
 mod store;
 mod views;

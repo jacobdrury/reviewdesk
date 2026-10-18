@@ -152,6 +152,15 @@ alter table pull_request_details add column codeowners_rules_json text not null 
 alter table pull_request_details add column write_capabilities_json text not null default '{}';
 ",
     ),
+    (
+        9,
+        "
+create table pull_request_pipelines (
+    pull_request_id text not null primary key,
+    snapshot_json text not null
+);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

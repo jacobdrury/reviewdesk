@@ -4,6 +4,7 @@ use crate::error::ProviderError;
 use crate::id::PullRequestId;
 use crate::notification::{NotificationListOptions, NotificationPage, NotificationThreadId};
 use crate::patch::Patch;
+use crate::pipelines::{PipelinesSnapshot, RerunTarget};
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListOptions};
 use crate::review_threads::{
@@ -125,4 +126,13 @@ pub trait Provider: Send + Sync {
         let _ = (id, base_ref);
         Err(ProviderError::other("base branch write not supported"))
     }
+
+    async fn fetch_pipelines(&self, id: &PullRequestId)
+    -> Result<PipelinesSnapshot, ProviderError>;
+
+    async fn rerun_check(
+        &self,
+        id: &PullRequestId,
+        target: &RerunTarget,
+    ) -> Result<(), ProviderError>;
 }

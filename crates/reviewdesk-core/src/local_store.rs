@@ -4,6 +4,7 @@ use thiserror::Error;
 use crate::id::PullRequestId;
 use crate::notification::{NotificationQuery, NotificationThread, NotificationThreadId};
 use crate::patch::Patch;
+use crate::pipelines::PipelinesSnapshot;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
 use crate::review_threads::PullRequestThreads;
@@ -136,4 +137,15 @@ pub trait LocalStore: Send + Sync {
         &self,
         id: &PullRequestId,
     ) -> Result<Option<PullRequestThreads>, LocalStoreError>;
+
+    async fn put_pipelines(
+        &self,
+        id: &PullRequestId,
+        snapshot: &PipelinesSnapshot,
+    ) -> Result<(), LocalStoreError>;
+
+    async fn get_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PipelinesSnapshot>, LocalStoreError>;
 }

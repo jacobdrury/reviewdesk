@@ -29,9 +29,10 @@ use crate::review_writeback::{
     refresh_threads_from_provider, submit_pending_review,
 };
 use crate::sync::{
-    AppLocalStore, load_detail_via_store, load_patch_via_store,
+    AppLocalStore, load_detail_via_store, load_patch_via_store, load_pipelines_via_store,
     mark_notification_done_via_provider, mark_notification_read_via_provider, refresh_patch,
-    refresh_pull_request_detail, sync_inbox_from_provider, sync_pull_requests_from_provider,
+    refresh_pipelines, refresh_pull_request_detail, rerun_check_via_store,
+    sync_inbox_from_provider, sync_pull_requests_from_provider,
 };
 use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
@@ -67,6 +68,7 @@ pub struct ReviewDesk {
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     collapsed_groups: HashSet<String>,
+    pipelines_scroll: UniformListScrollHandle,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _inbox_poll_timer: Task<()>,
@@ -82,6 +84,8 @@ pub struct ReviewDesk {
     _metadata_write_task: Task<()>,
     _threads_task: Task<()>,
     _threads_write_task: Task<()>,
+    _pipelines_task: Task<()>,
+    _rerun_task: Task<()>,
     _refresh_timer: Task<()>,
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
@@ -109,6 +113,7 @@ impl ReviewDesk {
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
             collapsed_groups: HashSet::new(),
+            pipelines_scroll: UniformListScrollHandle::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _inbox_poll_timer: Task::ready(()),
@@ -124,6 +129,8 @@ impl ReviewDesk {
             _metadata_write_task: Task::ready(()),
             _threads_task: Task::ready(()),
             _threads_write_task: Task::ready(()),
+            _pipelines_task: Task::ready(()),
+            _rerun_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
             _window_activation: None,
             skip_next_activation_sync: false,
@@ -173,6 +180,8 @@ impl ReviewDesk {
                 Effect::DiscardPendingReviewWrite { id } => {
                     self.run_discard_pending_review(id, cx)
                 }
+                Effect::FetchPipelines { id } => self.run_fetch_pipelines(id, cx),
+                Effect::RerunPipeline { id, target } => self.run_rerun_pipeline(id, target, cx),
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
                 Effect::BootstrapPullRequestsViews => self.run_bootstrap_views(cx),
                 Effect::FetchViewerLogin => self.run_fetch_viewer_login(cx),
@@ -654,6 +663,58 @@ impl ReviewDesk {
         });
     }
 
+    fn run_fetch_pipelines(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._pipelines_task = cx.spawn(async move |this, cx| {
+            let cache_id = request_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_pipelines(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+            let local_result = cached.map_err(map_store_error);
+            let had_cache = matches!(&local_result, Ok(Some(_)));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::PipelinesLocalFinished {
+                        id: request_id.clone(),
+                        result: local_result,
+                    },
+                    cx,
+                );
+            });
+
+            let fetch_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    if had_cache {
+                        refresh_pipelines(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_pipelines_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::PipelinesNetworkFinished {
+                        id: request_id,
+                        had_cache,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
     fn run_refresh_threads(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
         let store = self.store.clone();
@@ -788,6 +849,36 @@ impl ReviewDesk {
             });
         });
     }
+
+    fn run_rerun_pipeline(
+        &mut self,
+        id: PullRequestId,
+        target: reviewdesk_core::RerunTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let finish_id = id.clone();
+        self._rerun_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    rerun_check_via_store(provider.as_ref(), &store, &id, &target).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::RerunPipelineFinished {
+                        id: finish_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
 }
 
 impl Render for ReviewDesk {
@@ -845,7 +936,14 @@ impl Render for ReviewDesk {
                                 .child(middle)
                         })
                         .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
-                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
+                            render_review_pane(
+                                &view,
+                                &self.diff,
+                                &self.files_scroll,
+                                &self.pipelines_scroll,
+                                entity,
+                                cx,
+                            ),
                         )),
                 ),
             )

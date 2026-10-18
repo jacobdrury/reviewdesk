@@ -95,8 +95,9 @@ mod tests {
     use async_trait::async_trait;
     use reviewdesk_core::{
         DiffAnchor, DiffLineSide, NotificationListOptions, NotificationPage, NotificationThreadId,
-        Patch, PendingReview, PullRequestDetail, PullRequestListItem, PullRequestListOptions,
-        ReviewComment, ReviewCommentId, Thread, ThreadId, ThreadStatus, suggestion_from_body,
+        Patch, PendingReview, PipelinesSnapshot, PullRequestDetail, PullRequestId,
+        PullRequestListItem, PullRequestListOptions, RerunTarget, ReviewComment, ReviewCommentId,
+        Thread, ThreadId, ThreadStatus, suggestion_from_body,
     };
     use reviewdesk_localstore::TursoLocalStore;
     use tempfile::tempdir;
@@ -300,6 +301,21 @@ mod tests {
             snapshot.pending_review = None;
             map.insert(id.as_str().to_string(), snapshot.clone());
             Ok(snapshot)
+        }
+
+        async fn fetch_pipelines(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PipelinesSnapshot, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn rerun_check(
+            &self,
+            _id: &PullRequestId,
+            _target: &RerunTarget,
+        ) -> Result<(), ProviderError> {
+            Err(ProviderError::other("unused"))
         }
     }
 

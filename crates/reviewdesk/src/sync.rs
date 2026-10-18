@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use reviewdesk_core::{
     LocalStore, LocalStoreError, NotificationListOptions, NotificationQuery, NotificationThread,
-    NotificationThreadId, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListOptions, PullRequestListQuery, PullRequestThreads, View,
-    ViewId,
+    NotificationThreadId, Patch, PipelinesSnapshot, Provider, ProviderError, PullRequestDetail,
+    PullRequestId, PullRequestListItem, PullRequestListOptions, PullRequestListQuery,
+    PullRequestThreads, RerunTarget, View, ViewId,
 };
 
 use crate::review_session::InboxSyncOutcome;
@@ -62,6 +62,14 @@ impl AppLocalStore {
     ) -> Result<(), LocalStoreError> {
         let _guard = self.store_lock.lock().await;
         self.inner.put_pull_request_threads(id, threads).await
+    }
+
+    pub async fn get_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PipelinesSnapshot>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.get_pipelines(id).await
     }
 
     pub async fn list_views(&self) -> Result<Vec<View>, LocalStoreError> {
@@ -165,6 +173,15 @@ impl AppLocalStore {
     ) -> Result<(), LocalStoreError> {
         let _guard = self.store_lock.lock().await;
         self.inner.put_patch(id, patch).await
+    }
+
+    async fn put_pipelines_locked(
+        &self,
+        id: &PullRequestId,
+        snapshot: &PipelinesSnapshot,
+    ) -> Result<(), LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.put_pipelines(id, snapshot).await
     }
 
     pub async fn query_notifications(
@@ -286,6 +303,50 @@ pub async fn refresh_patch(
     Ok(patch)
 }
 
+pub async fn load_pipelines_via_store(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+) -> Result<PipelinesSnapshot, ProviderError> {
+    if let Some(snapshot) = store
+        .get_pipelines(id)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?
+    {
+        return Ok(snapshot);
+    }
+
+    let snapshot = provider.fetch_pipelines(id).await?;
+    store
+        .put_pipelines_locked(id, &snapshot)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(snapshot)
+}
+
+pub async fn refresh_pipelines(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+) -> Result<PipelinesSnapshot, ProviderError> {
+    let snapshot = provider.fetch_pipelines(id).await?;
+    store
+        .put_pipelines_locked(id, &snapshot)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(snapshot)
+}
+
+pub async fn rerun_check_via_store(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+    target: &RerunTarget,
+) -> Result<PipelinesSnapshot, ProviderError> {
+    provider.rerun_check(id, target).await?;
+    refresh_pipelines(provider, store, id).await
+}
+
 /// Polls the Inbox from the Provider and reconciles into LocalStore when modified.
 pub async fn sync_inbox_from_provider(
     provider: &dyn Provider,
@@ -336,15 +397,19 @@ pub async fn mark_notification_done_via_provider(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex};
 
     use async_trait::async_trait;
     use chrono::TimeZone;
     use chrono::Utc;
     use reviewdesk_core::{
-        NotificationListOptions, NotificationPage, NotificationReason, NotificationThread,
-        NotificationThreadId, PullRequestLabel, ReviewState,
+        CheckRollup, CheckRollupState, Job, JobState, NotificationListOptions, NotificationPage,
+        NotificationReason, NotificationThread, NotificationThreadId, Pipeline, PipelineKind,
+        PipelinesSnapshot, PullRequestLabel, RerunAction, RerunTarget, ReviewState,
     };
+    use reviewdesk_localstore::TursoLocalStore;
+    use tempfile::tempdir;
 
     use super::*;
 
@@ -479,10 +544,25 @@ mod tests {
             Ok(())
         }
 
+        async fn put_pipelines(
+            &self,
+            _id: &PullRequestId,
+            _snapshot: &PipelinesSnapshot,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
         async fn get_pull_request_threads(
             &self,
             _id: &PullRequestId,
         ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
+            Ok(None)
+        }
+
+        async fn get_pipelines(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<Option<PipelinesSnapshot>, LocalStoreError> {
             Ok(None)
         }
     }
@@ -492,6 +572,9 @@ mod tests {
         notifications: NotificationPage,
         read_calls: StdMutex<Vec<String>>,
         done_calls: StdMutex<Vec<String>>,
+        pipelines: Option<PipelinesSnapshot>,
+        rerun_calls: Arc<AtomicUsize>,
+        rerun_allowed: bool,
     }
 
     #[async_trait]
@@ -577,6 +660,28 @@ mod tests {
         ) -> Result<PullRequestThreads, ProviderError> {
             Err(ProviderError::other("not used"))
         }
+
+        async fn fetch_pipelines(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PipelinesSnapshot, ProviderError> {
+            self.pipelines
+                .clone()
+                .ok_or_else(|| ProviderError::other("no pipelines"))
+        }
+
+        async fn rerun_check(
+            &self,
+            _id: &PullRequestId,
+            _target: &RerunTarget,
+        ) -> Result<(), ProviderError> {
+            self.rerun_calls.fetch_add(1, Ordering::SeqCst);
+            if self.rerun_allowed {
+                Ok(())
+            } else {
+                Err(ProviderError::other("rerun not allowed"))
+            }
+        }
     }
 
     fn sample_notification(id: &str) -> NotificationThread {
@@ -629,6 +734,9 @@ mod tests {
             },
             read_calls: StdMutex::new(Vec::new()),
             done_calls: StdMutex::new(Vec::new()),
+            pipelines: None,
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: false,
         };
 
         sync_pull_requests_from_provider(&provider, &store, &PullRequestListOptions::default())
@@ -662,6 +770,9 @@ mod tests {
             },
             read_calls: StdMutex::new(Vec::new()),
             done_calls: StdMutex::new(Vec::new()),
+            pipelines: None,
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: false,
         };
 
         let outcome =
@@ -700,6 +811,9 @@ mod tests {
             },
             read_calls: StdMutex::new(Vec::new()),
             done_calls: StdMutex::new(Vec::new()),
+            pipelines: None,
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: false,
         };
 
         mark_notification_read_via_provider(&provider, &store, &id)
@@ -736,6 +850,9 @@ mod tests {
             },
             read_calls: StdMutex::new(Vec::new()),
             done_calls: StdMutex::new(Vec::new()),
+            pipelines: None,
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: false,
         };
 
         mark_notification_done_via_provider(&provider, &store, &id)
@@ -750,5 +867,148 @@ mod tests {
             *recording.removed_ids.lock().expect("lock"),
             vec!["thread-9".to_string()]
         );
+    }
+
+    fn sample_pipelines(state: CheckRollupState) -> PipelinesSnapshot {
+        PipelinesSnapshot {
+            rollup: CheckRollup {
+                state,
+                label: "stub".into(),
+            },
+            pipelines: vec![Pipeline {
+                id: "p1".into(),
+                name: "CI".into(),
+                run_label: "#1".into(),
+                kind: PipelineKind::WorkflowRun,
+                created_at: Utc::now(),
+                jobs: vec![Job {
+                    id: "j1".into(),
+                    name: "test".into(),
+                    state: JobState::Success,
+                    required: true,
+                    rerun: RerunAction::Allowed(RerunTarget::WorkflowRun { run_id: 99 }),
+                }],
+                rerun: RerunAction::Allowed(RerunTarget::WorkflowRun { run_id: 99 }),
+            }],
+        }
+    }
+
+    async fn temp_store() -> AppLocalStore {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("reviewdesk.db");
+        let inner = Arc::new(TursoLocalStore::open(&path).await.expect("open"));
+        AppLocalStore::new(inner)
+    }
+
+    #[tokio::test]
+    async fn load_pipelines_paints_localstore_first_then_refreshes() {
+        let store = temp_store().await;
+        let id = PullRequestId::new("acme/widgets#1").expect("id");
+        let cached = sample_pipelines(CheckRollupState::Pending);
+        store
+            .put_pipelines_locked(&id, &cached)
+            .await
+            .expect("seed cache");
+
+        let provider = StubProvider {
+            pull_requests: vec![],
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+            pipelines: Some(sample_pipelines(CheckRollupState::Success)),
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: true,
+        };
+
+        let loaded = load_pipelines_via_store(&provider, &store, &id)
+            .await
+            .expect("load");
+        assert_eq!(loaded.rollup.state, CheckRollupState::Pending);
+
+        let refreshed = refresh_pipelines(&provider, &store, &id)
+            .await
+            .expect("refresh");
+        assert_eq!(refreshed.rollup.state, CheckRollupState::Success);
+    }
+
+    #[tokio::test]
+    async fn rerun_check_write_through_refetches_after_provider_success() {
+        let store = temp_store().await;
+        let id = PullRequestId::new("acme/widgets#2").expect("id");
+        let rerun_calls = Arc::new(AtomicUsize::new(0));
+        let provider = StubProvider {
+            pull_requests: vec![],
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+            pipelines: Some(sample_pipelines(CheckRollupState::Pending)),
+            rerun_calls: rerun_calls.clone(),
+            rerun_allowed: true,
+        };
+
+        let snapshot = rerun_check_via_store(
+            &provider,
+            &store,
+            &id,
+            &RerunTarget::WorkflowRun { run_id: 99 },
+        )
+        .await
+        .expect("rerun");
+        assert_eq!(snapshot.rollup.state, CheckRollupState::Pending);
+        assert_eq!(rerun_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn gated_rerun_does_not_update_localstore() {
+        let store = temp_store().await;
+        let id = PullRequestId::new("acme/widgets#3").expect("id");
+        let cached = sample_pipelines(CheckRollupState::Failure);
+        store
+            .put_pipelines_locked(&id, &cached)
+            .await
+            .expect("seed");
+
+        let provider = StubProvider {
+            pull_requests: vec![],
+            notifications: NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            },
+            read_calls: StdMutex::new(Vec::new()),
+            done_calls: StdMutex::new(Vec::new()),
+            pipelines: Some(sample_pipelines(CheckRollupState::Success)),
+            rerun_calls: Arc::new(AtomicUsize::new(0)),
+            rerun_allowed: false,
+        };
+
+        let err = rerun_check_via_store(
+            &provider,
+            &store,
+            &id,
+            &RerunTarget::WorkflowRun { run_id: 1 },
+        )
+        .await
+        .expect_err("gated");
+
+        assert!(err.to_string().contains("not allowed"));
+
+        let still = store
+            .get_pipelines(&id)
+            .await
+            .expect("get")
+            .expect("cached");
+        assert_eq!(still.rollup.state, CheckRollupState::Failure);
     }
 }

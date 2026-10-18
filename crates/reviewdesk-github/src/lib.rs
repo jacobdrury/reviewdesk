@@ -5,6 +5,7 @@ mod error_map;
 mod id;
 mod map;
 mod notification;
+mod pipelines_map;
 mod query;
 
 pub use client::GitHubProvider;
