@@ -1,35 +1,17 @@
-//! PROTOTYPE (throwaway): Pull requests list in Views + left nav refinement.
+//! PROTOTYPE (throwaway): Pull requests list in Views + left nav.
 //!
-//! Question: what should the PR list inside a View look like (row density,
-//! grouping, filter/sort chrome, empty vs zero-match), and how should the
-//! Linear-style left nav place Inbox / Pull requests / Views?
+//! Locked to the Linear Issues direction (former variant A). Iterating in place —
+//! B/C switcher removed.
 //!
-//! Builds on #58 HITL pick: Linear sidebar, full-screen Review with Back,
-//! Overview · Pipelines · Conversation · Changes, Metadata right dock.
-//! Variants only change Views placement + list structure — not Review chrome.
+//! Layout: Linear sidebar (Inbox + global Pull requests + Your repositories);
+//! full-bleed PR list; View tabs; Filter chips + Display; dense single-line rows;
+//! focus Review with Back on open; Metadata right dock.
 //!
-//! Three variants, cycled with the bottom bar (or `[` / `]`):
-//! - A (Linear Issues): flat sidebar (Inbox + Pull requests); full-bleed list;
-//!   View tabs like Linear All/Active/Backlog; Filter + Display; dense single-line
-//!   rows (CI · owner/repo#n · review · title · updated · author); group headers.
-//! - B (View chips): flat sidebar; Views as chips; roomier multi-line rows;
-//!   side-by-side list/Review (no focus stack).
-//! - C (Views rail): Views index rail beside a narrower list; table-ish columns;
-//!   focus Review on open.
-//!
-//! Stub Views from #52: All PRs (builtin) + Needs my review / Mine / Drafts.
-//! Demo mode cycles populated ↔ empty store ↔ zero-match.
+//! Stub Views from #52: All PRs + Needs review / Mine / Drafts, plus By project
+//! (repo → status nesting). Demo mode cycles populated ↔ empty store ↔ zero-match.
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/pull-requests-list-nav` (never merge as-is)
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChromeVariant {
-    #[default]
-    A,
-    B,
-    C,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ShellNav {
@@ -70,115 +52,15 @@ pub enum ListDemoMode {
     ZeroMatch,
 }
 
-impl ChromeVariant {
-    pub fn key(self) -> &'static str {
+pub const SIDEBAR_WIDTH: f32 = 244.;
+pub const METADATA_DEFAULT_WIDTH: f32 = 260.;
+
+impl ShellNav {
+    pub fn label(self) -> &'static str {
         match self {
-            Self::A => "A",
-            Self::B => "B",
-            Self::C => "C",
+            Self::Inbox => "Inbox",
+            Self::PullRequests => "Pull requests",
         }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::A => "Linear Issues",
-            Self::B => "View chips",
-            Self::C => "Views rail",
-        }
-    }
-
-    pub fn label(self) -> String {
-        format!("{} ({})", self.key(), self.name())
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::A => Self::B,
-            Self::B => Self::C,
-            Self::C => Self::A,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::A => Self::C,
-            Self::B => Self::A,
-            Self::C => Self::B,
-        }
-    }
-
-    pub fn sidebar_width(self) -> f32 {
-        match self {
-            Self::A => 244.,
-            Self::B => 200.,
-            Self::C => 200.,
-        }
-    }
-
-    /// Width of the PR list column when not full-bleed (not the Views rail).
-    pub fn list_default_width(self) -> f32 {
-        match self {
-            Self::A => 320.,
-            Self::B => 360.,
-            Self::C => 380.,
-        }
-    }
-
-    /// List owns the main pane (Linear Issues); Review only after open + Back.
-    pub fn full_bleed_list(self) -> bool {
-        matches!(self, Self::A)
-    }
-
-    /// View tabs across the top of the list (Linear All / Active / Backlog).
-    pub fn views_as_tabs(self) -> bool {
-        matches!(self, Self::A)
-    }
-
-    pub fn views_rail_width(self) -> f32 {
-        168.
-    }
-
-    pub fn metadata_default_width(self) -> f32 {
-        260.
-    }
-
-    /// Views live as indented children under Pull requests in the sidebar.
-    pub fn views_in_sidebar(self) -> bool {
-        false
-    }
-
-    /// Views as a horizontal chip strip above the PR list.
-    pub fn views_as_chips(self) -> bool {
-        matches!(self, Self::B)
-    }
-
-    /// Views as a narrow index rail beside the PR list.
-    pub fn views_as_rail(self) -> bool {
-        matches!(self, Self::C)
-    }
-
-    /// Opening a PR hides the list; Back restores it (A + C).
-    pub fn focus_stack(self) -> bool {
-        matches!(self, Self::A | Self::C)
-    }
-
-    /// Dense Dock-style row padding (A).
-    pub fn dense(self) -> bool {
-        matches!(self, Self::A)
-    }
-
-    /// Roomier multi-line PR rows (B).
-    pub fn roomy_rows(self) -> bool {
-        matches!(self, Self::B)
-    }
-
-    /// Table-ish columns in the PR list (C).
-    pub fn table_rows(self) -> bool {
-        matches!(self, Self::C)
-    }
-
-    pub fn uppercase_labels(self) -> bool {
-        matches!(self, Self::A)
     }
 }
 
@@ -215,15 +97,6 @@ impl PrototypeReviewTab {
     }
 }
 
-impl ShellNav {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Inbox => "Inbox",
-            Self::PullRequests => "Pull requests",
-        }
-    }
-}
-
 impl StubViewId {
     pub const ALL: &[Self] = &[
         Self::AllPrs,
@@ -235,7 +108,6 @@ impl StubViewId {
 
     pub fn label(self) -> &'static str {
         match self {
-            // Short labels so tabs read like Linear's All / Active / Backlog.
             Self::AllPrs => "All PRs",
             Self::NeedsMyReview => "Needs review",
             Self::Mine => "Mine",
@@ -258,7 +130,6 @@ impl StubViewId {
         }
     }
 
-    /// Default group-by for the prototype list (None = flat).
     pub fn group_by(self) -> Option<&'static str> {
         match self {
             Self::AllPrs => Some("review state"),
@@ -273,13 +144,6 @@ impl StubViewId {
         "Updated ↓"
     }
 }
-
-/// Stub repos shown under “Your repositories”.
-pub const STUB_REPOS: &[&str] = &[
-    "jacobdrury/reviewdesk",
-    "acme/widgets",
-    "acme/kit",
-];
 
 impl ListDemoMode {
     pub fn label(self) -> &'static str {
@@ -298,3 +162,10 @@ impl ListDemoMode {
         }
     }
 }
+
+/// Stub repos shown under “Your repositories”.
+pub const STUB_REPOS: &[&str] = &[
+    "jacobdrury/reviewdesk",
+    "acme/widgets",
+    "acme/kit",
+];

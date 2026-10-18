@@ -17,9 +17,7 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::INBOX_REFRESH;
-use crate::chrome_prototype::{
-    ChromeVariant, ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId,
-};
+use crate::chrome_prototype::{ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId};
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
@@ -58,7 +56,6 @@ pub struct ReviewDesk {
     files_scroll: UniformListScrollHandle,
     notif_scroll: UniformListScrollHandle,
     /// PROTOTYPE chrome state (throwaway with `prototype/pull-requests-list-nav`).
-    chrome: ChromeVariant,
     shell_nav: ShellNav,
     prototype_tab: PrototypeReviewTab,
     metadata_open: bool,
@@ -101,7 +98,6 @@ impl ReviewDesk {
             inbox_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
             notif_scroll: UniformListScrollHandle::new(),
-            chrome: ChromeVariant::A,
             shell_nav: ShellNav::PullRequests,
             prototype_tab: PrototypeReviewTab::Overview,
             metadata_open: true,
@@ -288,16 +284,6 @@ impl ReviewDesk {
         });
     }
 
-    pub(crate) fn cycle_chrome(&mut self, next: bool, cx: &mut Context<Self>) {
-        self.chrome = if next {
-            self.chrome.next()
-        } else {
-            self.chrome.prev()
-        };
-        self.selected_stub_id = None;
-        cx.notify();
-    }
-
     pub(crate) fn set_shell_nav(&mut self, nav: ShellNav, cx: &mut Context<Self>) {
         self.shell_nav = nav;
         if nav == ShellNav::Inbox {
@@ -454,7 +440,6 @@ impl Render for ReviewDesk {
         let entity = cx.entity().downgrade();
         render_prototype_shell(
             PrototypeChrome {
-                chrome: self.chrome,
                 shell_nav: self.shell_nav,
                 review_tab: self.prototype_tab,
                 metadata_open: self.metadata_open,

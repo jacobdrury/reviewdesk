@@ -1,7 +1,5 @@
-//! PROTOTYPE paint: PR list in Views + left nav. Throwaway with the branch.
-//!
-//! Three variants of Views placement + list chrome on the #58 shell.
-//! Switch with the bottom bar or `[` / `]`. Demo mode cycles empty/zero-match.
+//! PROTOTYPE paint: Linear Issues-style PR list + left nav. Throwaway with the branch.
+//! Locked to former variant A; iterating in place. Demo mode cycles empty/zero-match.
 
 use gpui_kit::component::diff::DiffState;
 use gpui_kit::component::{
@@ -17,7 +15,7 @@ use gpui_kit::component::{
 use std::collections::HashSet;
 
 use gpui_kit::{
-    App, Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
+    App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle,
     WeakEntity, div, px, uniform_list,
     prelude::FluentBuilder as _,
@@ -25,7 +23,8 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::chrome_prototype::{
-    ChromeVariant, ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId, STUB_REPOS,
+    ListDemoMode, METADATA_DEFAULT_WIDTH, PrototypeReviewTab, SIDEBAR_WIDTH, ShellNav, StubViewId,
+    STUB_REPOS,
 };
 use crate::review_session::{Intent, LoadState, ReviewTab, SessionView};
 use crate::ui::{render_files, render_overview};
@@ -283,7 +282,6 @@ enum ListRow {
 }
 
 pub(crate) struct PrototypeChrome {
-    pub chrome: ChromeVariant,
     pub shell_nav: ShellNav,
     pub review_tab: PrototypeReviewTab,
     pub metadata_open: bool,
@@ -307,25 +305,13 @@ pub(crate) fn render_prototype_shell(
     proto: PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let chrome = proto.chrome;
     let sync_label = proto.view.inbox_sync.status_label();
 
     v_flex()
         .size_full()
         .bg(cx.theme().background)
-        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-            let key = event.keystroke.key.as_str();
-            if key == "[" || key == "left" {
-                this.cycle_chrome(false, cx);
-                return;
-            }
-            if key == "]" || key == "right" {
-                this.cycle_chrome(true, cx);
-            }
-        }))
         .child(render_title_bar(&sync_label, cx))
         .child(div().flex_1().min_h_0().child(render_body(proto, cx)))
-        .child(render_chrome_switcher(chrome, cx))
 }
 
 fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
@@ -347,15 +333,14 @@ fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl Into
 }
 
 fn render_body(proto: PrototypeChrome, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
-    let chrome = proto.chrome;
     let notif_count = STUB_NOTIFICATIONS.len();
 
-    // Focus Review (A/C) — list gone until Back.
-    if chrome.focus_stack() && proto.selected_stub_id.is_some() {
+    // Focus Review — list gone until Back.
+    if proto.selected_stub_id.is_some() {
         return h_flex()
             .size_full()
             .min_h_0()
-            .child(render_sidebar(&proto, notif_count, cx))
+            .child(render_linear_sidebar(&proto, notif_count, cx))
             .child(
                 div()
                     .flex_1()
@@ -366,91 +351,25 @@ fn render_body(proto: PrototypeChrome, cx: &mut Context<ReviewDesk>) -> impl Int
             .into_any_element();
     }
 
-    // Linear Issues (A): full-bleed list / Inbox; no empty Review column.
-    if chrome.full_bleed_list() {
-        return h_flex()
-            .size_full()
-            .min_h_0()
-            .child(render_sidebar(&proto, notif_count, cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .h_full()
-                    .child(match proto.shell_nav {
-                        ShellNav::Inbox => render_notifications(&proto, cx).into_any_element(),
-                        ShellNav::PullRequests => {
-                            render_pull_requests(&proto, cx).into_any_element()
-                        }
-                    }),
-            )
-            .into_any_element();
-    }
-
+    // Full-bleed list / Inbox; no empty Review column.
     h_flex()
         .size_full()
         .min_h_0()
-        .child(render_sidebar(&proto, notif_count, cx))
+        .child(render_linear_sidebar(&proto, notif_count, cx))
         .child(
-            h_flex()
+            div()
                 .flex_1()
+                .min_w_0()
                 .min_h_0()
                 .h_full()
-                .child(render_main_column(&proto, cx))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .min_h_0()
-                        .h_full()
-                        .child(render_review_stage(&proto, cx)),
-                ),
+                .child(match proto.shell_nav {
+                    ShellNav::Inbox => render_notifications(&proto, cx).into_any_element(),
+                    ShellNav::PullRequests => {
+                        render_pull_requests(&proto, cx).into_any_element()
+                    }
+                }),
         )
         .into_any_element()
-}
-
-fn render_main_column(
-    proto: &PrototypeChrome,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    match proto.shell_nav {
-        ShellNav::Inbox => div()
-            .w(px(proto.chrome.list_default_width()))
-            .flex_shrink_0()
-            .h_full()
-            .min_h_0()
-            .child(render_notifications(proto, cx))
-            .into_any_element(),
-        ShellNav::PullRequests if proto.chrome.views_as_rail() => h_flex()
-            .h_full()
-            .min_h_0()
-            .flex_shrink_0()
-            .child(
-                div()
-                    .w(px(proto.chrome.views_rail_width()))
-                    .flex_shrink_0()
-                    .h_full()
-                    .min_h_0()
-                    .child(render_views_rail(proto, cx)),
-            )
-            .child(
-                div()
-                    .w(px(proto.chrome.list_default_width()))
-                    .flex_shrink_0()
-                    .h_full()
-                    .min_h_0()
-                    .child(render_pull_requests(proto, cx)),
-            )
-            .into_any_element(),
-        ShellNav::PullRequests => div()
-            .w(px(proto.chrome.list_default_width()))
-            .flex_shrink_0()
-            .h_full()
-            .min_h_0()
-            .child(render_pull_requests(proto, cx))
-            .into_any_element(),
-    }
 }
 
 fn render_focus_review(
@@ -489,79 +408,6 @@ fn render_focus_review(
         .child(div().flex_1().min_h_0().child(render_review_stage(proto, cx)))
 }
 
-fn render_sidebar(
-    proto: &PrototypeChrome,
-    notif_count: usize,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    if proto.chrome.full_bleed_list() {
-        return render_linear_sidebar(proto, notif_count, cx).into_any_element();
-    }
-
-    let chrome = proto.chrome;
-    let pad = if chrome.dense() { px(6.) } else { px(8.) };
-    let mut side = v_flex()
-        .w(px(chrome.sidebar_width()))
-        .flex_shrink_0()
-        .h_full()
-        .min_h_0()
-        .gap_1()
-        .px_2()
-        .py(pad)
-        .border_r_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().sidebar)
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .font_medium()
-                .text_color(cx.theme().muted_foreground)
-                .child("Review Desk"),
-        )
-        .child(linear_nav_row(
-            "side-inbox",
-            IconName::Inbox,
-            ShellNav::Inbox,
-            proto.shell_nav,
-            Some(notif_count),
-            chrome.dense(),
-            0.,
-            cx,
-        ));
-
-    if chrome.views_in_sidebar() {
-        side = side.child(section_label("Pull requests", chrome, cx));
-        for view_id in StubViewId::ALL {
-            side = side.child(nested_view_row(
-                *view_id,
-                proto.selected_view,
-                proto.shell_nav,
-                chrome,
-                cx,
-            ));
-        }
-    } else {
-        side = side.child(linear_nav_row(
-            "side-prs",
-            IconName::Github,
-            ShellNav::PullRequests,
-            proto.shell_nav,
-            Some(stub_count_for_view(
-                proto.selected_view,
-                proto.list_demo,
-                proto.selected_repo,
-            )),
-            chrome.dense(),
-            0.,
-            cx,
-        ));
-    }
-
-    side.into_any_element()
-}
-
 /// Linear sidebar: global Inbox / Pull requests, then per-repo scopes.
 fn render_linear_sidebar(
     proto: &PrototypeChrome,
@@ -573,7 +419,7 @@ fn render_linear_sidebar(
     let inbox_selected = proto.shell_nav == ShellNav::Inbox;
 
     let mut side = v_flex()
-        .w(px(proto.chrome.sidebar_width()))
+        .w(px(SIDEBAR_WIDTH))
         .flex_shrink_0()
         .h_full()
         .min_h_0()
@@ -792,327 +638,21 @@ fn side_static(
         )
 }
 
-fn section_label(
-    text: &str,
-    chrome: ChromeVariant,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    div()
-        .px_2()
-        .pt(if chrome.dense() { px(8.) } else { px(10.) })
-        .pb(px(2.))
-        .text_xs()
-        .font_medium()
-        .text_color(cx.theme().muted_foreground)
-        .child(if chrome.uppercase_labels() {
-            text.to_uppercase()
-        } else {
-            text.to_string()
-        })
-}
 
-fn nested_view_row(
-    view_id: StubViewId,
-    selected: StubViewId,
-    shell_nav: ShellNav,
-    chrome: ChromeVariant,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let active = shell_nav == ShellNav::PullRequests && selected == view_id;
-    let row_py = if chrome.dense() { px(3.) } else { px(5.) };
-    let count = stub_count_for_view(view_id, ListDemoMode::Populated, None);
-    div()
-        .id(SharedString::from(format!("view-{}", view_id.label())))
-        .w_full()
-        .pl_4()
-        .pr_2()
-        .py(row_py)
-        .rounded_md()
-        .cursor_pointer()
-        .when(active, |el| el.bg(cx.theme().sidebar_accent))
-        .when(!active, |el| {
-            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.45)))
-        })
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_selected_view(view_id, cx);
-            this.set_shell_nav(ShellNav::PullRequests, cx);
-        }))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .truncate()
-                        .text_color(if active {
-                            cx.theme().sidebar_accent_foreground
-                        } else {
-                            cx.theme().sidebar_foreground
-                        })
-                        .child(view_id.label()),
-                )
-                .when(view_id.builtin(), |el| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("builtin"),
-                    )
-                })
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(count.to_string()),
-                ),
-        )
-}
 
-fn linear_nav_row(
-    id: &'static str,
-    icon: IconName,
-    target: ShellNav,
-    current: ShellNav,
-    badge: Option<usize>,
-    dense: bool,
-    _indent: f32,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let selected = target == current;
-    let row_py = if dense { px(4.) } else { px(6.) };
-    div()
-        .id(id)
-        .w_full()
-        .px_2()
-        .py(row_py)
-        .rounded_md()
-        .cursor_pointer()
-        .when(selected, |el| el.bg(cx.theme().sidebar_accent))
-        .when(!selected, |el| {
-            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.45)))
-        })
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_shell_nav(target, cx);
-        }))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap_2()
-                .child(
-                    Icon::new(icon)
-                        .xsmall()
-                        .text_color(if selected {
-                            cx.theme().sidebar_accent_foreground
-                        } else {
-                            cx.theme().sidebar_foreground
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .truncate()
-                        .text_color(if selected {
-                            cx.theme().sidebar_accent_foreground
-                        } else {
-                            cx.theme().sidebar_foreground
-                        })
-                        .child(target.label()),
-                )
-                .when_some(badge.filter(|n| *n > 0), |el, count| {
-                    el.child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(count.to_string()),
-                    )
-                }),
-        )
-}
 
-fn render_views_rail(
-    proto: &PrototypeChrome,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let chrome = proto.chrome;
-    v_flex()
-        .size_full()
-        .min_h_0()
-        .border_r_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().sidebar.opacity(0.55))
-        .child(
-            h_flex()
-                .w_full()
-                .px_3()
-                .py(px(6.))
-                .items_center()
-                .justify_between()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(if chrome.uppercase_labels() {
-                            "VIEWS"
-                        } else {
-                            "Views"
-                        }),
-                )
-                .child(
-                    Button::new("new-view-stub")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Plus)
-                        .tooltip("New View (stub)"),
-                ),
-        )
-        .child({
-            let mut rail = v_flex().flex_1().min_h_0().p_2().gap_1();
-            for view_id in StubViewId::ALL {
-                let view_id = *view_id;
-                let active = proto.selected_view == view_id;
-                let count = stub_count_for_view(view_id, proto.list_demo, None);
-                rail = rail.child(
-                    div()
-                        .id(SharedString::from(format!("rail-{}", view_id.label())))
-                        .w_full()
-                        .px_2()
-                        .py(px(5.))
-                        .rounded_md()
-                        .cursor_pointer()
-                        .when(active, |el| el.bg(cx.theme().sidebar_accent))
-                        .when(!active, |el| {
-                            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.45)))
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_selected_view(view_id, cx);
-                        }))
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .gap_0()
-                                .child(
-                                    h_flex()
-                                        .w_full()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .truncate()
-                                                .text_color(if active {
-                                                    cx.theme().sidebar_accent_foreground
-                                                } else {
-                                                    cx.theme().sidebar_foreground
-                                                })
-                                                .child(view_id.label()),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(count.to_string()),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .truncate()
-                                        .child(view_id.filter_summary()),
-                                ),
-                        ),
-                );
-            }
-            rail
-        })
-        .child(
-            div()
-                .px_3()
-                .py_2()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("local-only · drag to reorder (stub)"),
-                ),
-        )
-}
 
 fn render_pull_requests(
     proto: &PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let chrome = proto.chrome;
     let view = proto.selected_view;
 
-    let mut pane = v_flex().size_full().min_h_0();
-    if !chrome.full_bleed_list() {
-        pane = pane.border_r_1().border_color(cx.theme().border);
-    }
-
-    if chrome.views_as_tabs() {
-        pane = pane
-            .child(render_linear_view_tabs(proto, cx))
-            .child(render_linear_filter_display(proto, cx));
-    } else {
-        let header_py = if chrome.dense() { px(4.) } else { px(8.) };
-        pane = pane.child(
-            h_flex()
-                .w_full()
-                .px_3()
-                .py(header_py)
-                .items_center()
-                .justify_between()
-                .gap_2()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(
-                    v_flex()
-                        .min_w_0()
-                        .gap_0()
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_medium()
-                                .truncate()
-                                .child(view.label()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(view.filter_summary()),
-                        ),
-                )
-                .child(
-                    Button::new("demo-mode")
-                        .ghost()
-                        .xsmall()
-                        .label(proto.list_demo.label())
-                        .tooltip("Cycle populated / empty store / zero-match")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_list_demo(cx);
-                        })),
-                ),
-        );
-        if chrome.views_as_chips() {
-            pane = pane.child(render_view_chips(proto, cx));
-        }
-        pane = pane.child(render_filter_sort_chrome(proto, cx));
-    }
+    let pane = v_flex()
+        .size_full()
+        .min_h_0()
+        .child(render_linear_view_tabs(proto, cx))
+        .child(render_linear_filter_display(proto, cx));
 
     match proto.list_demo {
         ListDemoMode::EmptyStore => pane
@@ -1466,152 +1006,8 @@ fn linear_filter_chip(
         )
 }
 
-fn render_view_chips(
-    proto: &PrototypeChrome,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let mut chips = h_flex()
-        .w_full()
-        .px_2()
-        .py_2()
-        .gap_1()
-        .border_b_1()
-        .border_color(cx.theme().border);
-    for view_id in StubViewId::ALL {
-        let view_id = *view_id;
-        let active = proto.selected_view == view_id;
-        chips = chips.child(
-            div()
-                .id(SharedString::from(format!("chip-{}", view_id.label())))
-                .px_2()
-                .py(px(3.))
-                .rounded_md()
-                .border_1()
-                .border_color(if active {
-                    cx.theme().border
-                } else {
-                    cx.theme().border.opacity(0.5)
-                })
-                .bg(if active {
-                    cx.theme().accent.opacity(0.35)
-                } else {
-                    cx.theme().background
-                })
-                .cursor_pointer()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.set_selected_view(view_id, cx);
-                }))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(cx.theme().foreground)
-                        .child(view_id.label()),
-                ),
-        );
-    }
-    chips.child(
-        Button::new("chip-new-view")
-            .ghost()
-            .xsmall()
-            .icon(IconName::Plus)
-            .tooltip("Save as new View (stub)"),
-    )
-}
 
-fn render_filter_sort_chrome(
-    proto: &PrototypeChrome,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let view = proto.selected_view;
-    let group = view.group_by().unwrap_or("None");
-    let chrome = proto.chrome;
 
-    if chrome.views_as_chips() {
-        return h_flex()
-            .w_full()
-            .px_2()
-            .py_2()
-            .gap_1()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(filter_chip("Filter", view.filter_summary(), cx))
-            .child(filter_chip("Group", group, cx))
-            .child(filter_chip("Sort", view.sort_label(), cx))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .truncate()
-                    .child("unsaved edits → Discard / Save (stub)"),
-            )
-            .into_any_element();
-    }
-
-    h_flex()
-        .w_full()
-        .px_3()
-        .py(px(4.))
-        .items_center()
-        .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .child(
-            Icon::new(IconName::Search)
-                .xsmall()
-                .text_color(cx.theme().muted_foreground),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(format!("Group: {group} · {}", view.sort_label())),
-        )
-        .child(
-            Button::new("sort-stub")
-                .ghost()
-                .xsmall()
-                .icon(IconName::SortDescending)
-                .tooltip("Sort (stub)"),
-        )
-        .into_any_element()
-}
-
-fn filter_chip(
-    label: &str,
-    value: &str,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    div()
-        .px_2()
-        .py(px(3.))
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().border)
-        .child(
-            h_flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label.to_string()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .truncate()
-                        .child(value.to_string()),
-                ),
-        )
-}
 
 fn empty_store_state(cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     v_flex()
@@ -1702,7 +1098,6 @@ fn render_pr_rows(
     rows: Vec<ListRow>,
     _cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let chrome = proto.chrome;
     let scroll = proto.inbox_scroll.clone();
     let selected = proto.selected_stub_id;
     let entity = proto.entity.clone();
@@ -1807,58 +1202,29 @@ fn render_pr_rows(
                                 let pr = *pr;
                                 let is_sel = selected == Some(pr.id);
                                 let owner = entity.clone();
-
-                                if chrome.full_bleed_list() {
-                                    // Linear clone: plain row + hairline, not ListItem chrome.
-                                    div()
-                                        .id(SharedString::from(pr.id))
-                                        .w_full()
-                                        .px_4()
-                                        .py(px(7.))
-                                        .border_b_1()
-                                        .border_color(cx.theme().border.opacity(0.55))
-                                        .cursor_pointer()
-                                        .when(is_sel, |el| {
-                                            el.bg(cx.theme().secondary.opacity(0.4))
+                                div()
+                                    .id(SharedString::from(pr.id))
+                                    .w_full()
+                                    .px_4()
+                                    .py(px(7.))
+                                    .border_b_1()
+                                    .border_color(cx.theme().border.opacity(0.55))
+                                    .cursor_pointer()
+                                    .when(is_sel, |el| {
+                                        el.bg(cx.theme().secondary.opacity(0.4))
+                                    })
+                                    .when(!is_sel, |el| {
+                                        el.hover(|style| {
+                                            style.bg(cx.theme().secondary.opacity(0.25))
                                         })
-                                        .when(!is_sel, |el| {
-                                            el.hover(|style| {
-                                                style.bg(cx.theme().secondary.opacity(0.25))
-                                            })
-                                        })
-                                        .on_click(move |_, _, cx| {
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.set_selected_stub(pr.id, cx);
-                                            });
-                                        })
-                                        .child(render_dense_pr_row(pr, cx))
-                                        .into_any_element()
-                                } else {
-                                    let row = ListItem::new(SharedString::from(pr.id))
-                                        .selected(is_sel)
-                                        .px(px(12.))
-                                        .py(if chrome.roomy_rows() {
-                                            px(8.)
-                                        } else {
-                                            px(5.)
-                                        })
-                                        .on_click(move |_, _, cx| {
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.set_selected_stub(pr.id, cx);
-                                            });
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |this, cx| {
+                                            this.set_selected_stub(pr.id, cx);
                                         });
-
-                                    if chrome.table_rows() {
-                                        row.child(render_table_pr_row(pr, cx))
-                                            .into_any_element()
-                                    } else if chrome.roomy_rows() {
-                                        row.child(render_roomy_pr_row(pr, cx))
-                                            .into_any_element()
-                                    } else {
-                                        row.child(render_dense_pr_row(pr, cx))
-                                            .into_any_element()
-                                    }
-                                }
+                                    })
+                                    .child(render_dense_pr_row(pr, cx))
+                                    .into_any_element()
                             }
                         }
                     })
@@ -2092,100 +1458,8 @@ fn review_icon(state: &str, is_draft: bool) -> IconName {
     }
 }
 
-fn render_roomy_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .gap_1()
-        .child(
-            div()
-                .text_sm()
-                .font_medium()
-                .truncate()
-                .child(pr.title),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("{} · {}", pr.repo, pr.author)),
-                )
-                .child(meta_pill(pr.review_state, cx))
-                .child(meta_pill(pr.ci, cx))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(pr.updated),
-                ),
-        )
-}
 
-fn render_table_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .items_center()
-        .gap_2()
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_0()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .truncate()
-                        .child(pr.title),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .truncate()
-                        .child(format!("#{} · {}", pr.number, pr.author)),
-                ),
-        )
-        .child(
-            div()
-                .w(px(88.))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(pr.review_state),
-        )
-        .child(
-            div()
-                .w(px(56.))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(pr.ci),
-        )
-        .child(
-            div()
-                .w(px(28.))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(pr.updated),
-        )
-}
 
-fn meta_pill(text: &str, cx: &App) -> impl IntoElement {
-    div()
-        .px_1()
-        .rounded_md()
-        .bg(cx.theme().secondary.opacity(0.55))
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(text.to_string()),
-        )
-}
 
 fn short_repo(repo: &str) -> &str {
     repo.rsplit_once('/')
@@ -2197,36 +1471,25 @@ fn render_notifications(
     proto: &PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let chrome = proto.chrome;
-    let header = if chrome.uppercase_labels() {
-        "INBOX"
-    } else {
-        "Inbox"
-    };
-    let header_py = if chrome.dense() { px(4.) } else { px(8.) };
-    let row_py = if chrome.dense() { px(4.) } else { px(8.) };
     let scroll = proto.notif_scroll.clone();
     let items = STUB_NOTIFICATIONS;
 
     v_flex()
         .size_full()
         .min_h_0()
-        .border_r_1()
-        .border_color(cx.theme().border)
         .child(
             h_flex()
                 .w_full()
-                .px_3()
-                .py(header_py)
+                .px_4()
+                .py(px(8.))
                 .justify_between()
                 .border_b_1()
                 .border_color(cx.theme().border)
                 .child(
                     div()
-                        .text_xs()
+                        .text_sm()
                         .font_medium()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(header),
+                        .child("Inbox"),
                 )
                 .child(
                     div()
@@ -2259,8 +1522,8 @@ fn render_notifications(
                             .map(|ix| {
                                 let item = &items[ix];
                                 ListItem::new(SharedString::from(format!("notif-{ix}")))
-                                    .px_3()
-                                    .py(row_py)
+                                    .px_4()
+                                    .py(px(6.))
                                     .child(
                                         v_flex()
                                             .w_full()
@@ -2305,11 +1568,10 @@ fn render_review_stage(
         return empty_review(proto.shell_nav, cx).into_any_element();
     }
 
-    let chrome = proto.chrome;
     let stage = v_flex()
         .size_full()
         .min_h_0()
-        .child(render_review_tabs(proto.review_tab, chrome.dense(), cx));
+        .child(render_review_tabs(proto.review_tab, cx));
 
     let body = render_tab_body(proto, cx);
     stage
@@ -2324,9 +1586,9 @@ fn render_review_stage(
                     .when(proto.metadata_open, |row| {
                         row.child(
                             resizable_panel()
-                                .size(px(chrome.metadata_default_width()))
+                                .size(px(METADATA_DEFAULT_WIDTH))
                                 .size_range(px(200.)..px(420.))
-                                .child(render_metadata_panel(proto, chrome, cx)),
+                                .child(render_metadata_panel(proto, cx)),
                         )
                     }),
             ),
@@ -2355,11 +1617,9 @@ fn empty_review(shell_nav: ShellNav, cx: &mut Context<ReviewDesk>) -> impl IntoE
 
 fn render_review_tabs(
     current: PrototypeReviewTab,
-    dense: bool,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let tab_ix = current.index();
-    let pad_y = if dense { px(0.) } else { px(2.) };
     h_flex()
         .w_full()
         .items_center()
@@ -2369,7 +1629,6 @@ fn render_review_tabs(
             TabBar::new("proto-review-tabs")
                 .flex_1()
                 .px_2()
-                .py(pad_y)
                 .selected_index(tab_ix)
                 .on_click(cx.listener(|this, ix: &usize, _, cx| {
                     this.set_prototype_tab(PrototypeReviewTab::from_index(*ix), cx);
@@ -2488,15 +1747,8 @@ fn stub_tab_owned(
 
 fn render_metadata_panel(
     proto: &PrototypeChrome,
-    chrome: ChromeVariant,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let header = if chrome.uppercase_labels() {
-        "METADATA"
-    } else {
-        "Metadata"
-    };
-    let header_py = if chrome.dense() { px(4.) } else { px(8.) };
     let link = proto
         .selected_stub_id
         .map(|id| id.trim_start_matches("stub/").to_string());
@@ -2510,7 +1762,7 @@ fn render_metadata_panel(
             h_flex()
                 .w_full()
                 .px_3()
-                .py(header_py)
+                .py(px(6.))
                 .items_center()
                 .justify_between()
                 .border_b_1()
@@ -2520,7 +1772,7 @@ fn render_metadata_panel(
                         .text_xs()
                         .font_medium()
                         .text_color(cx.theme().muted_foreground)
-                        .child(header),
+                        .child("Metadata"),
                 )
                 .child(
                     Button::new("metadata-hide")
@@ -2566,54 +1818,6 @@ fn render_metadata_panel(
         )
 }
 
-fn render_chrome_switcher(
-    chrome: ChromeVariant,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    h_flex()
-        .id("chrome-prototype-switcher")
-        .w_full()
-        .justify_center()
-        .py_2()
-        .bg(cx.theme().background)
-        .child(
-            h_flex()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().popover)
-                .items_center()
-                .child(
-                    Button::new("chrome-prev")
-                        .ghost()
-                        .xsmall()
-                        .label("←")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_chrome(false, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .min_w(px(240.))
-                        .text_sm()
-                        .text_center()
-                        .font_medium()
-                        .child(chrome.label()),
-                )
-                .child(
-                    Button::new("chrome-next")
-                        .ghost()
-                        .xsmall()
-                        .label("→")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_chrome(true, cx);
-                        })),
-                ),
-        )
-}
 
 fn selected_stub_title(proto: &PrototypeChrome) -> String {
     let Some(id) = proto.selected_stub_id else {
