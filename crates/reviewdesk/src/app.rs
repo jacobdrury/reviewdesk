@@ -64,6 +64,8 @@ pub struct ReviewDesk {
     selected_view: StubViewId,
     list_demo: ListDemoMode,
     selected_stub_id: Option<&'static str>,
+    /// `None` = global Pull requests; `Some(repo)` filters the list to that repo.
+    selected_repo: Option<&'static str>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -101,6 +103,7 @@ impl ReviewDesk {
             selected_view: StubViewId::NeedsMyReview,
             list_demo: ListDemoMode::Populated,
             selected_stub_id: None,
+            selected_repo: None,
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -292,11 +295,22 @@ impl ReviewDesk {
         if nav == ShellNav::Inbox {
             self.selected_stub_id = None;
         }
+        if nav == ShellNav::PullRequests {
+            // Global Pull requests entry clears a repo scope.
+            self.selected_repo = None;
+        }
         cx.notify();
     }
 
     pub(crate) fn set_selected_view(&mut self, view: StubViewId, cx: &mut Context<Self>) {
         self.selected_view = view;
+        self.selected_stub_id = None;
+        self.shell_nav = ShellNav::PullRequests;
+        cx.notify();
+    }
+
+    pub(crate) fn set_selected_repo(&mut self, repo: Option<&'static str>, cx: &mut Context<Self>) {
+        self.selected_repo = repo;
         self.selected_stub_id = None;
         self.shell_nav = ShellNav::PullRequests;
         cx.notify();
@@ -407,6 +421,7 @@ impl Render for ReviewDesk {
                 selected_view: self.selected_view,
                 list_demo: self.list_demo,
                 selected_stub_id: self.selected_stub_id,
+                selected_repo: self.selected_repo,
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),

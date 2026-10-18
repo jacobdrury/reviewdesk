@@ -23,7 +23,7 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::chrome_prototype::{
-    ChromeVariant, ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId,
+    ChromeVariant, ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId, STUB_REPOS,
 };
 use crate::review_session::{Intent, LoadState, ReviewTab, SessionView};
 use crate::ui::{render_files, render_overview};
@@ -223,7 +223,12 @@ const STUB_PRS: &[StubPr] = &[
 
 #[derive(Clone)]
 enum ListRow {
-    Group { label: String, count: usize },
+    /// `depth` 0 = primary group (repo / status); 1 = nested (status under repo).
+    Group {
+        label: String,
+        count: usize,
+        depth: u8,
+    },
     Pr { pr: StubPr },
 }
 
@@ -235,6 +240,7 @@ pub(crate) struct PrototypeChrome {
     pub selected_view: StubViewId,
     pub list_demo: ListDemoMode,
     pub selected_stub_id: Option<&'static str>,
+    pub selected_repo: Option<&'static str>,
     pub view: SessionView,
     pub diff: Entity<DiffState>,
     pub inbox_scroll: UniformListScrollHandle,
@@ -488,7 +494,11 @@ fn render_sidebar(
             IconName::Github,
             ShellNav::PullRequests,
             proto.shell_nav,
-            Some(stub_count_for_view(proto.selected_view, proto.list_demo)),
+            Some(stub_count_for_view(
+                proto.selected_view,
+                proto.list_demo,
+                proto.selected_repo,
+            )),
             chrome.dense(),
             0.,
             cx,
@@ -498,16 +508,17 @@ fn render_sidebar(
     side.into_any_element()
 }
 
-/// Linear sidebar clone: workspace header, Inbox, Pull requests, Views, team block.
+/// Linear sidebar: global Inbox / Pull requests, then per-repo scopes.
 fn render_linear_sidebar(
     proto: &PrototypeChrome,
     notif_count: usize,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let prs_selected = proto.shell_nav == ShellNav::PullRequests;
+    let global_prs =
+        proto.shell_nav == ShellNav::PullRequests && proto.selected_repo.is_none();
     let inbox_selected = proto.shell_nav == ShellNav::Inbox;
 
-    v_flex()
+    let mut side = v_flex()
         .w(px(proto.chrome.sidebar_width()))
         .flex_shrink_0()
         .h_full()
@@ -530,7 +541,7 @@ fn render_linear_sidebar(
                     div()
                         .size(px(18.))
                         .rounded_md()
-                        .bg(cx.theme().accent)
+                        .bg(cx.theme().accent.opacity(0.55))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -538,7 +549,7 @@ fn render_linear_sidebar(
                             div()
                                 .text_xs()
                                 .font_medium()
-                                .text_color(cx.theme().accent_foreground)
+                                .text_color(cx.theme().foreground)
                                 .child("R"),
                         ),
                 )
@@ -563,7 +574,7 @@ fn render_linear_sidebar(
                 ),
         )
         .child(div().h(px(6.)))
-        .child(side_item(
+        .child(side_nav_item(
             "lin-inbox",
             IconName::Inbox,
             "Inbox",
@@ -571,65 +582,50 @@ fn render_linear_sidebar(
             Some(notif_count),
             0.,
             cx,
-            ShellNav::Inbox,
+            SideNavTarget::Inbox,
         ))
-        .child(side_item(
+        .child(side_nav_item(
             "lin-prs",
             IconName::Github,
             "Pull requests",
-            prs_selected,
-            None,
+            global_prs,
+            Some(stub_count_for_view(
+                StubViewId::AllPrs,
+                ListDemoMode::Populated,
+                None,
+            )),
             0.,
             cx,
-            ShellNav::PullRequests,
+            SideNavTarget::GlobalPrs,
         ))
         .child(div().h(px(10.)))
         .child(side_section("Workspace", cx))
-        .child(side_static("lin-projects", IconName::Folder, "Projects", cx))
         .child(side_static("lin-views", IconName::Eye, "Views", cx))
-        .child(side_static("lin-more", IconName::Ellipsis, "More", cx))
         .child(div().h(px(10.)))
-        .child(side_section("Your teams", cx))
-        .child(
-            h_flex()
-                .w_full()
-                .items_center()
-                .gap_2()
-                .px_2()
-                .py(px(4.))
-                .child(
-                    div()
-                        .size(px(16.))
-                        .rounded_md()
-                        .bg(cx.theme().accent.opacity(0.7)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_sm()
-                        .truncate()
-                        .child("jacobdrury"),
-                )
-                .child(
-                    Icon::new(IconName::ChevronDown)
-                        .xsmall()
-                        .text_color(cx.theme().muted_foreground),
-                ),
-        )
-        .child(side_item(
-            "lin-team-prs",
-            IconName::Github,
-            "Pull requests",
-            prs_selected,
-            Some(stub_count_for_view(StubViewId::AllPrs, ListDemoMode::Populated)),
-            12.,
+        .child(side_section("Your repositories", cx));
+
+    for repo in STUB_REPOS {
+        let repo = *repo;
+        let selected =
+            proto.shell_nav == ShellNav::PullRequests && proto.selected_repo == Some(repo);
+        let count = stub_count_for_view(
+            StubViewId::AllPrs,
+            ListDemoMode::Populated,
+            Some(repo),
+        );
+        side = side.child(side_nav_item(
+            SharedString::from(format!("repo-{repo}")),
+            IconName::Folder,
+            short_repo(repo),
+            selected,
+            Some(count),
+            0.,
             cx,
-            ShellNav::PullRequests,
-        ))
-        .child(side_static_indent("lin-team-views", IconName::Eye, "Views", 12., cx))
-        .child(div().flex_1())
-        .child(side_static("lin-invite", IconName::Plus, "Invite people", cx))
-        .child(side_static("lin-link-gh", IconName::Github, "Link GitHub", cx))
+            SideNavTarget::Repo(repo),
+        ));
+    }
+
+    side
 }
 
 fn side_section(label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
@@ -642,63 +638,69 @@ fn side_section(label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
         .child(label.to_string())
 }
 
-fn side_item(
-    id: &'static str,
+#[derive(Clone, Copy)]
+enum SideNavTarget {
+    Inbox,
+    GlobalPrs,
+    Repo(&'static str),
+}
+
+fn side_nav_item(
+    id: impl Into<SharedString>,
     icon: IconName,
-    label: &'static str,
+    label: &str,
     selected: bool,
     badge: Option<usize>,
     indent: f32,
     cx: &mut Context<ReviewDesk>,
-    target: ShellNav,
+    target: SideNavTarget,
 ) -> impl IntoElement {
+    let label = label.to_string();
+    // Soft selection — opaque sidebar_accent obliterates label text on some themes.
+    let selected_bg = cx.theme().secondary.opacity(0.55);
+    let hover_bg = cx.theme().secondary.opacity(0.35);
+    let label_color = cx.theme().sidebar_foreground;
+    let muted = cx.theme().muted_foreground;
+
     div()
-        .id(id)
+        .id(id.into())
         .w_full()
         .pl(px(8. + indent))
         .pr_2()
         .py(px(5.))
         .rounded_md()
         .cursor_pointer()
-        .when(selected, |el| el.bg(cx.theme().sidebar_accent))
-        .when(!selected, |el| {
-            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.4)))
-        })
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.set_shell_nav(target, cx);
+        .when(selected, |el| el.bg(selected_bg))
+        .when(!selected, |el| el.hover(move |style| style.bg(hover_bg)))
+        .on_click(cx.listener(move |this, _, _, cx| match target {
+            SideNavTarget::Inbox => this.set_shell_nav(ShellNav::Inbox, cx),
+            SideNavTarget::GlobalPrs => this.set_selected_repo(None, cx),
+            SideNavTarget::Repo(repo) => this.set_selected_repo(Some(repo), cx),
         }))
         .child(
             h_flex()
                 .w_full()
                 .items_center()
                 .gap_2()
-                .child(
-                    Icon::new(icon)
-                        .xsmall()
-                        .text_color(if selected {
-                            cx.theme().sidebar_accent_foreground
-                        } else {
-                            cx.theme().sidebar_foreground
-                        }),
-                )
+                .child(Icon::new(icon).xsmall().text_color(if selected {
+                    label_color
+                } else {
+                    muted
+                }))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .text_sm()
                         .truncate()
-                        .text_color(if selected {
-                            cx.theme().sidebar_accent_foreground
-                        } else {
-                            cx.theme().sidebar_foreground
-                        })
+                        .text_color(label_color)
                         .child(label),
                 )
                 .when_some(badge.filter(|n| *n > 0), |el, count| {
                     el.child(
                         div()
                             .text_xs()
-                            .text_color(cx.theme().muted_foreground)
+                            .text_color(muted)
                             .child(count.to_string()),
                     )
                 }),
@@ -711,21 +713,10 @@ fn side_static(
     label: &'static str,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    side_static_indent(id, icon, label, 0., cx)
-}
-
-fn side_static_indent(
-    id: &'static str,
-    icon: IconName,
-    label: &'static str,
-    indent: f32,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
     div()
         .id(id)
         .w_full()
-        .pl(px(8. + indent))
-        .pr_2()
+        .px_2()
         .py(px(5.))
         .rounded_md()
         .child(
@@ -775,7 +766,7 @@ fn nested_view_row(
 ) -> impl IntoElement {
     let active = shell_nav == ShellNav::PullRequests && selected == view_id;
     let row_py = if chrome.dense() { px(3.) } else { px(5.) };
-    let count = stub_count_for_view(view_id, ListDemoMode::Populated);
+    let count = stub_count_for_view(view_id, ListDemoMode::Populated, None);
     div()
         .id(SharedString::from(format!("view-{}", view_id.label())))
         .w_full()
@@ -935,7 +926,7 @@ fn render_views_rail(
             for view_id in StubViewId::ALL {
                 let view_id = *view_id;
                 let active = proto.selected_view == view_id;
-                let count = stub_count_for_view(view_id, proto.list_demo);
+                let count = stub_count_for_view(view_id, proto.list_demo, None);
                 rail = rail.child(
                     div()
                         .id(SharedString::from(format!("rail-{}", view_id.label())))
@@ -1077,7 +1068,7 @@ fn render_pull_requests(
             .child(zero_match_state(view, cx))
             .into_any_element(),
         ListDemoMode::Populated => {
-            let rows = build_list_rows(view);
+            let rows = build_list_rows(view, proto.selected_repo);
             if rows.is_empty() {
                 return pane.child(zero_match_state(view, cx)).into_any_element();
             }
@@ -1154,7 +1145,15 @@ fn render_linear_filter_display(
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let view = proto.selected_view;
-    let group = view.group_by().unwrap_or("Status");
+    let group = match view.group_by() {
+        Some("repo→status") => "project → status",
+        Some(g) => g,
+        None => "Status",
+    };
+    let filter_label = match proto.selected_repo {
+        Some(repo) => format!("repo:{repo} · {}", view.filter_summary()),
+        None => view.filter_summary().to_string(),
+    };
     h_flex()
         .w_full()
         .px_4()
@@ -1191,7 +1190,7 @@ fn render_linear_filter_display(
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .truncate()
-                .child(view.filter_summary()),
+                .child(filter_label),
         )
         .child(
             h_flex()
@@ -1473,27 +1472,46 @@ fn render_pr_rows(
                 range
                     .map(|ix| {
                         match &rows[ix] {
-                            ListRow::Group { label, count } => {
+                            ListRow::Group {
+                                label,
+                                count,
+                                depth,
+                            } => {
+                                let is_status = matches!(
+                                    label.as_str(),
+                                    "Review required"
+                                        | "Approved"
+                                        | "Changes requested"
+                                        | "Draft"
+                                );
                                 let is_draft = label.as_str() == "Draft";
-                                let group_icon = review_icon(label, is_draft);
-                                let group_color =
-                                    review_status_color(label, is_draft, cx);
+                                let indent = if *depth > 0 { 20. } else { 0. };
+                                let pt = if *depth == 0 { 14. } else { 8. };
+                                let mut header = h_flex().w_full().items_center().gap_2();
+                                if is_status {
+                                    header = header.child(
+                                        Icon::new(review_icon(label, is_draft))
+                                            .xsmall()
+                                            .text_color(review_status_color(
+                                                label, is_draft, cx,
+                                            )),
+                                    );
+                                } else {
+                                    header = header.child(
+                                        Icon::new(IconName::Folder)
+                                            .xsmall()
+                                            .text_color(cx.theme().muted_foreground),
+                                    );
+                                }
                                 div()
                                     .id(SharedString::from(format!("group-{ix}")))
                                     .w_full()
-                                    .px_4()
-                                    .pt(px(14.))
+                                    .pl(px(16. + indent))
+                                    .pr_4()
+                                    .pt(px(pt))
                                     .pb(px(6.))
                                     .child(
-                                        h_flex()
-                                            .w_full()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                Icon::new(group_icon)
-                                                    .xsmall()
-                                                    .text_color(group_color),
-                                            )
+                                        header
                                             .child(
                                                 div()
                                                     .text_sm()
@@ -1531,11 +1549,11 @@ fn render_pr_rows(
                                         .border_color(cx.theme().border.opacity(0.55))
                                         .cursor_pointer()
                                         .when(is_sel, |el| {
-                                            el.bg(cx.theme().secondary.opacity(0.55))
+                                            el.bg(cx.theme().secondary.opacity(0.4))
                                         })
                                         .when(!is_sel, |el| {
                                             el.hover(|style| {
-                                                style.bg(cx.theme().secondary.opacity(0.35))
+                                                style.bg(cx.theme().secondary.opacity(0.25))
                                             })
                                         })
                                         .on_click(move |_, _, cx| {
@@ -2269,12 +2287,16 @@ fn selected_stub_title(proto: &PrototypeChrome) -> String {
         .unwrap_or_else(|| "Pull request".into())
 }
 
-fn prs_for_view(view: StubViewId) -> Vec<StubPr> {
+fn prs_for_view(view: StubViewId, repo_scope: Option<&str>) -> Vec<StubPr> {
     STUB_PRS
         .iter()
         .copied()
+        .filter(|pr| match repo_scope {
+            Some(repo) => pr.repo == repo,
+            None => true,
+        })
         .filter(|pr| match view {
-            StubViewId::AllPrs => true,
+            StubViewId::AllPrs | StubViewId::ByProject => true,
             StubViewId::NeedsMyReview => pr.i_am_reviewer && !pr.is_draft,
             StubViewId::Mine => pr.i_am_author && !pr.is_draft,
             StubViewId::Drafts => pr.i_am_author && pr.is_draft,
@@ -2282,21 +2304,29 @@ fn prs_for_view(view: StubViewId) -> Vec<StubPr> {
         .collect()
 }
 
-fn stub_count_for_view(view: StubViewId, demo: ListDemoMode) -> usize {
+fn stub_count_for_view(
+    view: StubViewId,
+    demo: ListDemoMode,
+    repo_scope: Option<&str>,
+) -> usize {
     match demo {
         ListDemoMode::EmptyStore | ListDemoMode::ZeroMatch => 0,
-        ListDemoMode::Populated => prs_for_view(view).len(),
+        ListDemoMode::Populated => prs_for_view(view, repo_scope).len(),
     }
 }
 
-fn build_list_rows(view: StubViewId) -> Vec<ListRow> {
-    let prs = prs_for_view(view);
+fn build_list_rows(view: StubViewId, repo_scope: Option<&str>) -> Vec<ListRow> {
+    let prs = prs_for_view(view, repo_scope);
     let Some(group_by) = view.group_by() else {
         return prs
             .into_iter()
             .map(|pr| ListRow::Pr { pr })
             .collect();
     };
+
+    if group_by == "repo→status" {
+        return build_nested_repo_status_rows(&prs);
+    }
 
     let mut keys: Vec<String> = Vec::new();
     for pr in &prs {
@@ -2324,9 +2354,53 @@ fn build_list_rows(view: StubViewId) -> Vec<ListRow> {
         rows.push(ListRow::Group {
             label: key,
             count: group_prs.len(),
+            depth: 0,
         });
         for pr in group_prs {
             rows.push(ListRow::Pr { pr });
+        }
+    }
+    rows
+}
+
+/// Primary groups by repository; nested groups by review status.
+fn build_nested_repo_status_rows(prs: &[StubPr]) -> Vec<ListRow> {
+    let mut repos: Vec<&str> = Vec::new();
+    for pr in prs {
+        if !repos.iter().any(|r| *r == pr.repo) {
+            repos.push(pr.repo);
+        }
+    }
+
+    let mut rows = Vec::new();
+    for repo in repos {
+        let repo_prs: Vec<StubPr> = prs.iter().copied().filter(|pr| pr.repo == repo).collect();
+        rows.push(ListRow::Group {
+            label: repo.to_string(),
+            count: repo_prs.len(),
+            depth: 0,
+        });
+
+        let mut states: Vec<&str> = Vec::new();
+        for pr in &repo_prs {
+            if !states.iter().any(|s| *s == pr.review_state) {
+                states.push(pr.review_state);
+            }
+        }
+        for state in states {
+            let state_prs: Vec<StubPr> = repo_prs
+                .iter()
+                .copied()
+                .filter(|pr| pr.review_state == state)
+                .collect();
+            rows.push(ListRow::Group {
+                label: state.to_string(),
+                count: state_prs.len(),
+                depth: 1,
+            });
+            for pr in state_prs {
+                rows.push(ListRow::Pr { pr });
+            }
         }
     }
     rows

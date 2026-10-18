@@ -48,13 +48,15 @@ pub enum PrototypeReviewTab {
     Changes,
 }
 
-/// Built-in + seed Views from #52 grilling.
+/// Built-in + seed Views from #52 grilling, plus a nested group-by prototype.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StubViewId {
     AllPrs,
     NeedsMyReview,
     Mine,
     Drafts,
+    /// Prototype: group by repository, then by review status within each repo.
+    ByProject,
 }
 
 /// Force empty / zero-match surfaces without real LocalStore gymnastics.
@@ -228,6 +230,7 @@ impl StubViewId {
         Self::NeedsMyReview,
         Self::Mine,
         Self::Drafts,
+        Self::ByProject,
     ];
 
     pub fn label(self) -> &'static str {
@@ -237,6 +240,7 @@ impl StubViewId {
             Self::NeedsMyReview => "Needs review",
             Self::Mine => "Mine",
             Self::Drafts => "Drafts",
+            Self::ByProject => "By project",
         }
     }
 
@@ -250,6 +254,7 @@ impl StubViewId {
             Self::NeedsMyReview => "I am reviewer · ready · open",
             Self::Mine => "I am author · open",
             Self::Drafts => "I am author · draft",
+            Self::ByProject => "Grouped by repo → status",
         }
     }
 
@@ -260,6 +265,7 @@ impl StubViewId {
             Self::NeedsMyReview => Some("review state"),
             Self::Mine => Some("repo"),
             Self::Drafts => Some("repo"),
+            Self::ByProject => Some("repo→status"),
         }
     }
 
@@ -267,6 +273,13 @@ impl StubViewId {
         "Updated ↓"
     }
 }
+
+/// Stub repos shown under “Your repositories”.
+pub const STUB_REPOS: &[&str] = &[
+    "jacobdrury/reviewdesk",
+    "acme/widgets",
+    "acme/kit",
+];
 
 impl ListDemoMode {
     pub fn label(self) -> &'static str {
