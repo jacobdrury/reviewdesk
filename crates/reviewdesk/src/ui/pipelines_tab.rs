@@ -52,53 +52,48 @@ pub(crate) fn render_pipelines_tab(
     }
 }
 
+/// Metadata property: label "Pipelines", status value; click opens the tab.
 pub(crate) fn render_compact_check_rollup(
     scenario: StubScenario,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let data = scenario.data();
     let color = rollup_color(data.rollup, cx);
+    let status = match data.rollup {
+        RollupState::Success => "Passed",
+        RollupState::Pending => "Pending",
+        RollupState::Failure => "Failing",
+        RollupState::Absent => "None",
+    };
     div()
-        .id("metadata-check-rollup")
+        .id("metadata-pipelines")
         .cursor_pointer()
         .rounded_md()
-        .px_2()
-        .py(px(5.))
+        .px_1()
+        .py(px(2.))
         .hover(|s| s.bg(cx.theme().secondary.opacity(0.45)))
         .on_click(cx.listener(|this, _, _, cx| {
             this.open_pipelines_tab(cx);
         }))
         .child(
-            h_flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    Icon::new(rollup_icon(data.rollup))
-                        .xsmall()
-                        .text_color(color),
-                )
-                .child(
-                    v_flex()
-                        .gap_0()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Check rollup"),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .truncate()
-                                .child(data.rollup_label),
-                        ),
-                )
+            v_flex()
+                .gap_0()
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child("Pipelines"),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            Icon::new(rollup_icon(data.rollup))
+                                .xsmall()
+                                .text_color(color),
+                        )
+                        .child(div().text_sm().text_color(color).child(status)),
                 ),
         )
 }

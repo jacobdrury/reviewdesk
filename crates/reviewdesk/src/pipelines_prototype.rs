@@ -10,11 +10,10 @@
 //! collapsible group headers, quiet Filter/Display chrome, soft selection wash.
 //! Switcher cycles layout variants; `,` / `.` cycle stub scenarios.
 //!
-//! Three variants (structure differs; paint matches Linear):
-//! - A (Issues list): flat Pipeline groups + Job rows (one scroll)
-//! - B (Run history): left = each Pipeline run (push / MR iteration);
-//!   detail = A's nested UI grouped by stage (GitLab) or job group (Actions)
-//! - C (Group by status): Failed / Pending / Passed across all Jobs
+//! HITL pick: B (Run history). Left = each Pipeline run (push / MR iteration);
+//! detail = A's nested UI grouped by stage (GitLab) or job group (Actions).
+//! Metadata: compact "Pipelines" property with status; click opens the tab.
+//! A / C remain switchable for comparison only.
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/pipelines-tab` (never merge as-is)
@@ -107,7 +106,7 @@ impl PipelinesVariant {
     pub fn name(self) -> &'static str {
         match self {
             Self::A => "Issues list",
-            Self::B => "Run history",
+            Self::B => "Picked · Run history",
             Self::C => "Group by status",
         }
     }

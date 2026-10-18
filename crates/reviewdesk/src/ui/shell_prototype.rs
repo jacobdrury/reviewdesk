@@ -63,7 +63,7 @@ const STUB_METADATA_ROWS: &[(&str, &str)] = &[
     ("CODEOWNERS", "@reviewdesk/core → bob"),
     ("Labels", "wayfinder:prototype"),
     ("Draft", "Ready for review"),
-    ("Merge", "on Metadata · not Pipelines"),
+    ("Merge", "Ready · squash"),
 ];
 
 pub(crate) struct PrototypeChrome {
