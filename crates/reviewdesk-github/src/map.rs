@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    ProviderError, PullRequestDetail, PullRequestLabel, PullRequestListItem, ReviewState, Reviewer,
+    Assignee, MergeableState, MetadataWriteCapabilities, ProviderError, PullRequestDetail,
+    PullRequestLabel, PullRequestListItem, ReviewDecision, ReviewState, Reviewer,
 };
 use serde::Deserialize;
 
@@ -53,6 +54,15 @@ pub struct PullRequestNode {
     pub viewer_latest_review: Option<LatestReview>,
     pub body: Option<String>,
     pub review_requests: Option<ReviewRequestConnection>,
+    pub head_ref_name: Option<String>,
+    pub base_ref_name: Option<String>,
+    pub mergeable: Option<String>,
+    pub assignees: Option<AssigneeConnection>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AssigneeConnection {
+    pub nodes: Vec<Option<Actor>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,6 +184,23 @@ pub fn map_pull_request_detail(node: &PullRequestNode) -> Result<PullRequestDeta
         })
         .unwrap_or_default();
 
+    let assignees = node
+        .assignees
+        .as_ref()
+        .map(|c| {
+            c.nodes
+                .iter()
+                .filter_map(|actor| {
+                    let actor = actor.as_ref()?;
+                    Some(Assignee {
+                        login: actor.login.clone(),
+                        avatar_url: actor.avatar_url.clone(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(PullRequestDetail {
         id: item.id,
         title: item.title,
@@ -184,7 +211,42 @@ pub fn map_pull_request_detail(node: &PullRequestNode) -> Result<PullRequestDeta
         labels: item.labels,
         web_url: item.web_url,
         reviewers,
+        assignees,
+        head_ref: node.head_ref_name.clone().unwrap_or_default(),
+        base_ref: node.base_ref_name.clone().unwrap_or_default(),
+        review_decision: map_review_decision(node),
+        mergeable: map_mergeable(node),
+        codeowners_rules: Vec::new(),
+        write_capabilities: github_write_capabilities(),
     })
+}
+
+fn map_review_decision(node: &PullRequestNode) -> ReviewDecision {
+    match node.review_decision.as_deref() {
+        Some("APPROVED") => ReviewDecision::Approved,
+        Some("CHANGES_REQUESTED") => ReviewDecision::ChangesRequested,
+        Some("REVIEW_REQUIRED") => ReviewDecision::ReviewRequired,
+        _ => ReviewDecision::Unknown,
+    }
+}
+
+fn map_mergeable(node: &PullRequestNode) -> MergeableState {
+    match node.mergeable.as_deref() {
+        Some("MERGEABLE") => MergeableState::Mergeable,
+        Some("CONFLICTING") => MergeableState::Conflicting,
+        Some("UNKNOWN") => MergeableState::Unknown,
+        _ => MergeableState::Unknown,
+    }
+}
+
+pub fn github_write_capabilities() -> MetadataWriteCapabilities {
+    MetadataWriteCapabilities {
+        labels: true,
+        assignees: true,
+        reviewers: true,
+        draft_ready: true,
+        base_ref: true,
+    }
 }
 
 fn map_review_state(node: &PullRequestNode) -> ReviewState {

@@ -1,10 +1,9 @@
 //! Metadata right-dock panel and its folded status+merge strip.
 //!
-//! Reads [`SessionView`] only. Mutations beyond dock visibility (labels,
-//! reviewers, merge, …) are out of scope here; write-through lands in #77.
+//! Reads [`SessionView`] only; mutations dispatch [`Intent::MetadataWrite`].
 
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex, v_flex,
 };
@@ -12,8 +11,10 @@ use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
+use reviewdesk_core::{MergeableState, ReviewDecision};
 
 use crate::app::ReviewDesk;
+use crate::metadata_write::MetadataWrite;
 use crate::review_session::{Intent, LoadState, SessionView};
 
 /// Full Metadata dock shown on the right when the dock is `Open`.
@@ -80,28 +81,12 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
 
     let provider_ref = detail.id.as_str().to_string();
     let web_url = detail.web_url.clone();
-    let reviewers = if detail.reviewers.is_empty() {
-        "None".to_string()
-    } else {
-        detail
-            .reviewers
-            .iter()
-            .map(|r| r.login.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let labels = if detail.labels.is_empty() {
-        "None".to_string()
-    } else {
-        detail
-            .labels
-            .iter()
-            .map(|l| l.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let caps = &detail.write_capabilities;
+    let pending = view.metadata_write_pending;
+    let write_error = view.metadata_write_error.clone();
 
-    v_flex()
+    let assignees = format_logins(detail.assignees.iter().map(|a| a.login.as_str()));
+    let mut panel = v_flex()
         .p_4()
         .gap_3()
         .child(metadata_field(
@@ -111,19 +96,72 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
         ))
         .child(metadata_field(
             "Status",
-            status_label(detail.is_draft).into_any_element(),
+            status_controls(detail.is_draft, caps.draft_ready, pending, cx),
+            cx,
+        ))
+        .child(metadata_field(
+            "Branches",
+            branch_row(detail, caps.base_ref, pending, cx),
+            cx,
+        ))
+        .child(metadata_field(
+            "Review gate",
+            read_only_text(review_decision_label(detail.review_decision)),
+            cx,
+        ))
+        .child(metadata_field(
+            "Mergeability",
+            read_only_text(mergeable_label(detail.mergeable)),
+            cx,
+        ))
+        .child(metadata_field(
+            "Assignees",
+            assignee_row(&assignees, caps.assignees, pending, cx),
             cx,
         ))
         .child(metadata_field(
             "Reviewers",
-            div().text_sm().child(reviewers).into_any_element(),
+            reviewers_row(detail, caps.reviewers, pending, cx),
             cx,
         ))
         .child(metadata_field(
             "Labels",
-            div().text_sm().child(labels).into_any_element(),
+            labels_row(detail, caps.labels, pending, cx),
             cx,
-        ))
+        ));
+
+    if !detail.codeowners_rules.is_empty() {
+        let summary = detail
+            .codeowners_rules
+            .iter()
+            .map(|rule| format!("{} ({})", rule.pattern, rule.owners.join(", ")))
+            .collect::<Vec<_>>()
+            .join("; ");
+        panel = panel.child(metadata_field(
+            "CODEOWNERS gate",
+            read_only_text(summary),
+            cx,
+        ));
+    }
+
+    if pending {
+        panel = panel.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("Saving…"),
+        );
+    }
+    if let Some(error) = write_error {
+        panel = panel.child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().danger)
+                .child(format!("Write failed: {error}")),
+        );
+    }
+
+    panel
 }
 
 fn metadata_field(
@@ -141,6 +179,242 @@ fn metadata_field(
                 .child(label),
         )
         .child(value)
+}
+
+fn read_only_text(text: String) -> gpui_kit::AnyElement {
+    div().text_sm().child(text).into_any_element()
+}
+
+fn format_logins<'a, I>(logins: I) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    let collected: Vec<_> = logins.collect();
+    if collected.is_empty() {
+        "None".into()
+    } else {
+        collected.join(", ")
+    }
+}
+
+fn display_ref(value: &str) -> String {
+    if value.is_empty() {
+        "—".into()
+    } else {
+        value.to_string()
+    }
+}
+
+fn review_decision_label(value: ReviewDecision) -> String {
+    match value {
+        ReviewDecision::Approved => "Approved".into(),
+        ReviewDecision::ChangesRequested => "Changes requested".into(),
+        ReviewDecision::ReviewRequired => "Review required".into(),
+        ReviewDecision::Unknown => "Unknown".into(),
+    }
+}
+
+fn mergeable_label(value: MergeableState) -> String {
+    match value {
+        MergeableState::Mergeable => "Mergeable".into(),
+        MergeableState::Conflicting => "Conflicts".into(),
+        MergeableState::Blocked => "Blocked".into(),
+        MergeableState::Unknown => "Unknown".into(),
+    }
+}
+
+fn status_controls(
+    is_draft: bool,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    let status = if is_draft { "Draft" } else { "Ready" };
+    if !enabled {
+        return read_only_text(format!("{status} (read-only)"));
+    }
+    let target_draft = !is_draft;
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().text_sm().child(status))
+        .child(
+            Button::new("metadata-toggle-draft")
+                .ghost()
+                .xsmall()
+                .disabled(pending)
+                .label(if is_draft {
+                    "Mark ready"
+                } else {
+                    "Convert to draft"
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch(Intent::MetadataWrite(MetadataWrite::SetDraft(target_draft)), cx);
+                })),
+        )
+        .into_any_element()
+}
+
+fn branch_row(
+    detail: &reviewdesk_core::PullRequestDetail,
+    base_editable: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    let head = display_ref(&detail.head_ref);
+    let base = display_ref(&detail.base_ref);
+    if !base_editable {
+        return read_only_text(format!("{head} → {base}"));
+    }
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().text_sm().child(format!("{head} → {base}")))
+        .child(
+            Button::new("metadata-set-base-main")
+                .ghost()
+                .xsmall()
+                .disabled(pending)
+                .label("Use main")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(
+                        Intent::MetadataWrite(MetadataWrite::SetBaseRef("main".into())),
+                        cx,
+                    );
+                })),
+        )
+        .into_any_element()
+}
+
+fn reviewers_row(
+    detail: &reviewdesk_core::PullRequestDetail,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    let text = format_logins(detail.reviewers.iter().map(|r| r.login.as_str()));
+    if !enabled {
+        return read_only_text(format!("{text} (not supported)"));
+    }
+    let first = detail
+        .reviewers
+        .first()
+        .map(|r| r.login.clone())
+        .unwrap_or_else(|| "hubot".into());
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().text_sm().child(text))
+        .child(
+            Button::new("metadata-request-reviewer")
+                .ghost()
+                .xsmall()
+                .disabled(pending)
+                .label("Request")
+                .on_click({
+                    let login = first.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        this.dispatch(
+                            Intent::MetadataWrite(MetadataWrite::RequestReviewer(login.clone())),
+                            cx,
+                        );
+                    })
+                }),
+        )
+        .child(
+            Button::new("metadata-remove-reviewer")
+                .ghost()
+                .xsmall()
+                .disabled(pending || detail.reviewers.is_empty())
+                .label("Remove")
+                .on_click({
+                    let login = first.clone();
+                    cx.listener(move |this, _, _, cx| {
+                        this.dispatch(
+                            Intent::MetadataWrite(MetadataWrite::RemoveReviewer(login.clone())),
+                            cx,
+                        );
+                    })
+                }),
+        )
+        .child(
+            Button::new("metadata-rerequest-reviewer")
+                .ghost()
+                .xsmall()
+                .disabled(pending || detail.reviewers.is_empty())
+                .label("Re-request")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch(
+                        Intent::MetadataWrite(MetadataWrite::RerequestReviewer(first.clone())),
+                        cx,
+                    );
+                })),
+        )
+        .into_any_element()
+}
+
+fn assignee_row(
+    assignees: &str,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    if !enabled {
+        return read_only_text(format!("{assignees} (not supported)"));
+    }
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().text_sm().child(assignees.to_string()))
+        .child(
+            Button::new("metadata-clear-assignees")
+                .ghost()
+                .xsmall()
+                .disabled(pending)
+                .label("Clear")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(
+                        Intent::MetadataWrite(MetadataWrite::SetAssignees(Vec::new())),
+                        cx,
+                    );
+                })),
+        )
+        .into_any_element()
+}
+
+fn labels_row(
+    detail: &reviewdesk_core::PullRequestDetail,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    let labels = format_logins(detail.labels.iter().map(|l| l.name.as_str()));
+    if !enabled {
+        return read_only_text(format!("{labels} (not supported)"));
+    }
+    let mut next_labels: Vec<String> = detail.labels.iter().map(|l| l.name.clone()).collect();
+    if !next_labels.iter().any(|l| l == "bug") {
+        next_labels.push("bug".into());
+    }
+    let write_labels = next_labels.clone();
+    h_flex()
+        .gap_2()
+        .items_center()
+        .child(div().text_sm().child(labels))
+        .child(
+            Button::new("metadata-add-bug-label")
+                .ghost()
+                .xsmall()
+                .disabled(pending)
+                .label("+ bug")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch(
+                        Intent::MetadataWrite(MetadataWrite::SetLabels(write_labels.clone())),
+                        cx,
+                    );
+                })),
+        )
+        .into_any_element()
 }
 
 /// Provider link rendered as `owner/repo#n`, opening the Provider web URL.
@@ -169,19 +443,23 @@ fn provider_link(
         .into_any_element()
 }
 
-fn status_label(is_draft: bool) -> impl IntoElement {
-    let text = if is_draft { "Draft" } else { "Ready" };
-    div().text_sm().child(text)
-}
-
 /// Folded footer strip: keeps status + merge visible after a fold.
-/// Hide leaves no strip; restoring the full dock is via the chrome toggle.
 pub(crate) fn render_metadata_strip(
     view: &SessionView,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let is_draft = matches!(&view.detail, LoadState::Ready(detail) if detail.is_draft);
-    let status = if is_draft { "Draft" } else { "Ready" };
+    let (status, review_gate, mergeable) = match &view.detail {
+        LoadState::Ready(detail) => (
+            if detail.is_draft {
+                "Draft"
+            } else {
+                "Ready"
+            },
+            review_decision_label(detail.review_decision),
+            mergeable_label(detail.mergeable),
+        ),
+        _ => ("…", "…".into(), "…".into()),
+    };
 
     h_flex()
         .w_full()
@@ -203,12 +481,8 @@ pub(crate) fn render_metadata_strip(
                         .child("METADATA"),
                 )
                 .child(div().text_xs().child(status))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Merge status pending"),
-                ),
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(review_gate))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(mergeable)),
         )
         .child(
             Button::new("metadata-strip-expand")

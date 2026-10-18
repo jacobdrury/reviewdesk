@@ -22,6 +22,7 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::PULL_REQUESTS_REFRESH;
+use crate::metadata_write::apply_metadata_write;
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::review_writeback::{
     add_pending_diff_review_comment, discard_pending_review, load_threads_via_store,
@@ -78,6 +79,7 @@ pub struct ReviewDesk {
     _views_persist_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
+    _metadata_write_task: Task<()>,
     _threads_task: Task<()>,
     _threads_write_task: Task<()>,
     _refresh_timer: Task<()>,
@@ -119,6 +121,7 @@ impl ReviewDesk {
             _views_persist_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
+            _metadata_write_task: Task::ready(()),
             _threads_task: Task::ready(()),
             _threads_write_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
@@ -178,6 +181,9 @@ impl ReviewDesk {
                     last_used,
                     scoped_repository,
                 } => self.run_persist_views(views, last_used, scoped_repository, cx),
+                Effect::RunMetadataWrite { id, write } => {
+                    self.run_metadata_write(id, write, cx)
+                }
                 Effect::QueryInbox => self.run_query_inbox(cx),
                 Effect::SyncInbox {
                     generation,
@@ -197,6 +203,33 @@ impl ReviewDesk {
             self.collapsed_groups.insert(key);
         }
         cx.notify();
+    }
+
+    fn run_metadata_write(
+        &mut self,
+        id: PullRequestId,
+        write: crate::metadata_write::MetadataWrite,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        self._metadata_write_task = cx.spawn(async move |this, cx| {
+            let finished_id = id.clone();
+            let result = runtime
+                .spawn(async move { apply_metadata_write(provider.as_ref(), &store, &id, write).await })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::MetadataWriteFinished {
+                        id: finished_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
     }
 
     fn sync_diff_widget(&mut self, cx: &mut Context<Self>) {

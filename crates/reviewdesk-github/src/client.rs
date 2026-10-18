@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, NotificationListOptions, NotificationPage, NotificationThreadId, Patch,
-    PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListOptions, PullRequestThreads, ReviewSubmitEvent,
+    codeowners_breakdown, parse_codeowners, Credentials, NotificationListOptions, NotificationPage,
+    NotificationThreadId, Patch, PendingDiffReviewComment, Provider, ProviderError,
+    PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListOptions,
+    PullRequestThreads, ReviewSubmitEvent,
 };
 use serde_json::json;
 
@@ -81,10 +82,18 @@ query PullRequest($owner: String!, $name: String!, $number: Int!) {
           }
         }
       }
+      headRefName
+      baseRefName
+      mergeable
+      assignees(first: 20) {
+        nodes { login avatarUrl }
+      }
     }
   }
 }
 "#;
+
+const CODEOWNERS_PATHS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 
 pub struct GitHubProvider {
     client: Client,
@@ -225,7 +234,126 @@ impl Provider for GitHubProvider {
             .repository
             .and_then(|r| r.pull_request)
             .ok_or(ProviderError::NotFound)?;
-        map_pull_request_detail(&node)
+        let mut detail = map_pull_request_detail(&node)?;
+        enrich_codeowners(self, &mut detail).await;
+        Ok(detail)
+    }
+
+    async fn set_pull_request_labels(
+        &self,
+        id: &PullRequestId,
+        labels: &[String],
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/labels");
+        let response = self
+            .client
+            .put(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "labels": labels }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn set_pull_request_assignees(
+        &self,
+        id: &PullRequestId,
+        assignees: &[String],
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/assignees");
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "assignees": assignees }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn request_pull_request_reviewer(
+        &self,
+        id: &PullRequestId,
+        login: &str,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers");
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "reviewers": [login] }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn remove_pull_request_reviewer(
+        &self,
+        id: &PullRequestId,
+        login: &str,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers");
+        let response = self
+            .client
+            .delete(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "reviewers": [login] }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn rerequest_pull_request_reviewer(
+        &self,
+        id: &PullRequestId,
+        login: &str,
+    ) -> Result<(), ProviderError> {
+        self.remove_pull_request_reviewer(id, login).await?;
+        self.request_pull_request_reviewer(id, login).await
+    }
+
+    async fn set_pull_request_draft(
+        &self,
+        id: &PullRequestId,
+        is_draft: bool,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+        let response = self
+            .client
+            .patch(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "draft": is_draft }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn set_pull_request_base(
+        &self,
+        id: &PullRequestId,
+        base_ref: &str,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+        let response = self
+            .client
+            .patch(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "base": base_ref }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
     }
 
     async fn list_notifications(
@@ -372,4 +500,101 @@ async fn ensure_success(response: reqwest::Response) -> Result<(), ProviderError
     }
     let body = response.text().await.unwrap_or_default();
     Err(from_status(status.as_u16(), &body))
+}
+
+async fn map_write_response(response: reqwest::Response) -> Result<(), ProviderError> {
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    if status.is_success() {
+        return Ok(());
+    }
+    Err(from_status(status.as_u16(), &body))
+}
+
+async fn enrich_codeowners(provider: &GitHubProvider, detail: &mut PullRequestDetail) {
+    let Ok((owner, repo, number)) = parse_pull_request_id(&detail.id) else {
+        return;
+    };
+    let paths = match fetch_changed_paths(provider, &owner, &repo, number).await {
+        Ok(paths) => paths,
+        Err(_) => return,
+    };
+    let source = match fetch_codeowners_source(provider, &owner, &repo, &detail.base_ref).await {
+        Ok(source) => source,
+        Err(_) => return,
+    };
+    let rules = parse_codeowners(&source);
+    detail.codeowners_rules = codeowners_breakdown(&rules, &paths);
+}
+
+async fn fetch_changed_paths(
+    provider: &GitHubProvider,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<Vec<String>, ProviderError> {
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/files?per_page=100");
+    let response = provider
+        .client
+        .get(&url)
+        .bearer_auth(provider.credentials.token())
+        .send()
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    if !status.is_success() {
+        return Err(from_status(status.as_u16(), &body));
+    }
+    let files: Vec<PullFileRow> = serde_json::from_str(&body)
+        .map_err(|e| ProviderError::other(format!("pull files decode: {e}")))?;
+    Ok(files.into_iter().map(|f| f.filename).collect())
+}
+
+#[derive(serde::Deserialize)]
+struct PullFileRow {
+    filename: String,
+}
+
+async fn fetch_codeowners_source(
+    provider: &GitHubProvider,
+    owner: &str,
+    repo: &str,
+    base_ref: &str,
+) -> Result<String, ProviderError> {
+    if base_ref.is_empty() {
+        return Err(ProviderError::NotFound);
+    }
+    for path in CODEOWNERS_PATHS {
+        let url = format!(
+            "{API_BASE}/repos/{owner}/{repo}/contents/{path}?ref={base_ref}"
+        );
+        let response = provider
+            .client
+            .get(&url)
+            .bearer_auth(provider.credentials.token())
+            .header("Accept", "application/vnd.github.raw")
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if response.status() == StatusCode::NOT_FOUND {
+            continue;
+        }
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if status.is_success() {
+            return Ok(body);
+        }
+        return Err(from_status(status.as_u16(), &body));
+    }
+    Err(ProviderError::NotFound)
 }
