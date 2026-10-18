@@ -14,8 +14,9 @@ use gpui_kit::component::{
     v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar,
 };
 use gpui_kit::{
-    div, px, uniform_list, AppContext as _, Context, ElementId, Entity, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Task, UniformListScrollHandle, Window,
+    div, point, px, uniform_list, AppContext as _, Context, ElementId, Entity,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, UniformListScrollHandle, Window,
 };
 use reviewdesk_core::{
     InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
@@ -59,6 +60,7 @@ pub struct ReviewDesk {
     annotation_seq: usize,
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    overview_scroll: ScrollHandle,
     _inbox_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
@@ -89,6 +91,7 @@ impl ReviewDesk {
             annotation_seq: 0,
             inbox_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            overview_scroll: ScrollHandle::new(),
             _inbox_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
@@ -152,6 +155,7 @@ impl ReviewDesk {
         self.detail = LoadState::Idle;
         self.patch_files = LoadState::Idle;
         self.selected_file = None;
+        self.overview_scroll.set_offset(point(px(0.), px(0.)));
         self.diff.update(cx, |state, cx| state.set_files([], cx));
     }
 
@@ -164,6 +168,7 @@ impl ReviewDesk {
         self.detail = LoadState::Loading;
         self.patch_files = LoadState::Loading;
         self.selected_file = None;
+        self.overview_scroll.set_offset(point(px(0.), px(0.)));
         self.diff.update(cx, |state, cx| state.set_files([], cx));
         cx.notify();
 
@@ -553,40 +558,56 @@ impl ReviewDesk {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                v_flex()
+                div()
                     .size_full()
-                    .p(px(12.))
-                    .gap_3()
-                    .overflow_hidden()
-                    .child(div().text_base().font_medium().child(detail.title.clone()))
+                    .relative()
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "{} · {} · {}",
-                                detail.author_login,
-                                if detail.is_draft { "Draft" } else { "Ready" },
-                                detail.web_url
-                            )),
+                            .id("overview-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.overview_scroll)
+                            .child(
+                                v_flex()
+                                    .p_4()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .text_lg()
+                                            .font_medium()
+                                            .child(detail.title.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format!(
+                                                "{} · {} · {}",
+                                                detail.author_login,
+                                                if detail.is_draft { "Draft" } else { "Ready" },
+                                                detail.web_url
+                                            )),
+                                    )
+                                    .child(div().text_sm().child(format!("Labels: {labels}")))
+                                    .child(
+                                        div().text_sm().child(format!("Reviewers: {reviewers}")),
+                                    )
+                                    .child(
+                                        div()
+                                            .p_3()
+                                            .rounded_md()
+                                            .bg(cx.theme().secondary)
+                                            .child(div().text_sm().whitespace_normal().child(
+                                                if detail.body.trim().is_empty() {
+                                                    "No description.".to_string()
+                                                } else {
+                                                    detail.body.clone()
+                                                },
+                                            )),
+                                    ),
+                            ),
                     )
-                    .child(div().text_sm().child(format!("Labels: {labels}")))
-                    .child(div().text_sm().child(format!("Reviewers: {reviewers}")))
-                    .child(
-                        div()
-                            .flex_1()
-                            .p_3()
-                            .rounded_md()
-                            .bg(cx.theme().secondary)
-                            .overflow_hidden()
-                            .child(div().text_sm().whitespace_normal().child(
-                                if detail.body.trim().is_empty() {
-                                    "No description.".to_string()
-                                } else {
-                                    detail.body.clone()
-                                },
-                            )),
-                    )
+                    .child(Scrollbar::vertical(&self.overview_scroll))
             }
         }
     }
