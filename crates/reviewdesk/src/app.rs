@@ -11,7 +11,7 @@ use gpui_kit::component::{
     scroll::Scrollbar,
     spinner::Spinner,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
+    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar,
 };
 use gpui_kit::{
     div, px, uniform_list, AppContext as _, Context, ElementId, Entity, IntoElement,
@@ -307,11 +307,17 @@ impl ReviewDesk {
                 h_flex()
                     .w_full()
                     .px_3()
-                    .py_2()
+                    .py(px(4.))
                     .justify_between()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().font_medium().child("Inbox"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .font_medium()
+                            .child("INBOX"),
+                    )
                     .child(
                         Button::new("inbox-refresh")
                             .ghost()
@@ -390,7 +396,7 @@ impl ReviewDesk {
                                         ListItem::new(SharedString::from(item.id.as_str()))
                                             .selected(selected)
                                             .px_3()
-                                            .py_2()
+                                            .py(px(4.))
                                             .child(
                                                 v_flex()
                                                     .w_full()
@@ -549,10 +555,10 @@ impl ReviewDesk {
                 };
                 v_flex()
                     .size_full()
-                    .p_4()
+                    .p(px(12.))
                     .gap_3()
                     .overflow_hidden()
-                    .child(div().text_lg().font_medium().child(detail.title.clone()))
+                    .child(div().text_base().font_medium().child(detail.title.clone()))
                     .child(
                         div()
                             .text_sm()
@@ -691,11 +697,17 @@ impl ReviewDesk {
                                         h_flex()
                                             .w_full()
                                             .px_3()
-                                            .py_2()
+                                            .py(px(4.))
                                             .justify_between()
                                             .border_b_1()
                                             .border_color(cx.theme().border)
-                                            .child(div().text_sm().font_medium().child("Files"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .font_medium()
+                                                    .child("FILES"),
+                                            )
                                             .child(
                                                 Button::new("diff-mode")
                                                     .ghost()
@@ -812,21 +824,31 @@ fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
 
 impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(
-            div().flex_1().min_h_0().child(
-                h_resizable("shell")
-                    .child(
-                        resizable_panel()
-                            .size(px(320.))
-                            .size_range(px(240.)..px(480.))
-                            .child(self.render_inbox(cx)),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size_range(px(480.)..px(2000.))
-                            .child(self.render_review_pane(cx)),
-                    ),
-            ),
-        )
+        v_flex()
+            .size_full()
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .child("Review Desk"),
+                ),
+            )
+            .child(
+                div().flex_1().min_h_0().child(
+                    h_resizable("shell")
+                        .child(
+                            resizable_panel()
+                                .size(px(240.))
+                                .size_range(px(200.)..px(480.))
+                                .child(self.render_inbox(cx)),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size_range(px(480.)..px(2000.))
+                                .child(self.render_review_pane(cx)),
+                        ),
+                ),
+            )
     }
 }
