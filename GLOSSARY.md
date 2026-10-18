@@ -33,12 +33,16 @@ The textual diff of a pull request, loaded for display on the Diff surface.
 _Avoid_: diff (as the data), changeset file list alone
 
 **Review pane**:
-The right side of the first-slice shell. It holds Overview and Files for the selected pull request.
+The right side of the shell for a selected pull request: Overview, peer tabs (Files, Pipelines, Conversation), and the Metadata panel.
 _Avoid_: detail pane, main pane, content area
 
 **Overview**:
-The Review pane tab that shows pull-request metadata for reading (title, description, reviewers, and related fields). Not the Diff.
-_Avoid_: details tab, PR header, metadata panel
+The Review pane surface for the pull request's title, description, author and web URL chrome, and the CODEOWNERS rule breakdown after the description. Not the Metadata panel or Diff.
+_Avoid_: details tab, PR header, sidebar
+
+**Metadata panel**:
+A foldable, hideable Review pane panel (open by default) for pull-request status and mutations: labels, assignees, reviewers, draft↔ready, branches, review-gate summary, merge and auto-merge. Folds to a status strip; hide restores only from Review pane chrome.
+_Avoid_: sidebar, details pane, PR header, properties panel
 
 **Diff surface**:
 The UI that shows a Patch and accepts Annotations. Lives under the Files tab of the Review pane. Read-only for provider writeback in the first slice.
