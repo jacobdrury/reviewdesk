@@ -30,13 +30,6 @@ use crate::overview_body::{
     compose_overview_markdown, details_effective_open, open_details_ids, parse_body_segments,
     parse_details_fence, BodySegment, DetailsBlock, DetailsFence,
 };
-
-#[derive(Clone, PartialEq, Eq)]
-struct OverviewComposeCache {
-    pr_id: PullRequestId,
-    open_details: Vec<usize>,
-    markdown: SharedString,
-}
 use crate::patch_index::{index_patch, PatchIndex};
 use crate::theme::{
     apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
@@ -75,11 +68,23 @@ struct Annotation {
     body: SharedString,
 }
 
+/// Cached Overview markdown for one PR + open disclosure set.
+///
+/// Key does not include title/meta/body content. Always clear this field whenever
+/// `PullRequestDetail` or `overview_segments` change (see `load_detail` /
+/// `clear_selection` / `select_item`).
+#[derive(Clone, PartialEq, Eq)]
+struct OverviewComposeCache {
+    pr_id: PullRequestId,
+    open_details: Vec<usize>,
+    markdown: SharedString,
+}
+
 pub struct ReviewDesk {
     provider: Arc<dyn Provider>,
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
-    inbox: LoadState<Vec<InboxItem>>,
+    inbox: LoadState<Arc<[InboxItem]>>,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
@@ -204,7 +209,7 @@ impl ReviewDesk {
                                 this.clear_selection(cx);
                             }
                         }
-                        this.inbox = LoadState::Ready(items);
+                        this.inbox = LoadState::Ready(Arc::from(items));
                     }
                     Err(error) => {
                         this.inbox = LoadState::Error(error);
@@ -267,27 +272,30 @@ impl ReviewDesk {
         (pr_id.clone(), open_details)
     }
 
-    fn overview_markdown_cache_hit(&self) -> Option<SharedString> {
-        let LoadState::Ready(detail) = &self.detail else {
-            return None;
-        };
-        let key = self.overview_compose_cache_key(&detail.id);
+    fn overview_cache_for(&self, pr_id: &PullRequestId) -> Option<&OverviewComposeCache> {
+        let key = self.overview_compose_cache_key(pr_id);
         let cache = self.overview_compose_cache.as_ref()?;
         if cache.pr_id == key.0 && cache.open_details == key.1 {
-            Some(cache.markdown.clone())
+            Some(cache)
         } else {
             None
         }
     }
 
+    fn overview_markdown_cache_hit(&self) -> Option<SharedString> {
+        let LoadState::Ready(detail) = &self.detail else {
+            return None;
+        };
+        self.overview_cache_for(&detail.id)
+            .map(|cache| cache.markdown.clone())
+    }
+
     fn cached_overview_markdown(&mut self, detail: &PullRequestDetail) -> SharedString {
-        let key = self.overview_compose_cache_key(&detail.id);
-        if let Some(cache) = &self.overview_compose_cache {
-            if cache.pr_id == key.0 && cache.open_details == key.1 {
-                return cache.markdown.clone();
-            }
+        if let Some(cache) = self.overview_cache_for(&detail.id) {
+            return cache.markdown.clone();
         }
 
+        let key = self.overview_compose_cache_key(&detail.id);
         let reviewers = if detail.reviewers.is_empty() {
             "None".to_string()
         } else {

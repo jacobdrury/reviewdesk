@@ -77,6 +77,7 @@ Working pattern used by Overview:
 3. Closed details emit a small custom fence (`reviewdesk-details`) rendered as a toggle (`DetailsTogglePlugin`).
 4. Open details emit the same toggle fence, then **inline the body as normal markdown blocks** after it so the parent scrollable `TextView` virtualizes headings, lists, and paragraphs.
 5. Default closed. Do not build or mount open-body elements while closed.
+6. Provider-supplied `<details open>` with a **heavy** nested body (at or above `HEAVY_DETAILS_BODY_MIN_CHARS` in `overview_body`) still composes **closed** on first paint; the reviewer toggle inlines the body. Light Provider-open bodies may still open immediately. Covered by compose tests in `overview_body`.
 
 Closed-by-default is both UX (matches GitHub) and perf (Renovate release notes are huge).
 
