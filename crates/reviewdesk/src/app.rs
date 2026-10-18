@@ -5,13 +5,11 @@ use std::sync::Arc;
 use gpui_kit::component::{
     ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
     diff::{DiffMode, DiffState},
-    h_flex,
-    resizable::{h_resizable, resizable_panel},
-    v_flex,
+    h_flex, v_flex,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
+    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div,
 };
 use reviewdesk_core::{
     LocalStoreError, NotificationListOptions, NotificationQuery, NotificationThreadId, Provider,
@@ -469,24 +467,22 @@ impl Render for ReviewDesk {
                 ),
             )
             .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("shell")
-                        .child(
-                            resizable_panel()
-                                .size(px(240.))
-                                .size_range(px(200.)..px(480.))
-                                .child(render_sidebar(
-                                    &view,
-                                    &self.inbox_scroll,
-                                    &self.pull_requests_scroll,
-                                    entity.clone(),
-                                    cx,
-                                )),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(if view.selected_id.is_some() {
+                        render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx)
+                            .into_any_element()
+                    } else {
+                        render_sidebar(
+                            &view,
+                            &self.inbox_scroll,
+                            &self.pull_requests_scroll,
+                            entity,
+                            cx,
                         )
-                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
-                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
-                        )),
-                ),
+                        .into_any_element()
+                    }),
             )
     }
 }
