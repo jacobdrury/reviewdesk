@@ -177,6 +177,48 @@ const STUB_PRS: &[StubPr] = &[
         i_am_reviewer: false,
         i_am_author: true,
     },
+    StubPr {
+        id: "stub/reviewdesk#45",
+        number: 45,
+        title: "Deepen ReviewDesk ReviewSession kernel",
+        repo: "jacobdrury/reviewdesk",
+        author: "alice",
+        review_state: "Review required",
+        ci: "Passing",
+        updated: "8h",
+        labels: &["core"],
+        is_draft: false,
+        i_am_reviewer: true,
+        i_am_author: false,
+    },
+    StubPr {
+        id: "stub/widgets#15",
+        number: 15,
+        title: "Connect Stripe webhook retries",
+        repo: "acme/widgets",
+        author: "carol",
+        review_state: "Review required",
+        ci: "Passing",
+        updated: "1d",
+        labels: &["billing", "infra"],
+        is_draft: false,
+        i_am_reviewer: true,
+        i_am_author: false,
+    },
+    StubPr {
+        id: "stub/kit#7",
+        number: 7,
+        title: "Invite flow empty states",
+        repo: "acme/kit",
+        author: "bob",
+        review_state: "Approved",
+        ci: "Passing",
+        updated: "3d",
+        labels: &["ui"],
+        is_draft: false,
+        i_am_reviewer: false,
+        i_am_author: false,
+    },
 ];
 
 #[derive(Clone)]
@@ -227,25 +269,13 @@ pub(crate) fn render_prototype_shell(
 }
 
 fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+    // Quiet chrome — Linear puts product identity in the sidebar, not a loud title.
     gpui_kit::component::TitleBar::new().child(
         h_flex()
             .w_full()
             .items_center()
-            .justify_between()
-            .pr_2()
-            .gap_3()
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().text_sm().font_medium().child("Review Desk"))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("prototype · PR list + Views nav"),
-                    ),
-            )
+            .justify_end()
+            .pr_3()
             .child(
                 div()
                     .text_xs()
@@ -404,6 +434,10 @@ fn render_sidebar(
     notif_count: usize,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
+    if proto.chrome.full_bleed_list() {
+        return render_linear_sidebar(proto, notif_count, cx).into_any_element();
+    }
+
     let chrome = proto.chrome;
     let pad = if chrome.dense() { px(6.) } else { px(8.) };
     let mut side = v_flex()
@@ -461,7 +495,256 @@ fn render_sidebar(
         ));
     }
 
-    side
+    side.into_any_element()
+}
+
+/// Linear sidebar clone: workspace header, Inbox, Pull requests, Views, team block.
+fn render_linear_sidebar(
+    proto: &PrototypeChrome,
+    notif_count: usize,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let prs_selected = proto.shell_nav == ShellNav::PullRequests;
+    let inbox_selected = proto.shell_nav == ShellNav::Inbox;
+
+    v_flex()
+        .w(px(proto.chrome.sidebar_width()))
+        .flex_shrink_0()
+        .h_full()
+        .min_h_0()
+        .px_2()
+        .py_2()
+        .gap_0()
+        .border_r_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().sidebar)
+        // Workspace header
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(px(6.))
+                .child(
+                    div()
+                        .size(px(18.))
+                        .rounded_md()
+                        .bg(cx.theme().accent)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(cx.theme().accent_foreground)
+                                .child("R"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .font_medium()
+                        .truncate()
+                        .child("Review Desk"),
+                )
+                .child(
+                    Icon::new(IconName::Search)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    Icon::new(IconName::Plus)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+        )
+        .child(div().h(px(6.)))
+        .child(side_item(
+            "lin-inbox",
+            IconName::Inbox,
+            "Inbox",
+            inbox_selected,
+            Some(notif_count),
+            0.,
+            cx,
+            ShellNav::Inbox,
+        ))
+        .child(side_item(
+            "lin-prs",
+            IconName::Github,
+            "Pull requests",
+            prs_selected,
+            None,
+            0.,
+            cx,
+            ShellNav::PullRequests,
+        ))
+        .child(div().h(px(10.)))
+        .child(side_section("Workspace", cx))
+        .child(side_static("lin-projects", IconName::Folder, "Projects", cx))
+        .child(side_static("lin-views", IconName::Eye, "Views", cx))
+        .child(side_static("lin-more", IconName::Ellipsis, "More", cx))
+        .child(div().h(px(10.)))
+        .child(side_section("Your teams", cx))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(px(4.))
+                .child(
+                    div()
+                        .size(px(16.))
+                        .rounded_md()
+                        .bg(cx.theme().accent.opacity(0.7)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_sm()
+                        .truncate()
+                        .child("jacobdrury"),
+                )
+                .child(
+                    Icon::new(IconName::ChevronDown)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                ),
+        )
+        .child(side_item(
+            "lin-team-prs",
+            IconName::Github,
+            "Pull requests",
+            prs_selected,
+            Some(stub_count_for_view(StubViewId::AllPrs, ListDemoMode::Populated)),
+            12.,
+            cx,
+            ShellNav::PullRequests,
+        ))
+        .child(side_static_indent("lin-team-views", IconName::Eye, "Views", 12., cx))
+        .child(div().flex_1())
+        .child(side_static("lin-invite", IconName::Plus, "Invite people", cx))
+        .child(side_static("lin-link-gh", IconName::Github, "Link GitHub", cx))
+}
+
+fn side_section(label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+    div()
+        .px_2()
+        .py(px(4.))
+        .text_xs()
+        .font_medium()
+        .text_color(cx.theme().muted_foreground)
+        .child(label.to_string())
+}
+
+fn side_item(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    selected: bool,
+    badge: Option<usize>,
+    indent: f32,
+    cx: &mut Context<ReviewDesk>,
+    target: ShellNav,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .w_full()
+        .pl(px(8. + indent))
+        .pr_2()
+        .py(px(5.))
+        .rounded_md()
+        .cursor_pointer()
+        .when(selected, |el| el.bg(cx.theme().sidebar_accent))
+        .when(!selected, |el| {
+            el.hover(|style| style.bg(cx.theme().sidebar_accent.opacity(0.4)))
+        })
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.set_shell_nav(target, cx);
+        }))
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    Icon::new(icon)
+                        .xsmall()
+                        .text_color(if selected {
+                            cx.theme().sidebar_accent_foreground
+                        } else {
+                            cx.theme().sidebar_foreground
+                        }),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_sm()
+                        .truncate()
+                        .text_color(if selected {
+                            cx.theme().sidebar_accent_foreground
+                        } else {
+                            cx.theme().sidebar_foreground
+                        })
+                        .child(label),
+                )
+                .when_some(badge.filter(|n| *n > 0), |el, count| {
+                    el.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(count.to_string()),
+                    )
+                }),
+        )
+}
+
+fn side_static(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    side_static_indent(id, icon, label, 0., cx)
+}
+
+fn side_static_indent(
+    id: &'static str,
+    icon: IconName,
+    label: &'static str,
+    indent: f32,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .w_full()
+        .pl(px(8. + indent))
+        .pr_2()
+        .py(px(5.))
+        .rounded_md()
+        .child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(
+                    Icon::new(icon)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().sidebar_foreground)
+                        .child(label),
+                ),
+        )
 }
 
 fn section_label(
@@ -804,31 +1087,34 @@ fn render_pull_requests(
     }
 }
 
-/// Linear-style View tabs (maps to All issues / Active / Backlog).
+/// Linear top tabs: All issues / Active / Backlog → our Views.
 fn render_linear_view_tabs(
     proto: &PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let mut tabs = h_flex()
         .w_full()
-        .px_3()
+        .px_4()
         .pt_2()
-        .pb_1()
-        .gap_1()
-        .items_center();
+        .gap_0()
+        .items_end()
+        .border_b_1()
+        .border_color(cx.theme().border);
     for view_id in StubViewId::ALL {
         let view_id = *view_id;
         let active = proto.selected_view == view_id;
         tabs = tabs.child(
             div()
                 .id(SharedString::from(format!("tab-{}", view_id.label())))
-                .px_2()
-                .py(px(4.))
-                .rounded_md()
+                .px_3()
+                .pb(px(8.))
+                .pt(px(4.))
                 .cursor_pointer()
-                .when(active, |el| el.bg(cx.theme().secondary.opacity(0.7)))
-                .when(!active, |el| {
-                    el.hover(|style| style.bg(cx.theme().secondary.opacity(0.35)))
+                .border_b_2()
+                .border_color(if active {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().border.opacity(0.)
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.set_selected_view(view_id, cx);
@@ -847,27 +1133,31 @@ fn render_linear_view_tabs(
         );
     }
     tabs.child(div().flex_1()).child(
-        Button::new("demo-mode-tabs")
-            .ghost()
-            .xsmall()
-            .label(proto.list_demo.label())
-            .tooltip("Cycle populated / empty store / zero-match")
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.cycle_list_demo(cx);
-            })),
+        div()
+            .pb(px(6.))
+            .child(
+                Button::new("demo-mode-tabs")
+                    .ghost()
+                    .xsmall()
+                    .label(proto.list_demo.label())
+                    .tooltip("Cycle populated / empty store / zero-match")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.cycle_list_demo(cx);
+                    })),
+            ),
     )
 }
 
-/// Linear Filter bar + Display control.
+/// Linear Filter (left) + Display (right) — not a full search field.
 fn render_linear_filter_display(
     proto: &PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let view = proto.selected_view;
-    let group = view.group_by().unwrap_or("None");
+    let group = view.group_by().unwrap_or("Status");
     h_flex()
         .w_full()
-        .px_3()
+        .px_4()
         .py_2()
         .items_center()
         .gap_2()
@@ -875,17 +1165,15 @@ fn render_linear_filter_display(
         .border_color(cx.theme().border)
         .child(
             h_flex()
-                .flex_1()
-                .min_w_0()
                 .items_center()
-                .gap_2()
+                .gap_1()
                 .px_2()
-                .py(px(5.))
+                .py(px(4.))
                 .rounded_md()
-                .border_1()
-                .border_color(cx.theme().border)
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
                 .child(
-                    Icon::new(IconName::Search)
+                    Icon::new(IconName::Menu)
                         .xsmall()
                         .text_color(cx.theme().muted_foreground),
                 )
@@ -894,23 +1182,43 @@ fn render_linear_filter_display(
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child("Filter"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .truncate()
-                        .child(view.filter_summary()),
                 ),
         )
         .child(
-            Button::new("display-stub")
-                .ghost()
-                .small()
-                .label(format!("Display · {group}"))
-                .tooltip("Group / sort / display density (stub)"),
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(view.filter_summary()),
+        )
+        .child(
+            h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
+                .child(
+                    Icon::new(IconName::Settings2)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Display"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("· {group}")),
+                ),
         )
 }
 
@@ -1174,7 +1482,8 @@ fn render_pr_rows(
                                     .id(SharedString::from(format!("group-{ix}")))
                                     .w_full()
                                     .px_4()
-                                    .py(px(6.))
+                                    .pt(px(14.))
+                                    .pb(px(6.))
                                     .child(
                                         h_flex()
                                             .w_full()
@@ -1210,35 +1519,57 @@ fn render_pr_rows(
                                 let pr = *pr;
                                 let is_sel = selected == Some(pr.id);
                                 let owner = entity.clone();
-                                let row = ListItem::new(SharedString::from(pr.id))
-                                    .selected(is_sel)
-                                    .px(if chrome.full_bleed_list() {
-                                        px(16.)
-                                    } else {
-                                        px(12.)
-                                    })
-                                    .py(if chrome.dense() || chrome.full_bleed_list() {
-                                        px(6.)
-                                    } else if chrome.roomy_rows() {
-                                        px(8.)
-                                    } else {
-                                        px(5.)
-                                    })
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner.update(cx, |this, cx| {
-                                            this.set_selected_stub(pr.id, cx);
-                                        });
-                                    });
 
-                                if chrome.table_rows() {
-                                    row.child(render_table_pr_row(pr, cx))
-                                        .into_any_element()
-                                } else if chrome.roomy_rows() {
-                                    row.child(render_roomy_pr_row(pr, cx))
+                                if chrome.full_bleed_list() {
+                                    // Linear clone: plain row + hairline, not ListItem chrome.
+                                    div()
+                                        .id(SharedString::from(pr.id))
+                                        .w_full()
+                                        .px_4()
+                                        .py(px(7.))
+                                        .border_b_1()
+                                        .border_color(cx.theme().border.opacity(0.55))
+                                        .cursor_pointer()
+                                        .when(is_sel, |el| {
+                                            el.bg(cx.theme().secondary.opacity(0.55))
+                                        })
+                                        .when(!is_sel, |el| {
+                                            el.hover(|style| {
+                                                style.bg(cx.theme().secondary.opacity(0.35))
+                                            })
+                                        })
+                                        .on_click(move |_, _, cx| {
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.set_selected_stub(pr.id, cx);
+                                            });
+                                        })
+                                        .child(render_dense_pr_row(pr, cx))
                                         .into_any_element()
                                 } else {
-                                    row.child(render_dense_pr_row(pr, cx))
-                                        .into_any_element()
+                                    let row = ListItem::new(SharedString::from(pr.id))
+                                        .selected(is_sel)
+                                        .px(px(12.))
+                                        .py(if chrome.roomy_rows() {
+                                            px(8.)
+                                        } else {
+                                            px(5.)
+                                        })
+                                        .on_click(move |_, _, cx| {
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.set_selected_stub(pr.id, cx);
+                                            });
+                                        });
+
+                                    if chrome.table_rows() {
+                                        row.child(render_table_pr_row(pr, cx))
+                                            .into_any_element()
+                                    } else if chrome.roomy_rows() {
+                                        row.child(render_roomy_pr_row(pr, cx))
+                                            .into_any_element()
+                                    } else {
+                                        row.child(render_dense_pr_row(pr, cx))
+                                            .into_any_element()
+                                    }
                                 }
                             }
                         }
@@ -1251,8 +1582,8 @@ fn render_pr_rows(
         .child(Scrollbar::vertical(&scroll))
 }
 
-/// Linear backlog row → PR:
-/// `#71` · status · title ··· [repo] [labels] · updated · author pfp
+/// Linear Issues/backlog row → PR.
+/// priority · #71 · status · title ··· [repo] [labels] · date · avatar
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let author_initial = pr
         .author
@@ -1266,23 +1597,27 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         .w_full()
         .items_center()
         .gap_2()
+        // Priority / grip (Linear left affordance)
         .child(
-            Icon::new(IconName::Ellipsis)
+            Icon::new(IconName::EllipsisVertical)
                 .xsmall()
-                .text_color(cx.theme().muted_foreground.opacity(0.55)),
+                .text_color(cx.theme().muted_foreground.opacity(0.45)),
         )
+        // PR id only
         .child(
             div()
-                .w(px(40.))
+                .min_w(px(36.))
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(format!("#{}", pr.number)),
         )
+        // Status icon (review state)
         .child(
             Icon::new(review_icon(pr.review_state, pr.is_draft))
                 .xsmall()
                 .text_color(status_color),
         )
+        // Title
         .child(
             div()
                 .flex_1()
@@ -1292,35 +1627,41 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
                 .child(pr.title),
         );
 
-    // Right-side pills: repo first, then labels (Linear project/label pills).
-    row = row.child(row_pill(
-        Some(IconName::Folder),
-        short_repo(pr.repo),
-        cx,
-    ));
+    // Right-side pills sit immediately before date (Linear project/label zone).
+    row = row.child(row_pill(Some(IconName::LayoutDashboard), short_repo(pr.repo), cx));
     for label in pr.labels.iter().take(2) {
         row = row.child(row_pill(None, label, cx));
     }
 
     if pr.ci == "Failing" {
         row = row.child(
-            Icon::new(IconName::CircleX)
-                .xsmall()
-                .text_color(cx.theme().danger),
+            h_flex()
+                .items_center()
+                .justify_center()
+                .size(px(16.))
+                .rounded_full()
+                .bg(cx.theme().danger.opacity(0.85))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger_foreground)
+                        .child("1"),
+                ),
         );
     }
 
     row.child(
         div()
+            .min_w(px(36.))
             .text_xs()
             .text_color(cx.theme().muted_foreground)
             .child(pr.updated),
     )
     .child(
         div()
-            .size(px(22.))
+            .size(px(20.))
             .rounded_full()
-            .bg(cx.theme().accent.opacity(0.45))
+            .bg(author_color(pr.author, cx))
             .flex()
             .items_center()
             .justify_center()
@@ -1328,7 +1669,7 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
                 div()
                     .text_xs()
                     .font_medium()
-                    .text_color(cx.theme().accent_foreground)
+                    .text_color(cx.theme().background)
                     .child(author_initial),
             ),
     )
@@ -1339,11 +1680,10 @@ fn row_pill(icon: Option<IconName>, text: &str, cx: &App) -> impl IntoElement {
         .items_center()
         .gap_1()
         .px_1()
-        .py(px(1.))
+        .py(px(2.))
         .rounded_md()
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().secondary.opacity(0.45));
+        .bg(cx.theme().secondary.opacity(0.65))
+        .flex_shrink_0();
     if let Some(icon) = icon {
         pill = pill.child(
             Icon::new(icon)
@@ -1353,11 +1693,22 @@ fn row_pill(icon: Option<IconName>, text: &str, cx: &App) -> impl IntoElement {
     }
     pill.child(
         div()
+            .max_w(px(110.))
             .text_xs()
             .text_color(cx.theme().muted_foreground)
             .truncate()
             .child(text.to_string()),
     )
+}
+
+fn author_color(author: &str, cx: &App) -> gpui_kit::Hsla {
+    // Stable stub colors so avatars aren't all the same accent.
+    match author.chars().next().unwrap_or('a').to_ascii_lowercase() {
+        'a'..='e' => cx.theme().accent,
+        'f'..='j' => cx.theme().success,
+        'k'..='o' => cx.theme().warning,
+        _ => cx.theme().info,
+    }
 }
 
 fn review_status_color(state: &str, is_draft: bool, cx: &App) -> gpui_kit::Hsla {

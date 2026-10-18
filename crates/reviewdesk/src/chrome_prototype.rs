@@ -107,7 +107,7 @@ impl ChromeVariant {
 
     pub fn sidebar_width(self) -> f32 {
         match self {
-            Self::A => 220.,
+            Self::A => 244.,
             Self::B => 200.,
             Self::C => 200.,
         }
@@ -232,8 +232,9 @@ impl StubViewId {
 
     pub fn label(self) -> &'static str {
         match self {
+            // Short labels so tabs read like Linear's All / Active / Backlog.
             Self::AllPrs => "All PRs",
-            Self::NeedsMyReview => "Needs my review",
+            Self::NeedsMyReview => "Needs review",
             Self::Mine => "Mine",
             Self::Drafts => "Drafts",
         }
