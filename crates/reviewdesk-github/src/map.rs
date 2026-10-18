@@ -1,8 +1,10 @@
 use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    InboxItem, InboxLabel, ProviderError, PullRequestDetail, PullRequestId, ReviewState, Reviewer,
+    InboxItem, InboxLabel, ProviderError, PullRequestDetail, ReviewState, Reviewer,
 };
 use serde::Deserialize;
+
+use crate::id::pull_request_id;
 
 #[derive(Debug, Deserialize)]
 pub struct GraphQlResponse<T> {
@@ -109,12 +111,11 @@ pub struct RepositoryPull {
 }
 
 pub fn map_inbox_item(node: &PullRequestNode) -> Result<InboxItem, ProviderError> {
-    let id = PullRequestId::github(
+    let id = pull_request_id(
         &node.repository.owner.login,
         &node.repository.name,
         node.number,
-    )
-    .map_err(|e| ProviderError::other(e.to_string()))?;
+    )?;
 
     let author = node.author.as_ref();
     Ok(InboxItem {

@@ -7,6 +7,7 @@ use reviewdesk_core::{
 use serde_json::json;
 
 use crate::error_map::from_status;
+use crate::id::parse_pull_request_id;
 use crate::map::{
     map_inbox_item, map_pull_request_detail, GraphQlResponse, PullRequestData, SearchData,
 };
@@ -157,9 +158,7 @@ impl Provider for GitHubProvider {
     }
 
     async fn fetch_patch(&self, id: &PullRequestId) -> Result<Patch, ProviderError> {
-        let (owner, repo, number) = id
-            .parse_github()
-            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let (owner, repo, number) = parse_pull_request_id(id)?;
         let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
 
         let response = self
@@ -187,9 +186,7 @@ impl Provider for GitHubProvider {
         &self,
         id: &PullRequestId,
     ) -> Result<PullRequestDetail, ProviderError> {
-        let (owner, name, number) = id
-            .parse_github()
-            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let (owner, name, number) = parse_pull_request_id(id)?;
         let data: PullRequestData = self
             .graphql(
                 PULL_REQUEST_QUERY,
