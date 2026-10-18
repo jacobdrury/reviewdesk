@@ -1,5 +1,7 @@
 mod app;
 mod auth;
+mod overview_body;
+mod theme;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,8 +11,9 @@ use reviewdesk_core::Provider;
 use reviewdesk_github::GitHubProvider;
 use tokio::runtime::Runtime;
 
-use app::ReviewDesk;
+use app::{appearance_from_system, ReviewDesk};
 use auth::resolve_credentials;
+use theme::{apply_sync_result, discover_macos};
 
 fn main() {
     let credentials = match resolve_credentials() {
@@ -43,6 +46,11 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // Boot with discovery before the first window so paint is not kit light.
+            // Use system appearance (same mapping as the window path) for mode:system.
+            // ReviewDesk re-syncs on create and on later focus.
+            let boot = discover_macos().sync(appearance_from_system(cx.window_appearance()));
+            apply_sync_result(cx, &boot);
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),

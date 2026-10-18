@@ -11,18 +11,41 @@ use gpui_kit::component::{
     scroll::Scrollbar,
     spinner::Spinner,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
+    text::{markdown_ast, MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView},
+    v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
+    WindowExt as _,
 };
 use gpui_kit::{
-    div, px, uniform_list, AppContext as _, Context, ElementId, Entity, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Task, UniformListScrollHandle, Window,
+    div, percentage, px, uniform_list, App, AppContext as _, Context, ElementId, Entity,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    WeakEntity, Window, WindowAppearance,
 };
 use reviewdesk_core::{
     InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
+use crate::overview_body::{
+    compose_overview_markdown, parse_body_segments, parse_details_fence, BodySegment, DetailsBlock,
+    DetailsFence,
+};
+use crate::theme::{
+    apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
+    Appearance, ToastIntent,
+};
 use crate::INBOX_REFRESH;
+
+fn appearance_from_window(window: &Window) -> Appearance {
+    appearance_from_system(window.appearance())
+}
+
+pub(crate) fn appearance_from_system(appearance: WindowAppearance) -> Appearance {
+    match appearance {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Appearance::Dark,
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Appearance::Light,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewTab {
@@ -59,10 +82,14 @@ pub struct ReviewDesk {
     annotation_seq: usize,
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    overview_segments: Vec<BodySegment>,
+    details_open: HashMap<usize, bool>,
     _inbox_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
+    _window_activation: Option<Subscription>,
+    skip_next_activation_sync: bool,
 }
 
 impl ReviewDesk {
@@ -89,14 +116,39 @@ impl ReviewDesk {
             annotation_seq: 0,
             inbox_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            overview_segments: Vec::new(),
+            details_open: HashMap::new(),
             _inbox_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
+            _window_activation: None,
+            skip_next_activation_sync: false,
         };
+        this.sync_theme(window, cx);
+        this.skip_next_activation_sync = true;
+        this._window_activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                return;
+            }
+            if !should_sync_on_activation(&mut this.skip_next_activation_sync) {
+                return;
+            }
+            this.sync_theme(window, cx);
+        }));
         this.refresh_inbox(cx);
         this.start_inbox_timer(cx);
         this
+    }
+
+    fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = appearance_from_window(window);
+        let result = discover_macos().sync(appearance);
+        apply_sync_result(cx, &result);
+        if let ToastIntent::MissingTheme { name } = &result.toast {
+            window.push_notification(missing_theme_notification(name), cx);
+        }
+        cx.notify();
     }
 
     fn start_inbox_timer(&mut self, cx: &mut Context<Self>) {
@@ -152,6 +204,8 @@ impl ReviewDesk {
         self.detail = LoadState::Idle;
         self.patch_files = LoadState::Idle;
         self.selected_file = None;
+        self.overview_segments.clear();
+        self.details_open.clear();
         self.diff.update(cx, |state, cx| state.set_files([], cx));
     }
 
@@ -164,11 +218,26 @@ impl ReviewDesk {
         self.detail = LoadState::Loading;
         self.patch_files = LoadState::Loading;
         self.selected_file = None;
+        self.overview_segments.clear();
+        self.details_open.clear();
         self.diff.update(cx, |state, cx| state.set_files([], cx));
         cx.notify();
 
         self.load_detail(id.clone(), cx);
         self.load_patch(id, cx);
+    }
+
+    fn details_is_open(&self, block: &DetailsBlock) -> bool {
+        self.details_open
+            .get(&block.id)
+            .copied()
+            .unwrap_or(block.default_open)
+    }
+
+    fn toggle_details(&mut self, id: usize, default_open: bool, cx: &mut Context<Self>) {
+        let open = self.details_open.get(&id).copied().unwrap_or(default_open);
+        self.details_open.insert(id, !open);
+        cx.notify();
     }
 
     fn load_detail(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
@@ -186,9 +255,16 @@ impl ReviewDesk {
                 if this.selected_id.as_ref() != Some(&request_id) {
                     return;
                 }
+                this.details_open.clear();
                 this.detail = match result {
-                    Ok(detail) => LoadState::Ready(detail),
-                    Err(error) => LoadState::Error(error),
+                    Ok(detail) => {
+                        this.overview_segments = parse_body_segments(&detail.body);
+                        LoadState::Ready(detail)
+                    }
+                    Err(error) => {
+                        this.overview_segments.clear();
+                        LoadState::Error(error)
+                    }
                 };
                 cx.notify();
             });
@@ -307,11 +383,17 @@ impl ReviewDesk {
                 h_flex()
                     .w_full()
                     .px_3()
-                    .py_2()
+                    .py(px(4.))
                     .justify_between()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().font_medium().child("Inbox"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .font_medium()
+                            .child("INBOX"),
+                    )
                     .child(
                         Button::new("inbox-refresh")
                             .ghost()
@@ -390,7 +472,7 @@ impl ReviewDesk {
                                         ListItem::new(SharedString::from(item.id.as_str()))
                                             .selected(selected)
                                             .px_3()
-                                            .py_2()
+                                            .py(px(4.))
                                             .child(
                                                 v_flex()
                                                     .w_full()
@@ -547,39 +629,28 @@ impl ReviewDesk {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
-                v_flex()
+                let is_open = |block: &DetailsBlock| self.details_is_open(block);
+                let markdown = compose_overview_markdown(
+                    &detail.title,
+                    &detail.author_login,
+                    detail.is_draft,
+                    &detail.web_url,
+                    &labels,
+                    &reviewers,
+                    &detail.body,
+                    &self.overview_segments,
+                    &is_open,
+                );
+                let owner = cx.entity().downgrade();
+                div()
                     .size_full()
                     .p_4()
-                    .gap_3()
-                    .overflow_hidden()
-                    .child(div().text_lg().font_medium().child(detail.title.clone()))
                     .child(
-                        div()
+                        TextView::markdown("pr-overview", markdown)
+                            .scrollable(true)
                             .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "{} · {} · {}",
-                                detail.author_login,
-                                if detail.is_draft { "Draft" } else { "Ready" },
-                                detail.web_url
-                            )),
-                    )
-                    .child(div().text_sm().child(format!("Labels: {labels}")))
-                    .child(div().text_sm().child(format!("Reviewers: {reviewers}")))
-                    .child(
-                        div()
-                            .flex_1()
-                            .p_3()
-                            .rounded_md()
-                            .bg(cx.theme().secondary)
-                            .overflow_hidden()
-                            .child(div().text_sm().whitespace_normal().child(
-                                if detail.body.trim().is_empty() {
-                                    "No description.".to_string()
-                                } else {
-                                    detail.body.clone()
-                                },
-                            )),
+                            .size_full()
+                            .plugin(DetailsTogglePlugin { owner }),
                     )
             }
         }
@@ -691,11 +762,17 @@ impl ReviewDesk {
                                         h_flex()
                                             .w_full()
                                             .px_3()
-                                            .py_2()
+                                            .py(px(4.))
                                             .justify_between()
                                             .border_b_1()
                                             .border_color(cx.theme().border)
-                                            .child(div().text_sm().font_medium().child("Files"))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .font_medium()
+                                                    .child("FILES"),
+                                            )
                                             .child(
                                                 Button::new("diff-mode")
                                                     .ghost()
@@ -763,9 +840,10 @@ impl ReviewDesk {
                     )
                     .child(
                         resizable_panel().child(
-                            v_flex().size_full().p_2().child(
+                            v_flex().size_full().min_w_0().p_2().child(
                                 Diff::new(&self.diff)
                                     .size_full()
+                                    .soft_wrap(true)
                                     .annotations(annotations)
                                     .render_annotation(move |annotation, _, cx| {
                                         let body = comments
@@ -800,6 +878,75 @@ impl ReviewDesk {
     }
 }
 
+struct DetailsTogglePlugin {
+    owner: WeakEntity<ReviewDesk>,
+}
+
+impl MarkdownPlugin for DetailsTogglePlugin {
+    fn is_block(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str {
+        "reviewdesk-details"
+    }
+
+    fn parse(&self, node: &markdown_ast::Node, _: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+        let markdown_ast::Node::Code(code) = node else {
+            return None;
+        };
+        let fence = parse_details_fence(
+            code.lang.as_deref(),
+            code.meta.as_deref(),
+            &code.value,
+        )?;
+        Some(
+            MarkdownNode::new("reviewdesk-details", fence.clone())
+                .text(fence.summary.clone())
+                .markdown(fence.summary),
+        )
+    }
+
+    fn render(&self, node: &MarkdownNode, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let fence = node
+            .data::<DetailsFence>()
+            .cloned()
+            .expect("reviewdesk-details node data");
+        let owner = self.owner.clone();
+        let id = fence.id;
+        let default_open = fence.default_open;
+        let open = fence.open;
+        div()
+            .id(("pr-details-toggle", id))
+            .h_flex()
+            .w_full()
+            .items_center()
+            .gap_1()
+            .py_1()
+            .cursor_pointer()
+            .rounded_sm()
+            .hover(|style| style.bg(cx.theme().secondary_hover))
+            .on_click(move |_, _, cx| {
+                let _ = owner.update(cx, |this, cx| {
+                    this.toggle_details(id, default_open, cx);
+                });
+            })
+            .child(
+                Icon::new(IconName::ChevronRight)
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground)
+                    .rotate(percentage(if open { 0.25 } else { 0. })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .font_medium()
+                    .min_w_0()
+                    .child(fence.summary.clone()),
+            )
+    }
+}
+
 fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
     DiffFile::parse(patch.as_str()).map_err(|error| {
         ProviderError::other(format!(
@@ -812,21 +959,31 @@ fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
 
 impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(
-            div().flex_1().min_h_0().child(
-                h_resizable("shell")
-                    .child(
-                        resizable_panel()
-                            .size(px(320.))
-                            .size_range(px(240.)..px(480.))
-                            .child(self.render_inbox(cx)),
-                    )
-                    .child(
-                        resizable_panel()
-                            .size_range(px(480.)..px(2000.))
-                            .child(self.render_review_pane(cx)),
-                    ),
-            ),
-        )
+        v_flex()
+            .size_full()
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .child("Review Desk"),
+                ),
+            )
+            .child(
+                div().flex_1().min_h_0().child(
+                    h_resizable("shell")
+                        .child(
+                            resizable_panel()
+                                .size(px(240.))
+                                .size_range(px(200.)..px(480.))
+                                .child(self.render_inbox(cx)),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size_range(px(480.)..px(2000.))
+                                .child(self.render_review_pane(cx)),
+                        ),
+                ),
+            )
     }
 }
