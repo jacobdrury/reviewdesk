@@ -12,7 +12,7 @@ Review Desk is **local-first** for Inbox and cached pull-request data:
 - Persistence uses **embedded Turso** (SQLite-compatible, in-process). **No Turso Cloud account** or remote database is required for local features.
 - Schema stays **vanilla SQLite** so we can fall back to plain SQLite later if needed.
 
-Decision records: [ADR-0001: LocalStore-first](docs/adr/0001-localstore-turso-local-first.md), [ADR-0003: Provider write-through and cache scope](docs/adr/0003-provider-writethrough-and-localstore-cache.md).
+Decision records: [ADR-0001: LocalStore-first](docs/adr/0001-localstore-turso-local-first.md), [ADR-0004: Provider write-through and cache scope](docs/adr/0004-provider-writethrough-and-localstore-cache.md).
 
 Agents: see root [AGENTS.md](AGENTS.md) and [GLOSSARY.md](GLOSSARY.md).
 

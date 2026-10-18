@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-10-18  
 **Context:** [Grill Provider write methods and LocalStore cache scope](https://github.com/jacobdrury/reviewdesk/issues/56) on [Day-to-day ready: GitHub review and manage desk](https://github.com/jacobdrury/reviewdesk/issues/46)  
-**Depends on:** [ADR-0001](0001-localstore-turso-local-first.md)
+**Depends on:** [ADR-0001](0001-localstore-turso-local-first.md); pending-draft LocalStore policy in [ADR-0003](0003-pending-review-localstore-not-annotations.md) (#54)
 
 ## Decision
 
@@ -13,7 +13,7 @@ ADR-0001’s LocalStore-first **read** path stays in force when Provider writeba
 
 ## LocalStore inventory
 
-**Cached (survive restart):** notification Inbox rows; Pull requests list rows; PR detail/metadata (including derived CODEOWNERS match summary when Metadata needs it); Patch; Conversation threads; Pipelines/check rollup; at most one pending review draft per pull request.
+**Cached (survive restart):** notification Inbox rows; Pull requests list rows; PR detail/metadata (including derived CODEOWNERS match summary when Metadata needs it); Patch; Conversation threads; Pipelines/check rollup; Pending review drafts per ADR-0003.
 
 **Not LocalStore:** full CI logs; raw CODEOWNERS file blob (fetch on demand, store derived summary on detail); Views (local-only, already decided); credentials (existing `gh`/PAT path — see [auth-github](../auth-github.md)).
 
