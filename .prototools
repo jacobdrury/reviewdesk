@@ -1,0 +1,6 @@
+# Task runner and CLI tools: managed by proto, not by moon's language toolchain
+moon = "2.6.2"
+proto = "0.63.1"
+
+# Rust channel/version: proto pin; moon inherits via versionFromPrototools.
+rust = "1.99.1"

@@ -1,0 +1,18 @@
+[package]
+name = "reviewdesk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Review Desk desktop app"
+
+[[bin]]
+name = "reviewdesk"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+gpui-kit = "0.7.3"
+reviewdesk-core = { path = "../reviewdesk-core" }
+reviewdesk-github = { path = "../reviewdesk-github" }
+tokio = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "reviewdesk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Domain types and Provider trait for Review Desk"
+
+[dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
