@@ -10,18 +10,22 @@ use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel},
     scroll::Scrollbar,
     spinner::Spinner,
+    status_bar::StatusBar,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
+    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar,
 };
 use gpui_kit::{
-    div, px, uniform_list, AppContext as _, Context, ElementId, Entity, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Task, UniformListScrollHandle, Window,
+    div, px, uniform_list, AppContext as _, Context, ElementId, Entity, InteractiveElement as _,
+    IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString, Styled as _, Task,
+    UniformListScrollHandle, Window,
+    prelude::FluentBuilder as _,
 };
 use reviewdesk_core::{
     InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
+use crate::chrome_prototype::ChromeVariant;
 use crate::INBOX_REFRESH;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +52,8 @@ pub struct ReviewDesk {
     provider: Arc<dyn Provider>,
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
+    /// PROTOTYPE: which shell chrome variant is on screen.
+    chrome: ChromeVariant,
     inbox: LoadState<Vec<InboxItem>>,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
@@ -78,6 +84,7 @@ impl ReviewDesk {
             provider,
             runtime: runtime.handle().clone(),
             _runtime: runtime,
+            chrome: ChromeVariant::A,
             inbox: LoadState::Idle,
             selected_id: None,
             review_tab: ReviewTab::Overview,
@@ -297,21 +304,68 @@ impl ReviewDesk {
             .unwrap_or(&[])
     }
 
+    fn cycle_chrome(&mut self, next: bool, cx: &mut Context<Self>) {
+        self.chrome = if next {
+            self.chrome.next()
+        } else {
+            self.chrome.prev()
+        };
+        cx.notify();
+    }
+
+    fn title_bar_label(&self) -> SharedString {
+        match self.chrome {
+            ChromeVariant::A => "Review Desk".into(),
+            ChromeVariant::B => match &self.detail {
+                LoadState::Ready(detail) => detail.title.clone().into(),
+                _ => "Review Desk".into(),
+            },
+            ChromeVariant::C => "review desk".into(),
+        }
+    }
+
     fn render_inbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
-        v_flex()
-            .size_full()
-            .border_r_1()
-            .border_color(cx.theme().border)
+        let chrome = self.chrome;
+        let header_py = if chrome.dense_headers() { px(4.) } else { px(8.) };
+        let row_py = if chrome.dense_headers() { px(4.) } else { px(8.) };
+        let inbox_label = if chrome.uppercase_panel_labels() {
+            "INBOX"
+        } else {
+            "Inbox"
+        };
+
+        let mut panel = v_flex().size_full();
+        if chrome.tone_split_panels() {
+            panel = panel.bg(cx.theme().secondary);
+        } else {
+            panel = panel
+                .border_r_1()
+                .border_color(cx.theme().border);
+        }
+
+        panel
             .child(
                 h_flex()
                     .w_full()
                     .px_3()
-                    .py_2()
+                    .py(header_py)
                     .justify_between()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().font_medium().child("Inbox"))
+                    .when(!chrome.hide_inbox_title(), |this| {
+                        this.child(
+                            div()
+                                .when(chrome.uppercase_panel_labels(), |el| {
+                                    el.text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .font_medium()
+                                })
+                                .when(!chrome.uppercase_panel_labels(), |el| el.font_medium())
+                                .child(inbox_label),
+                        )
+                    })
+                    .when(chrome.hide_inbox_title(), |this| this.child(div()))
                     .child(
                         Button::new("inbox-refresh")
                             .ghost()
@@ -376,6 +430,7 @@ impl ReviewDesk {
                 LoadState::Ready(items) => {
                     let items = items.clone();
                     let selected = self.selected_id.clone();
+                    let single_line = chrome.single_line_inbox_rows();
                     div()
                         .size_full()
                         .relative()
@@ -387,32 +442,57 @@ impl ReviewDesk {
                                         let id = item.id.clone();
                                         let selected = selected.as_ref() == Some(&item.id);
                                         let owner = entity.clone();
+                                        let row = if single_line {
+                                            h_flex()
+                                                .w_full()
+                                                .gap_2()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_medium()
+                                                        .truncate()
+                                                        .flex_1()
+                                                        .child(item.title.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .truncate()
+                                                        .child(format!(
+                                                            "{} · {}",
+                                                            item.repo_label, item.author_login
+                                                        )),
+                                                )
+                                                .into_any_element()
+                                        } else {
+                                            v_flex()
+                                                .w_full()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_medium()
+                                                        .truncate()
+                                                        .child(item.title.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .truncate()
+                                                        .child(format!(
+                                                            "{} · {}",
+                                                            item.repo_label, item.author_login
+                                                        )),
+                                                )
+                                                .into_any_element()
+                                        };
                                         ListItem::new(SharedString::from(item.id.as_str()))
                                             .selected(selected)
                                             .px_3()
-                                            .py_2()
-                                            .child(
-                                                v_flex()
-                                                    .w_full()
-                                                    .gap_1()
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .font_medium()
-                                                            .truncate()
-                                                            .child(item.title.clone()),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .truncate()
-                                                            .child(format!(
-                                                                "{} · {}",
-                                                                item.repo_label, item.author_login
-                                                            )),
-                                                    ),
-                                            )
+                                            .py(row_py)
+                                            .child(row)
                                             .on_click(move |_, _, cx| {
                                                 let id = id.clone();
                                                 let _ = owner.update(cx, |this, cx| {
@@ -432,12 +512,37 @@ impl ReviewDesk {
             })
     }
 
+    fn render_review_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab_ix = match self.review_tab {
+            ReviewTab::Overview => 0,
+            ReviewTab::Files => 1,
+        };
+        TabBar::new("review-tabs")
+            .w_full()
+            .px_2()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .selected_index(tab_ix)
+            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                let tab = if *ix == 0 {
+                    ReviewTab::Overview
+                } else {
+                    ReviewTab::Files
+                };
+                this.set_review_tab(tab, cx);
+            }))
+            .child(Tab::new().label("Overview"))
+            .child(Tab::new().label("Files"))
+    }
+
     fn render_review_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let chrome = self.chrome;
         if self.selected_id.is_none() {
             return v_flex()
                 .size_full()
                 .items_center()
                 .justify_center()
+                .when(chrome.tone_split_panels(), |el| el.bg(cx.theme().background))
                 .child(
                     div()
                         .text_sm()
@@ -447,36 +552,18 @@ impl ReviewDesk {
                 .into_any_element();
         }
 
-        let tab_ix = match self.review_tab {
-            ReviewTab::Overview => 0,
-            ReviewTab::Files => 1,
-        };
-
-        v_flex()
-            .size_full()
-            .child(
-                TabBar::new("review-tabs")
-                    .w_full()
-                    .px_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .selected_index(tab_ix)
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        let tab = if *ix == 0 {
-                            ReviewTab::Overview
-                        } else {
-                            ReviewTab::Files
-                        };
-                        this.set_review_tab(tab, cx);
-                    }))
-                    .child(Tab::new().label("Overview"))
-                    .child(Tab::new().label("Files")),
-            )
-            .child(match self.review_tab {
-                ReviewTab::Overview => self.render_overview(cx).into_any_element(),
-                ReviewTab::Files => self.render_files(cx).into_any_element(),
-            })
-            .into_any_element()
+        let mut pane = v_flex().size_full();
+        if chrome.tone_split_panels() {
+            pane = pane.bg(cx.theme().background);
+        }
+        if !chrome.global_tabs() {
+            pane = pane.child(self.render_review_tabs(cx));
+        }
+        pane.child(match self.review_tab {
+            ReviewTab::Overview => self.render_overview(cx).into_any_element(),
+            ReviewTab::Files => self.render_files(cx).into_any_element(),
+        })
+        .into_any_element()
     }
 
     fn render_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -547,12 +634,25 @@ impl ReviewDesk {
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
+                let body = if detail.body.trim().is_empty() {
+                    "No description.".to_string()
+                } else {
+                    detail.body.clone()
+                };
+                let as_card = self.chrome.overview_as_card();
+                let dense = self.chrome.dense_headers();
                 v_flex()
                     .size_full()
-                    .p_4()
+                    .p(if dense { px(12.) } else { px(16.) })
                     .gap_3()
                     .overflow_hidden()
-                    .child(div().text_lg().font_medium().child(detail.title.clone()))
+                    .child(
+                        div()
+                            .when(dense, |el| el.text_base())
+                            .when(!dense, |el| el.text_lg())
+                            .font_medium()
+                            .child(detail.title.clone()),
+                    )
                     .child(
                         div()
                             .text_sm()
@@ -566,21 +666,25 @@ impl ReviewDesk {
                     )
                     .child(div().text_sm().child(format!("Labels: {labels}")))
                     .child(div().text_sm().child(format!("Reviewers: {reviewers}")))
-                    .child(
+                    .child(if as_card {
                         div()
                             .flex_1()
                             .p_3()
                             .rounded_md()
                             .bg(cx.theme().secondary)
                             .overflow_hidden()
-                            .child(div().text_sm().whitespace_normal().child(
-                                if detail.body.trim().is_empty() {
-                                    "No description.".to_string()
-                                } else {
-                                    detail.body.clone()
-                                },
-                            )),
-                    )
+                            .child(div().text_sm().whitespace_normal().child(body))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .flex_1()
+                            .pl_3()
+                            .border_l_2()
+                            .border_color(cx.theme().border)
+                            .overflow_hidden()
+                            .child(div().text_sm().whitespace_normal().child(body))
+                            .into_any_element()
+                    })
             }
         }
     }
@@ -685,17 +789,41 @@ impl ReviewDesk {
                             .child(
                                 v_flex()
                                     .size_full()
-                                    .border_r_1()
-                                    .border_color(cx.theme().border)
+                                    .when(!self.chrome.tone_split_panels(), |el| {
+                                        el.border_r_1().border_color(cx.theme().border)
+                                    })
+                                    .when(self.chrome.tone_split_panels(), |el| {
+                                        el.bg(cx.theme().secondary)
+                                    })
                                     .child(
                                         h_flex()
                                             .w_full()
                                             .px_3()
-                                            .py_2()
+                                            .py(if self.chrome.dense_headers() {
+                                                px(4.)
+                                            } else {
+                                                px(8.)
+                                            })
                                             .justify_between()
                                             .border_b_1()
                                             .border_color(cx.theme().border)
-                                            .child(div().text_sm().font_medium().child("Files"))
+                                            .child(
+                                                div()
+                                                    .when(self.chrome.uppercase_panel_labels(), |el| {
+                                                        el.text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .font_medium()
+                                                    })
+                                                    .when(
+                                                        !self.chrome.uppercase_panel_labels(),
+                                                        |el| el.text_sm().font_medium(),
+                                                    )
+                                                    .child(if self.chrome.uppercase_panel_labels() {
+                                                        "FILES"
+                                                    } else {
+                                                        "Files"
+                                                    }),
+                                            )
                                             .child(
                                                 Button::new("diff-mode")
                                                     .ghost()
@@ -812,21 +940,127 @@ fn parse_patch(patch: &Patch) -> Result<Vec<DiffFile>, ProviderError> {
 
 impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().size_full().child(
-            div().flex_1().min_h_0().child(
-                h_resizable("shell")
+        let chrome = self.chrome;
+        let inbox_w = chrome.inbox_default_width();
+        let inbox_min = chrome.inbox_min_width();
+        let title = self.title_bar_label();
+
+        v_flex()
+            .size_full()
+            .bg(cx.theme().background)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                let key = event.keystroke.key.as_str();
+                if key == "[" || key == "left" {
+                    this.cycle_chrome(false, cx);
+                } else if key == "]" || key == "right" {
+                    this.cycle_chrome(true, cx);
+                }
+            }))
+            .child(
+                TitleBar::new().child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_2()
+                        .when(chrome == ChromeVariant::C, |el| el.justify_center())
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_medium()
+                                .when(chrome == ChromeVariant::C, |el| {
+                                    el.text_color(cx.theme().muted_foreground)
+                                })
+                                .child(title),
+                        )
+                        .when(chrome == ChromeVariant::A, |el| {
+                            el.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("prototype chrome"),
+                            )
+                        }),
+                ),
+            )
+            .when(chrome.global_tabs() && self.selected_id.is_some(), |el| {
+                el.child(self.render_review_tabs(cx))
+            })
+            .child(
+                div().flex_1().min_h_0().child(
+                    h_resizable("shell")
+                        .child(
+                            resizable_panel()
+                                .size(px(inbox_w))
+                                .size_range(px(inbox_min)..px(480.))
+                                .child(self.render_inbox(cx)),
+                        )
+                        .child(
+                            resizable_panel()
+                                .size_range(px(480.)..px(2000.))
+                                .child(self.render_review_pane(cx)),
+                        ),
+                ),
+            )
+            .when(chrome.show_status_strip(), |el| {
+                el.child(
+                    StatusBar::new()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .px_3()
+                        .py_1()
+                        .left(format!("chrome · {}", chrome.name()))
+                        .right("dark · prototype"),
+                )
+            })
+            .child(self.render_chrome_switcher(cx))
+    }
+}
+
+impl ReviewDesk {
+    fn render_chrome_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let current = self.chrome;
+        h_flex()
+            .id("chrome-prototype-switcher")
+            .w_full()
+            .justify_center()
+            .py_2()
+            .bg(cx.theme().background)
+            .child(
+                h_flex()
+                    .gap_2()
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().popover)
+                    .items_center()
                     .child(
-                        resizable_panel()
-                            .size(px(320.))
-                            .size_range(px(240.)..px(480.))
-                            .child(self.render_inbox(cx)),
+                        Button::new("chrome-prev")
+                            .ghost()
+                            .xsmall()
+                            .label("←")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cycle_chrome(false, cx);
+                            })),
                     )
                     .child(
-                        resizable_panel()
-                            .size_range(px(480.)..px(2000.))
-                            .child(self.render_review_pane(cx)),
+                        div()
+                            .min_w(px(200.))
+                            .text_sm()
+                            .text_center()
+                            .font_medium()
+                            .child(current.label()),
+                    )
+                    .child(
+                        Button::new("chrome-next")
+                            .ghost()
+                            .xsmall()
+                            .label("→")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cycle_chrome(true, cx);
+                            })),
                     ),
-            ),
-        )
+            )
     }
 }

@@ -1,10 +1,12 @@
 mod app;
 mod auth;
+mod chrome_prototype;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::{component::TitleBar, px, size, AppContext as _, WindowBounds, WindowOptions};
+use gpui_kit::component::{Theme, ThemeMode, TitleBar};
+use gpui_kit::{px, size, AppContext as _, WindowBounds, WindowOptions};
 use reviewdesk_core::Provider;
 use reviewdesk_github::GitHubProvider;
 use tokio::runtime::Runtime;
@@ -43,6 +45,8 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // PROTOTYPE: dark default so chrome variants read against Zed-like chrome.
+            Theme::change(ThemeMode::Dark, None, cx);
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
