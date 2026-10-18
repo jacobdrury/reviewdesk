@@ -4,18 +4,18 @@ use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    codeowners_breakdown, parse_codeowners, Credentials, NotificationListOptions, NotificationPage,
-    NotificationThreadId, Patch, PendingDiffReviewComment, Provider, ProviderError,
-    PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListOptions,
-    PullRequestThreads, ReviewSubmitEvent,
+    Credentials, MergeMethod, NotificationListOptions, NotificationPage, NotificationThreadId,
+    Patch, PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListOptions, PullRequestThreads, ReviewSubmitEvent,
+    codeowners_breakdown, parse_codeowners,
 };
 use serde_json::json;
 
 use crate::error_map::from_status;
 use crate::id::parse_pull_request_id;
 use crate::map::{
-    GraphQlResponse, PullRequestData, SearchData, map_pull_request_detail,
-    map_pull_request_list_item,
+    GraphQlResponse, PullRequestData, PullRequestNodeIdData, SearchData, map_pull_request_detail,
+    map_pull_request_list_item, merge_method_to_graphql, merge_method_to_rest,
 };
 use crate::notification::{NotificationThreadPayload, map_notification_thread};
 use crate::query::pull_request_search_query;
@@ -53,6 +53,7 @@ query PullRequestSearch($q: String!) {
 const PULL_REQUEST_QUERY: &str = r#"
 query PullRequest($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
+    autoMergeAllowed
     pullRequest(number: $number) {
       number
       title
@@ -79,10 +80,36 @@ query PullRequest($owner: String!, $name: String!, $number: Int!) {
       headRefName
       baseRefName
       mergeable
+      state
+      autoMergeRequest { enabledAt }
       assignees(first: 20) {
         nodes { login avatarUrl }
       }
     }
+  }
+}
+"#;
+
+const PULL_REQUEST_NODE_ID_QUERY: &str = r#"
+query PullRequestNodeId($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) { id }
+  }
+}
+"#;
+
+const ENABLE_AUTO_MERGE_MUTATION: &str = r#"
+mutation EnablePullRequestAutoMerge($input: EnablePullRequestAutoMergeInput!) {
+  enablePullRequestAutoMerge(input: $input) {
+    clientMutationId
+  }
+}
+"#;
+
+const DISABLE_AUTO_MERGE_MUTATION: &str = r#"
+mutation DisablePullRequestAutoMerge($input: DisablePullRequestAutoMergeInput!) {
+  disablePullRequestAutoMerge(input: $input) {
+    clientMutationId
   }
 }
 "#;
@@ -95,6 +122,27 @@ pub struct GitHubProvider {
 }
 
 impl GitHubProvider {
+    async fn fetch_pull_request_node_id(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<String, ProviderError> {
+        let (owner, name, number) = parse_pull_request_id(id)?;
+        let data: PullRequestNodeIdData = self
+            .graphql(
+                PULL_REQUEST_NODE_ID_QUERY,
+                json!({
+                    "owner": owner,
+                    "name": name,
+                    "number": number as i64,
+                }),
+            )
+            .await?;
+        data.repository
+            .and_then(|r| r.pull_request)
+            .and_then(|pr| pr.id)
+            .ok_or(ProviderError::NotFound)
+    }
+
     pub fn new(credentials: Credentials) -> Result<Self, ProviderError> {
         let client = Client::builder()
             .user_agent(USER_AGENT)
@@ -219,11 +267,10 @@ impl Provider for GitHubProvider {
             )
             .await?;
 
-        let node = data
-            .repository
-            .and_then(|r| r.pull_request)
-            .ok_or(ProviderError::NotFound)?;
-        let mut detail = map_pull_request_detail(&node)?;
+        let repository = data.repository.ok_or(ProviderError::NotFound)?;
+        let allow_auto_merge = repository.auto_merge_allowed.unwrap_or(false);
+        let node = repository.pull_request.ok_or(ProviderError::NotFound)?;
+        let mut detail = map_pull_request_detail(&node, allow_auto_merge)?;
         enrich_codeowners(self, &mut detail).await;
         Ok(detail)
     }
@@ -343,6 +390,54 @@ impl Provider for GitHubProvider {
             .await
             .map_err(|e| ProviderError::other(e.to_string()))?;
         map_write_response(response).await
+    }
+
+    async fn merge_pull_request(
+        &self,
+        id: &PullRequestId,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/merge");
+        let response = self
+            .client
+            .put(&url)
+            .bearer_auth(self.credentials.token())
+            .json(&json!({ "merge_method": merge_method_to_rest(method) }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        map_write_response(response).await
+    }
+
+    async fn set_pull_request_auto_merge(
+        &self,
+        id: &PullRequestId,
+        enabled: bool,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let node_id = self.fetch_pull_request_node_id(id).await?;
+        if enabled {
+            let _: serde_json::Value = self
+                .graphql(
+                    ENABLE_AUTO_MERGE_MUTATION,
+                    json!({
+                        "input": {
+                            "pullRequestId": node_id,
+                            "mergeMethod": merge_method_to_graphql(method),
+                        }
+                    }),
+                )
+                .await?;
+        } else {
+            let _: serde_json::Value = self
+                .graphql(
+                    DISABLE_AUTO_MERGE_MUTATION,
+                    json!({ "input": { "pullRequestId": node_id } }),
+                )
+                .await?;
+        }
+        Ok(())
     }
 
     async fn list_notifications(
@@ -561,9 +656,7 @@ async fn fetch_codeowners_source(
         return Err(ProviderError::NotFound);
     }
     for path in CODEOWNERS_PATHS {
-        let url = format!(
-            "{API_BASE}/repos/{owner}/{repo}/contents/{path}?ref={base_ref}"
-        );
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/contents/{path}?ref={base_ref}");
         let response = provider
             .client
             .get(&url)

@@ -133,6 +133,13 @@ alter table pull_request_details add column codeowners_rules_json text not null 
 alter table pull_request_details add column write_capabilities_json text not null default '{}';
 ",
     ),
+    (
+        8,
+        "
+alter table pull_request_details add column state text not null default 'open';
+alter table pull_request_details add column auto_merge_enabled integer not null default 0 check (auto_merge_enabled in (0, 1));
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

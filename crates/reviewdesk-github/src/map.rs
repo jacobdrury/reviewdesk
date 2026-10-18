@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    Assignee, MergeableState, MetadataWriteCapabilities, ProviderError, PullRequestDetail,
-    PullRequestLabel, PullRequestListItem, ReviewDecision, ReviewState, Reviewer,
+    Assignee, MergeMethod, MergeableState, MetadataWriteCapabilities, ProviderError,
+    PullRequestDetail, PullRequestLabel, PullRequestListItem, PullRequestState, ReviewDecision,
+    ReviewState, Reviewer,
 };
 use serde::Deserialize;
 
@@ -48,6 +49,14 @@ pub struct PullRequestNode {
     pub base_ref_name: Option<String>,
     pub mergeable: Option<String>,
     pub assignees: Option<AssigneeConnection>,
+    pub state: Option<String>,
+    pub auto_merge_request: Option<AutoMergeRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoMergeRequest {
+    pub enabled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,8 +124,26 @@ pub struct PullRequestData {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PullRequestNodeIdData {
+    pub repository: Option<RepositoryNodeId>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryNodeId {
+    pub pull_request: Option<PullRequestIdNode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestIdNode {
+    pub id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryPull {
+    pub auto_merge_allowed: Option<bool>,
     pub pull_request: Option<PullRequestNode>,
 }
 
@@ -154,7 +181,10 @@ pub fn map_pull_request_list_item(
     })
 }
 
-pub fn map_pull_request_detail(node: &PullRequestNode) -> Result<PullRequestDetail, ProviderError> {
+pub fn map_pull_request_detail(
+    node: &PullRequestNode,
+    allow_auto_merge: bool,
+) -> Result<PullRequestDetail, ProviderError> {
     let item = map_pull_request_list_item(node)?;
     let reviewers = node
         .review_requests
@@ -206,8 +236,10 @@ pub fn map_pull_request_detail(node: &PullRequestNode) -> Result<PullRequestDeta
         base_ref: node.base_ref_name.clone().unwrap_or_default(),
         review_decision: map_review_decision(node),
         mergeable: map_mergeable(node),
+        state: map_pull_request_state(node),
+        auto_merge_enabled: map_auto_merge_enabled(node),
         codeowners_rules: Vec::new(),
-        write_capabilities: github_write_capabilities(),
+        write_capabilities: github_write_capabilities(allow_auto_merge),
     })
 }
 
@@ -229,13 +261,46 @@ fn map_mergeable(node: &PullRequestNode) -> MergeableState {
     }
 }
 
-pub fn github_write_capabilities() -> MetadataWriteCapabilities {
+pub fn github_write_capabilities(allow_auto_merge: bool) -> MetadataWriteCapabilities {
     MetadataWriteCapabilities {
         labels: true,
         assignees: true,
         reviewers: true,
         draft_ready: true,
         base_ref: true,
+        merge: true,
+        auto_merge: allow_auto_merge,
+    }
+}
+
+fn map_pull_request_state(node: &PullRequestNode) -> PullRequestState {
+    match node.state.as_deref() {
+        Some("MERGED") => PullRequestState::Merged,
+        Some("CLOSED") => PullRequestState::Closed,
+        _ => PullRequestState::Open,
+    }
+}
+
+fn map_auto_merge_enabled(node: &PullRequestNode) -> bool {
+    node.auto_merge_request
+        .as_ref()
+        .and_then(|request| request.enabled_at)
+        .is_some()
+}
+
+pub fn merge_method_to_rest(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::Merge => "merge",
+        MergeMethod::Squash => "squash",
+        MergeMethod::Rebase => "rebase",
+    }
+}
+
+pub fn merge_method_to_graphql(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::Merge => "MERGE",
+        MergeMethod::Squash => "SQUASH",
+        MergeMethod::Rebase => "REBASE",
     }
 }
 
@@ -349,7 +414,7 @@ mod tests {
             .unwrap()
             .pull_request
             .unwrap();
-        let detail = map_pull_request_detail(&node).unwrap();
+        let detail = map_pull_request_detail(&node, true).unwrap();
         assert_eq!(detail.body, "Please review.");
         assert_eq!(detail.reviewers.len(), 1);
         assert_eq!(detail.reviewers[0].login, "bob");

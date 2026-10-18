@@ -2,13 +2,12 @@ use async_trait::async_trait;
 
 use crate::error::ProviderError;
 use crate::id::PullRequestId;
+use crate::metadata::MergeMethod;
 use crate::notification::{NotificationListOptions, NotificationPage, NotificationThreadId};
 use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListOptions};
-use crate::review_threads::{
-    PendingDiffReviewComment, PullRequestThreads, ReviewSubmitEvent,
-};
+use crate::review_threads::{PendingDiffReviewComment, PullRequestThreads, ReviewSubmitEvent};
 
 /// Host that exposes pull requests, their patches, and the notification Inbox.
 #[async_trait]
@@ -121,5 +120,24 @@ pub trait Provider: Send + Sync {
     ) -> Result<(), ProviderError> {
         let _ = (id, base_ref);
         Err(ProviderError::other("base branch write not supported"))
+    }
+
+    async fn merge_pull_request(
+        &self,
+        id: &PullRequestId,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let _ = (id, method);
+        Err(ProviderError::other("merge not supported"))
+    }
+
+    async fn set_pull_request_auto_merge(
+        &self,
+        id: &PullRequestId,
+        enabled: bool,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let _ = (id, enabled, method);
+        Err(ProviderError::other("auto-merge not supported"))
     }
 }

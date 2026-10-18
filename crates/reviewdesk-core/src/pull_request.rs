@@ -1,6 +1,7 @@
 use crate::id::PullRequestId;
 use crate::metadata::{
-    Assignee, CodeownersRule, MergeableState, MetadataWriteCapabilities, ReviewDecision,
+    Assignee, CodeownersRule, MergeableState, MetadataWriteCapabilities, PullRequestState,
+    ReviewDecision,
 };
 use crate::pull_request_list::PullRequestLabel;
 
@@ -21,6 +22,8 @@ pub struct PullRequestDetail {
     pub base_ref: String,
     pub review_decision: ReviewDecision,
     pub mergeable: MergeableState,
+    pub state: PullRequestState,
+    pub auto_merge_enabled: bool,
     pub codeowners_rules: Vec<CodeownersRule>,
     pub write_capabilities: MetadataWriteCapabilities,
 }
@@ -38,6 +41,8 @@ pub fn empty_metadata_fields() -> (
     String,
     ReviewDecision,
     MergeableState,
+    PullRequestState,
+    bool,
     Vec<CodeownersRule>,
     MetadataWriteCapabilities,
 ) {
@@ -47,6 +52,8 @@ pub fn empty_metadata_fields() -> (
         String::new(),
         ReviewDecision::Unknown,
         MergeableState::Unknown,
+        PullRequestState::Open,
+        false,
         Vec::new(),
         MetadataWriteCapabilities::default(),
     )

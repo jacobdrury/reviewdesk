@@ -1,8 +1,6 @@
 //! Provider write-through orchestration for Metadata manage mutations.
 
-use reviewdesk_core::{
-    Provider, ProviderError, PullRequestDetail, PullRequestId,
-};
+use reviewdesk_core::{MergeMethod, Provider, ProviderError, PullRequestDetail, PullRequestId};
 
 use crate::sync::AppLocalStore;
 
@@ -16,6 +14,8 @@ pub enum MetadataWrite {
     RerequestReviewer(String),
     SetDraft(bool),
     SetBaseRef(String),
+    Merge(MergeMethod),
+    SetAutoMerge { enabled: bool, method: MergeMethod },
 }
 
 /// Call Provider → write-through LocalStore on success → targeted refetch (refetch wins).
@@ -65,6 +65,12 @@ async fn run_provider_write(
         }
         MetadataWrite::SetDraft(is_draft) => provider.set_pull_request_draft(id, *is_draft).await,
         MetadataWrite::SetBaseRef(base) => provider.set_pull_request_base(id, base).await,
+        MetadataWrite::Merge(method) => provider.merge_pull_request(id, *method).await,
+        MetadataWrite::SetAutoMerge { enabled, method } => {
+            provider
+                .set_pull_request_auto_merge(id, *enabled, *method)
+                .await
+        }
     }
 }
 
@@ -209,6 +215,9 @@ mod tests {
         write_through_title: String,
         refetch_title: String,
         fail_write: bool,
+        fail_auto_merge: bool,
+        write_through_auto_merge: bool,
+        refetch_auto_merge: bool,
     }
 
     #[async_trait]
@@ -235,7 +244,12 @@ mod tests {
             } else {
                 self.refetch_title.clone()
             };
-            Ok(sample_detail(id, &title))
+            let auto_merge = if *count == 1 {
+                self.write_through_auto_merge
+            } else {
+                self.refetch_auto_merge
+            };
+            Ok(sample_detail(id, &title, auto_merge))
         }
 
         async fn set_pull_request_labels(
@@ -245,6 +259,29 @@ mod tests {
         ) -> Result<(), ProviderError> {
             if self.fail_write {
                 return Err(ProviderError::other("write failed"));
+            }
+            Ok(())
+        }
+
+        async fn merge_pull_request(
+            &self,
+            _id: &PullRequestId,
+            _method: MergeMethod,
+        ) -> Result<(), ProviderError> {
+            if self.fail_write {
+                return Err(ProviderError::other("write failed"));
+            }
+            Ok(())
+        }
+
+        async fn set_pull_request_auto_merge(
+            &self,
+            _id: &PullRequestId,
+            _enabled: bool,
+            _method: MergeMethod,
+        ) -> Result<(), ProviderError> {
+            if self.fail_auto_merge {
+                return Err(ProviderError::other("auto-merge not supported"));
             }
             Ok(())
         }
@@ -306,7 +343,11 @@ mod tests {
         PullRequestId::new(raw).unwrap()
     }
 
-    fn sample_detail(id: &PullRequestId, title: &str) -> PullRequestDetail {
+    fn sample_detail(
+        id: &PullRequestId,
+        title: &str,
+        auto_merge_enabled: bool,
+    ) -> PullRequestDetail {
         PullRequestDetail {
             id: id.clone(),
             title: title.into(),
@@ -325,6 +366,8 @@ mod tests {
             base_ref: "main".into(),
             review_decision: ReviewDecision::ReviewRequired,
             mergeable: reviewdesk_core::MergeableState::Mergeable,
+            state: reviewdesk_core::PullRequestState::Open,
+            auto_merge_enabled,
             codeowners_rules: Vec::new(),
             write_capabilities: MetadataWriteCapabilities {
                 labels: true,
@@ -332,6 +375,8 @@ mod tests {
                 reviewers: false,
                 draft_ready: true,
                 base_ref: false,
+                merge: true,
+                auto_merge: true,
             },
         }
     }
@@ -340,7 +385,7 @@ mod tests {
     async fn success_write_through_then_refetch_wins_in_local_store() {
         let id = pr_id("acme/widgets#1");
         let inner = Arc::new(DetailStore {
-            detail: StdMutex::new(Some(sample_detail(&id, "before"))),
+            detail: StdMutex::new(Some(sample_detail(&id, "before", false))),
             puts: StdMutex::new(Vec::new()),
         });
         let store = AppLocalStore::new(inner.clone());
@@ -349,6 +394,9 @@ mod tests {
             write_through_title: "write-through".into(),
             refetch_title: "refetch-wins".into(),
             fail_write: false,
+            fail_auto_merge: false,
+            write_through_auto_merge: false,
+            refetch_auto_merge: false,
         };
 
         let result = apply_metadata_write(
@@ -377,24 +425,20 @@ mod tests {
     async fn failed_provider_write_leaves_local_store_unchanged() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("reviewdesk.db");
-        let inner = Arc::new(
-            TursoLocalStore::open(&db_path)
-                .await
-                .expect("open store"),
-        );
+        let inner = Arc::new(TursoLocalStore::open(&db_path).await.expect("open store"));
         let store = AppLocalStore::new(inner);
         let id = pr_id("acme/widgets#2");
-        let seed = sample_detail(&id, "seed");
-        store
-            .put_pull_request_detail(&seed)
-            .await
-            .expect("seed");
+        let seed = sample_detail(&id, "seed", false);
+        store.put_pull_request_detail(&seed).await.expect("seed");
 
         let provider = StubProvider {
             fetch_count: StdMutex::new(0),
             write_through_title: "ignored".into(),
             refetch_title: "ignored".into(),
             fail_write: true,
+            fail_auto_merge: false,
+            write_through_auto_merge: false,
+            refetch_auto_merge: false,
         };
 
         let err = apply_metadata_write(
@@ -412,6 +456,123 @@ mod tests {
             .await
             .expect("get")
             .expect("row");
+        assert_eq!(cached.title, "seed");
+    }
+
+    #[tokio::test]
+    async fn merge_success_write_through_then_refetch_wins_in_local_store() {
+        let id = pr_id("acme/widgets#3");
+        let inner = Arc::new(DetailStore {
+            detail: StdMutex::new(Some(sample_detail(&id, "before", false))),
+            puts: StdMutex::new(Vec::new()),
+        });
+        let store = AppLocalStore::new(inner.clone());
+        let provider = StubProvider {
+            fetch_count: StdMutex::new(0),
+            write_through_title: "merged-write-through".into(),
+            refetch_title: "merged-refetch".into(),
+            fail_write: false,
+            fail_auto_merge: false,
+            write_through_auto_merge: false,
+            refetch_auto_merge: false,
+        };
+
+        let result = apply_metadata_write(
+            &provider,
+            &store,
+            &id,
+            MetadataWrite::Merge(MergeMethod::Squash),
+        )
+        .await
+        .expect("merge");
+
+        assert_eq!(result.title, "merged-refetch");
+        let cached = store
+            .get_pull_request_detail(&id)
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(cached.title, "merged-refetch");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_enable_success_refetch_wins_in_local_store() {
+        let id = pr_id("acme/widgets#4");
+        let inner = Arc::new(DetailStore {
+            detail: StdMutex::new(Some(sample_detail(&id, "before", false))),
+            puts: StdMutex::new(Vec::new()),
+        });
+        let store = AppLocalStore::new(inner.clone());
+        let provider = StubProvider {
+            fetch_count: StdMutex::new(0),
+            write_through_title: "ignored".into(),
+            refetch_title: "ignored".into(),
+            fail_write: false,
+            fail_auto_merge: false,
+            write_through_auto_merge: true,
+            refetch_auto_merge: true,
+        };
+
+        let result = apply_metadata_write(
+            &provider,
+            &store,
+            &id,
+            MetadataWrite::SetAutoMerge {
+                enabled: true,
+                method: MergeMethod::Squash,
+            },
+        )
+        .await
+        .expect("auto-merge");
+
+        assert!(result.auto_merge_enabled);
+        let cached = store
+            .get_pull_request_detail(&id)
+            .await
+            .expect("get")
+            .expect("row");
+        assert!(cached.auto_merge_enabled);
+    }
+
+    #[tokio::test]
+    async fn gated_auto_merge_failure_leaves_local_store_unchanged() {
+        let dir = tempdir().expect("tempdir");
+        let db_path = dir.path().join("reviewdesk.db");
+        let inner = Arc::new(TursoLocalStore::open(&db_path).await.expect("open store"));
+        let store = AppLocalStore::new(inner);
+        let id = pr_id("acme/widgets#5");
+        let seed = sample_detail(&id, "seed", false);
+        store.put_pull_request_detail(&seed).await.expect("seed");
+
+        let provider = StubProvider {
+            fetch_count: StdMutex::new(0),
+            write_through_title: "ignored".into(),
+            refetch_title: "ignored".into(),
+            fail_write: false,
+            fail_auto_merge: true,
+            write_through_auto_merge: true,
+            refetch_auto_merge: true,
+        };
+
+        let err = apply_metadata_write(
+            &provider,
+            &store,
+            &id,
+            MetadataWrite::SetAutoMerge {
+                enabled: true,
+                method: MergeMethod::Squash,
+            },
+        )
+        .await
+        .expect_err("should fail");
+
+        assert!(matches!(err, ProviderError::Other(_)));
+        let cached = store
+            .get_pull_request_detail(&id)
+            .await
+            .expect("get")
+            .expect("row");
+        assert!(!cached.auto_merge_enabled);
         assert_eq!(cached.title, "seed");
     }
 }

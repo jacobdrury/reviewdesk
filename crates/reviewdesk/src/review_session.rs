@@ -1259,9 +1259,9 @@ fn default_review_comment_body(range: &DiffLineRange) -> String {
 /// Initial Review pane tab when opening a pull request from an Inbox row.
 pub fn review_tab_for_reason(reason: NotificationReason) -> ReviewTab {
     match reason {
-        NotificationReason::Mention | NotificationReason::TeamMention | NotificationReason::Comment => {
-            ReviewTab::Conversation
-        }
+        NotificationReason::Mention
+        | NotificationReason::TeamMention
+        | NotificationReason::Comment => ReviewTab::Conversation,
         NotificationReason::CiActivity => ReviewTab::Pipelines,
         NotificationReason::ReviewRequested
         | NotificationReason::Author
@@ -1297,8 +1297,17 @@ mod tests {
     }
 
     fn sample_detail(id: &str, body: &str) -> PullRequestDetail {
-        let (assignees, head_ref, base_ref, review_decision, mergeable, codeowners_rules, write_capabilities) =
-            reviewdesk_core::empty_metadata_fields();
+        let (
+            assignees,
+            head_ref,
+            base_ref,
+            review_decision,
+            mergeable,
+            state,
+            auto_merge_enabled,
+            codeowners_rules,
+            write_capabilities,
+        ) = reviewdesk_core::empty_metadata_fields();
         PullRequestDetail {
             id: pr_id(id),
             title: format!("Title {id}"),
@@ -1314,6 +1323,8 @@ mod tests {
             base_ref,
             review_decision,
             mergeable,
+            state,
+            auto_merge_enabled,
             codeowners_rules,
             write_capabilities,
         }

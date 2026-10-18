@@ -1,9 +1,9 @@
 use reviewdesk_core::{
     Assignee, CodeownersRule, LocalStoreError, MergeableState, MetadataWriteCapabilities, Patch,
-    PullRequestDetail, PullRequestId, PullRequestLabel, ReviewDecision, Reviewer,
+    PullRequestDetail, PullRequestId, PullRequestLabel, PullRequestState, ReviewDecision, Reviewer,
 };
 use serde::{Deserialize, Serialize};
-use turso::{Connection, Value};
+use turso::{Connection, Value, params};
 
 use crate::error::map_other;
 
@@ -39,6 +39,10 @@ struct StoredWriteCapabilities {
     reviewers: bool,
     draft_ready: bool,
     base_ref: bool,
+    #[serde(default)]
+    merge: bool,
+    #[serde(default)]
+    auto_merge: bool,
 }
 
 pub async fn put_pull_request_detail(
@@ -56,8 +60,8 @@ pub async fn put_pull_request_detail(
         "
 insert into pull_request_details (
     id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json,
-    assignees_json, head_ref, base_ref, review_decision, mergeable, codeowners_rules_json, write_capabilities_json
-) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+    assignees_json, head_ref, base_ref, review_decision, mergeable, state, auto_merge_enabled, codeowners_rules_json, write_capabilities_json
+) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
 on conflict(id) do update set
     title = excluded.title,
     body = excluded.body,
@@ -72,10 +76,12 @@ on conflict(id) do update set
     base_ref = excluded.base_ref,
     review_decision = excluded.review_decision,
     mergeable = excluded.mergeable,
+    state = excluded.state,
+    auto_merge_enabled = excluded.auto_merge_enabled,
     codeowners_rules_json = excluded.codeowners_rules_json,
     write_capabilities_json = excluded.write_capabilities_json
 ",
-        (
+        params![
             detail.id.as_str(),
             detail.title.as_str(),
             detail.body.as_str(),
@@ -90,9 +96,11 @@ on conflict(id) do update set
             detail.base_ref.as_str(),
             review_decision_to_str(detail.review_decision),
             mergeable_to_str(detail.mergeable),
+            state_to_str(detail.state),
+            i64::from(detail.auto_merge_enabled),
             codeowners.as_str(),
             capabilities.as_str(),
-        ),
+        ],
     )
     .await
     .map_err(map_other)?;
@@ -109,7 +117,7 @@ pub async fn get_pull_request_detail(
             "
 select
     id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json,
-    assignees_json, head_ref, base_ref, review_decision, mergeable, codeowners_rules_json, write_capabilities_json
+    assignees_json, head_ref, base_ref, review_decision, mergeable, state, auto_merge_enabled, codeowners_rules_json, write_capabilities_json
 from pull_request_details
 where id = ?1
 ",
@@ -142,8 +150,12 @@ where id = ?1
     let mergeable = optional_text_at(&row, 13)?
         .map(|s| mergeable_from_str(&s))
         .unwrap_or(MergeableState::Unknown);
-    let codeowners_json = optional_text_at(&row, 14)?.unwrap_or_else(|| "[]".into());
-    let capabilities_json = optional_text_at(&row, 15)?.unwrap_or_else(|| "{}".into());
+    let state = optional_text_at(&row, 14)?
+        .map(|s| state_from_str(&s))
+        .unwrap_or(PullRequestState::Open);
+    let auto_merge_enabled = bool_at(&row, 15).unwrap_or(false);
+    let codeowners_json = optional_text_at(&row, 16)?.unwrap_or_else(|| "[]".into());
+    let capabilities_json = optional_text_at(&row, 17)?.unwrap_or_else(|| "{}".into());
 
     Ok(Some(PullRequestDetail {
         id: pr_id,
@@ -160,6 +172,8 @@ where id = ?1
         base_ref,
         review_decision,
         mergeable,
+        state,
+        auto_merge_enabled,
         codeowners_rules: decode_codeowners(&codeowners_json)?,
         write_capabilities: decode_capabilities(&capabilities_json)?,
     }))
@@ -292,6 +306,8 @@ fn encode_capabilities(caps: &MetadataWriteCapabilities) -> Result<String, Local
         reviewers: caps.reviewers,
         draft_ready: caps.draft_ready,
         base_ref: caps.base_ref,
+        merge: caps.merge,
+        auto_merge: caps.auto_merge,
     };
     serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
 }
@@ -305,6 +321,8 @@ fn decode_capabilities(json: &str) -> Result<MetadataWriteCapabilities, LocalSto
         reviewers: stored.reviewers,
         draft_ready: stored.draft_ready,
         base_ref: stored.base_ref,
+        merge: stored.merge,
+        auto_merge: stored.auto_merge,
     })
 }
 
@@ -341,6 +359,22 @@ fn mergeable_from_str(value: &str) -> MergeableState {
         "conflicting" => MergeableState::Conflicting,
         "blocked" => MergeableState::Blocked,
         _ => MergeableState::Unknown,
+    }
+}
+
+fn state_to_str(value: PullRequestState) -> &'static str {
+    match value {
+        PullRequestState::Open => "open",
+        PullRequestState::Merged => "merged",
+        PullRequestState::Closed => "closed",
+    }
+}
+
+fn state_from_str(value: &str) -> PullRequestState {
+    match value {
+        "merged" => PullRequestState::Merged,
+        "closed" => PullRequestState::Closed,
+        _ => PullRequestState::Open,
     }
 }
 
