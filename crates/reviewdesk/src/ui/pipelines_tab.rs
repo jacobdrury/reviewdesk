@@ -192,7 +192,7 @@ fn render_variant_b(
     v_flex()
         .size_full()
         .min_h_0()
-        .child(render_linear_toolbar(&data, "project", cx))
+        .child(render_linear_toolbar(&data, "run history", cx))
         .child(match data.empty_copy {
             Some(copy) => empty_state(copy, cx).into_any_element(),
             None => div()
@@ -202,21 +202,24 @@ fn render_variant_b(
                     h_resizable("proto-pipelines-split")
                         .child(
                             resizable_panel()
-                                .size(px(220.))
-                                .size_range(px(180.)..px(320.))
+                                .size(px(240.))
+                                .size_range(px(200.)..px(340.))
                                 .child(render_pipeline_nav(
                                     pipelines,
                                     selected,
                                     list_scroll,
-                                    entity,
+                                    entity.clone(),
                                     cx,
                                 )),
                         )
                         .child(
                             resizable_panel().size_range(px(280.)..px(2000.)).child(
-                                render_jobs_main(
+                                render_run_detail(
                                     pipelines.get(selected),
+                                    selected,
+                                    paint.collapsed_groups.clone(),
                                     detail_scroll,
+                                    entity,
                                     cx,
                                 ),
                             ),
@@ -471,18 +474,32 @@ fn render_pipeline_nav(
                                                     .text_color(job_color(pipeline.state, cx)),
                                             )
                                             .child(
-                                                div()
+                                                v_flex()
                                                     .flex_1()
                                                     .min_w_0()
-                                                    .text_sm()
-                                                    .truncate()
-                                                    .child(pipeline.name),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(pipeline.created),
+                                                    .gap_0()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .truncate()
+                                                            .child(format!(
+                                                                "{} {}",
+                                                                pipeline.name, pipeline.run_label
+                                                            )),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(
+                                                                cx.theme().muted_foreground,
+                                                            )
+                                                            .truncate()
+                                                            .child(format!(
+                                                                "{} · {}",
+                                                                pipeline.kind.label(),
+                                                                pipeline.created
+                                                            )),
+                                                    ),
                                             ),
                                     )
                                     .into_any_element()
@@ -496,18 +513,24 @@ fn render_pipeline_nav(
         )
 }
 
-fn render_jobs_main(
-    pipeline: Option<&StubPipeline>,
+/// B detail = A's Issues-list UI, scoped to one run, grouped by stage.
+fn render_run_detail(
+    pipeline: Option<&'static StubPipeline>,
+    pipeline_index: usize,
+    collapsed: HashSet<String>,
     scroll: UniformListScrollHandle,
+    entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let Some(pipeline) = pipeline else {
-        return empty_state("Select a Pipeline.", cx).into_any_element();
+        return empty_state("Select a Pipeline run.", cx).into_any_element();
     };
-    let jobs = pipeline.jobs;
     let name = pipeline.name;
+    let run_label = pipeline.run_label;
     let kind = pipeline.kind.label();
     let can_rerun = pipeline.can_rerun;
+    let rows = build_stage_rows(pipeline_index, pipeline, &collapsed);
+    let row_count = rows.len();
 
     v_flex()
         .size_full()
@@ -536,13 +559,13 @@ fn render_jobs_main(
                                 .text_sm()
                                 .font_medium()
                                 .truncate()
-                                .child(name),
+                                .child(format!("{name} {run_label}")),
                         )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(kind),
+                                .child(format!("{kind} · stages → jobs")),
                         ),
                 )
                 .child(if can_rerun {
@@ -566,10 +589,42 @@ fn render_jobs_main(
                 .min_h_0()
                 .relative()
                 .child(
-                    uniform_list("proto-pipelines-b-jobs", jobs.len(), move |range, _, cx| {
+                    uniform_list("proto-pipelines-b-detail", row_count, move |range, _, cx| {
                         range
-                            .map(|ix| {
-                                job_issue_row(0, name, &jobs[ix], 0, false, cx).into_any_element()
+                            .map(|ix| match &rows[ix] {
+                                FlatRow::Group {
+                                    key,
+                                    label,
+                                    count,
+                                    state,
+                                    depth,
+                                    can_rerun,
+                                } => group_header_row(
+                                    key,
+                                    label,
+                                    *count,
+                                    *state,
+                                    *depth,
+                                    *can_rerun,
+                                    collapsed.contains(key),
+                                    entity.clone(),
+                                    cx,
+                                )
+                                .into_any_element(),
+                                FlatRow::Job {
+                                    pipeline_name,
+                                    pipeline_index,
+                                    job,
+                                    depth,
+                                } => job_issue_row(
+                                    *pipeline_index,
+                                    pipeline_name,
+                                    job,
+                                    *depth,
+                                    false,
+                                    cx,
+                                )
+                                .into_any_element(),
                             })
                             .collect()
                     })
@@ -887,6 +942,7 @@ fn build_status_rows(
     let mut failed = Vec::new();
     let mut pending = Vec::new();
     let mut passed = Vec::new();
+    let mut skipped = Vec::new();
     for (index, pipeline) in pipelines.iter().enumerate() {
         for job in pipeline.jobs {
             let entry = (pipeline.name, index, job);
@@ -894,22 +950,24 @@ fn build_status_rows(
                 JobState::Failure => failed.push(entry),
                 JobState::Pending => pending.push(entry),
                 JobState::Success => passed.push(entry),
+                JobState::Skipped => skipped.push(entry),
             }
         }
     }
-    // Required urgency first within each bucket.
     let sort_jobs = |items: &mut Vec<(&'static str, usize, &'static StubJob)>| {
         items.sort_by_key(|(_, _, job)| if job.required { 0 } else { 1 });
     };
     sort_jobs(&mut failed);
     sort_jobs(&mut pending);
     sort_jobs(&mut passed);
+    sort_jobs(&mut skipped);
 
     let mut rows = Vec::new();
     for (key, label, state, items) in [
         ("status:failed", "Failed", JobState::Failure, failed),
         ("status:pending", "Pending", JobState::Pending, pending),
         ("status:passed", "Passed", JobState::Success, passed),
+        ("status:skipped", "Skipped", JobState::Skipped, skipped),
     ] {
         if items.is_empty() {
             continue;
@@ -937,11 +995,71 @@ fn build_status_rows(
     rows
 }
 
+/// Stage groups inside one run (GitLab stages / Actions job groups).
+fn build_stage_rows(
+    pipeline_index: usize,
+    pipeline: &'static StubPipeline,
+    collapsed: &HashSet<String>,
+) -> Vec<FlatRow> {
+    let mut order: Vec<&'static str> = Vec::new();
+    for job in pipeline.jobs {
+        let stage = job.stage.unwrap_or("jobs");
+        if !order.contains(&stage) {
+            order.push(stage);
+        }
+    }
+
+    let mut rows = Vec::new();
+    for stage in order {
+        let jobs: Vec<&'static StubJob> = pipeline
+            .jobs
+            .iter()
+            .filter(|j| j.stage.unwrap_or("jobs") == stage)
+            .collect();
+        let key = format!("stage:{pipeline_index}:{stage}");
+        let stage_state = aggregate_stage_state(&jobs);
+        rows.push(FlatRow::Group {
+            key: key.clone(),
+            label: stage.to_string(),
+            count: jobs.len(),
+            state: Some(stage_state),
+            depth: 0,
+            can_rerun: false,
+        });
+        if collapsed.contains(&key) {
+            continue;
+        }
+        for job in jobs {
+            rows.push(FlatRow::Job {
+                pipeline_name: pipeline.name,
+                pipeline_index,
+                job,
+                depth: 1,
+            });
+        }
+    }
+    rows
+}
+
+fn aggregate_stage_state(jobs: &[&StubJob]) -> JobState {
+    if jobs.iter().any(|j| j.state == JobState::Failure) {
+        return JobState::Failure;
+    }
+    if jobs.iter().any(|j| j.state == JobState::Pending) {
+        return JobState::Pending;
+    }
+    if jobs.iter().all(|j| j.state == JobState::Skipped) {
+        return JobState::Skipped;
+    }
+    JobState::Success
+}
+
 fn job_icon(state: JobState) -> IconName {
     match state {
         JobState::Success => IconName::CircleCheck,
         JobState::Pending => IconName::LoaderCircle,
         JobState::Failure => IconName::CircleX,
+        JobState::Skipped => IconName::Square,
     }
 }
 
@@ -950,6 +1068,7 @@ fn job_color(state: JobState, cx: &App) -> gpui_kit::Hsla {
         JobState::Success => cx.theme().success,
         JobState::Pending => cx.theme().warning,
         JobState::Failure => cx.theme().danger,
+        JobState::Skipped => cx.theme().muted_foreground,
     }
 }
 

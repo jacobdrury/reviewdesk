@@ -11,9 +11,10 @@
 //! Switcher cycles layout variants; `,` / `.` cycle stub scenarios.
 //!
 //! Three variants (structure differs; paint matches Linear):
-//! - A (Issues list): Pipeline groups + Job rows (sub-issue nest)
-//! - B (Project detail): left Pipeline nav + Jobs as the main list
-//! - C (Group by status): Failed / Pending / Passed groups across Jobs
+//! - A (Issues list): flat Pipeline groups + Job rows (one scroll)
+//! - B (Run history): left = each Pipeline run (push / MR iteration);
+//!   detail = A's nested UI grouped by stage (GitLab) or job group (Actions)
+//! - C (Group by status): Failed / Pending / Passed across all Jobs
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/pipelines-tab` (never merge as-is)
@@ -50,6 +51,8 @@ pub enum JobState {
     Success,
     Pending,
     Failure,
+    /// Stage/job not started (e.g. blocked by an earlier failure).
+    Skipped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,11 +70,16 @@ pub struct StubJob {
     pub duration: &'static str,
     /// Actions-backed jobs may offer Re-run; foreign App checks do not.
     pub can_rerun: bool,
+    /// GitLab stage name, or Actions grouping label. `None` = ungrouped.
+    pub stage: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StubPipeline {
+    /// Product name (workflow / pipeline definition), e.g. "CI".
     pub name: &'static str,
+    /// One run id for the left nav: GitLab pipeline iid, Actions run number, SHA.
+    pub run_label: &'static str,
     pub kind: PipelineKind,
     pub created: &'static str,
     pub state: JobState,
@@ -99,7 +107,7 @@ impl PipelinesVariant {
     pub fn name(self) -> &'static str {
         match self {
             Self::A => "Issues list",
-            Self::B => "Project detail",
+            Self::B => "Run history",
             Self::C => "Group by status",
         }
     }
@@ -210,6 +218,7 @@ impl JobState {
             Self::Success => "passed",
             Self::Pending => "pending",
             Self::Failure => "failed",
+            Self::Skipped => "skipped",
         }
     }
 }
@@ -225,22 +234,29 @@ impl RollupState {
     }
 }
 
-// --- stub fixtures (newest Pipeline first) ---
+// --- stub fixtures (newest Pipeline first = newest run / push) ---
+//
+// FAILING_REQUIRED models the common case: one CI definition, three runs as
+// the MR/PR iterates (GitLab pipeline iids / Actions run numbers), plus a
+// foreign App suite. Jobs carry `stage` so B's detail can nest like GitLab
+// stages (or Actions job groups).
 
 static FAILING_REQUIRED: &[StubPipeline] = &[
     StubPipeline {
         name: "CI",
+        run_label: "#1842",
         kind: PipelineKind::WorkflowRun,
         created: "2m ago",
         state: JobState::Failure,
         can_rerun: true,
         jobs: &[
             StubJob {
-                name: "test",
-                state: JobState::Failure,
+                name: "compile",
+                state: JobState::Success,
                 required: true,
-                duration: "1m 12s",
+                duration: "48s",
                 can_rerun: true,
+                stage: Some("build"),
             },
             StubJob {
                 name: "lint",
@@ -248,18 +264,97 @@ static FAILING_REQUIRED: &[StubPipeline] = &[
                 required: true,
                 duration: "24s",
                 can_rerun: true,
+                stage: Some("test"),
             },
             StubJob {
-                name: "build",
+                name: "unit",
+                state: JobState::Failure,
+                required: true,
+                duration: "1m 12s",
+                can_rerun: true,
+                stage: Some("test"),
+            },
+            StubJob {
+                name: "pages",
+                state: JobState::Skipped,
+                required: false,
+                duration: "—",
+                can_rerun: false,
+                stage: Some("deploy"),
+            },
+        ],
+    },
+    StubPipeline {
+        name: "CI",
+        run_label: "#1841",
+        kind: PipelineKind::WorkflowRun,
+        created: "45m ago",
+        state: JobState::Success,
+        can_rerun: true,
+        jobs: &[
+            StubJob {
+                name: "compile",
+                state: JobState::Success,
+                required: true,
+                duration: "44s",
+                can_rerun: true,
+                stage: Some("build"),
+            },
+            StubJob {
+                name: "lint",
+                state: JobState::Success,
+                required: true,
+                duration: "21s",
+                can_rerun: true,
+                stage: Some("test"),
+            },
+            StubJob {
+                name: "unit",
+                state: JobState::Success,
+                required: true,
+                duration: "58s",
+                can_rerun: true,
+                stage: Some("test"),
+            },
+            StubJob {
+                name: "pages",
                 state: JobState::Success,
                 required: false,
-                duration: "48s",
+                duration: "33s",
                 can_rerun: true,
+                stage: Some("deploy"),
+            },
+        ],
+    },
+    StubPipeline {
+        name: "CI",
+        run_label: "#1840",
+        kind: PipelineKind::WorkflowRun,
+        created: "2h ago",
+        state: JobState::Failure,
+        can_rerun: true,
+        jobs: &[
+            StubJob {
+                name: "compile",
+                state: JobState::Failure,
+                required: true,
+                duration: "12s",
+                can_rerun: true,
+                stage: Some("build"),
+            },
+            StubJob {
+                name: "lint",
+                state: JobState::Skipped,
+                required: true,
+                duration: "—",
+                can_rerun: false,
+                stage: Some("test"),
             },
         ],
     },
     StubPipeline {
         name: "Codecov",
+        run_label: "suite",
         kind: PipelineKind::CheckSuite,
         created: "3m ago",
         state: JobState::Success,
@@ -270,20 +365,7 @@ static FAILING_REQUIRED: &[StubPipeline] = &[
             required: false,
             duration: "12s",
             can_rerun: false,
-        }],
-    },
-    StubPipeline {
-        name: "continuous-integration/travis-ci",
-        kind: PipelineKind::StatusContext,
-        created: "4m ago",
-        state: JobState::Success,
-        can_rerun: false,
-        jobs: &[StubJob {
-            name: "continuous-integration/travis-ci",
-            state: JobState::Success,
-            required: false,
-            duration: "—",
-            can_rerun: false,
+            stage: None,
         }],
     },
 ];
@@ -291,17 +373,27 @@ static FAILING_REQUIRED: &[StubPipeline] = &[
 static PENDING_REQUIRED: &[StubPipeline] = &[
     StubPipeline {
         name: "CI",
+        run_label: "#1843",
         kind: PipelineKind::WorkflowRun,
         created: "30s ago",
         state: JobState::Pending,
         can_rerun: true,
         jobs: &[
             StubJob {
-                name: "test",
+                name: "compile",
+                state: JobState::Success,
+                required: true,
+                duration: "40s",
+                can_rerun: true,
+                stage: Some("build"),
+            },
+            StubJob {
+                name: "unit",
                 state: JobState::Pending,
                 required: true,
                 duration: "…",
                 can_rerun: true,
+                stage: Some("test"),
             },
             StubJob {
                 name: "lint",
@@ -309,11 +401,39 @@ static PENDING_REQUIRED: &[StubPipeline] = &[
                 required: true,
                 duration: "22s",
                 can_rerun: true,
+                stage: Some("test"),
+            },
+        ],
+    },
+    StubPipeline {
+        name: "CI",
+        run_label: "#1842",
+        kind: PipelineKind::WorkflowRun,
+        created: "20m ago",
+        state: JobState::Success,
+        can_rerun: true,
+        jobs: &[
+            StubJob {
+                name: "compile",
+                state: JobState::Success,
+                required: true,
+                duration: "41s",
+                can_rerun: true,
+                stage: Some("build"),
+            },
+            StubJob {
+                name: "unit",
+                state: JobState::Success,
+                required: true,
+                duration: "55s",
+                can_rerun: true,
+                stage: Some("test"),
             },
         ],
     },
     StubPipeline {
         name: "deploy-preview",
+        run_label: "#902",
         kind: PipelineKind::WorkflowRun,
         created: "1m ago",
         state: JobState::Success,
@@ -324,6 +444,7 @@ static PENDING_REQUIRED: &[StubPipeline] = &[
             required: false,
             duration: "41s",
             can_rerun: true,
+            stage: None,
         }],
     },
 ];
@@ -331,6 +452,7 @@ static PENDING_REQUIRED: &[StubPipeline] = &[
 static OPTIONAL_ONLY_FAIL: &[StubPipeline] = &[
     StubPipeline {
         name: "CI",
+        run_label: "#1901",
         kind: PipelineKind::WorkflowRun,
         created: "5m ago",
         state: JobState::Success,
@@ -342,6 +464,7 @@ static OPTIONAL_ONLY_FAIL: &[StubPipeline] = &[
                 required: true,
                 duration: "58s",
                 can_rerun: true,
+                stage: Some("checks"),
             },
             StubJob {
                 name: "lint",
@@ -349,11 +472,13 @@ static OPTIONAL_ONLY_FAIL: &[StubPipeline] = &[
                 required: true,
                 duration: "19s",
                 can_rerun: true,
+                stage: Some("checks"),
             },
         ],
     },
     StubPipeline {
         name: "CodeQL",
+        run_label: "suite",
         kind: PipelineKind::CheckSuite,
         created: "6m ago",
         state: JobState::Failure,
@@ -364,6 +489,7 @@ static OPTIONAL_ONLY_FAIL: &[StubPipeline] = &[
             required: false,
             duration: "2m 01s",
             can_rerun: false,
+            stage: None,
         }],
     },
 ];
@@ -371,6 +497,7 @@ static OPTIONAL_ONLY_FAIL: &[StubPipeline] = &[
 static ALL_GREEN: &[StubPipeline] = &[
     StubPipeline {
         name: "CI",
+        run_label: "#2004",
         kind: PipelineKind::WorkflowRun,
         created: "8m ago",
         state: JobState::Success,
@@ -382,6 +509,7 @@ static ALL_GREEN: &[StubPipeline] = &[
                 required: true,
                 duration: "1m 04s",
                 can_rerun: true,
+                stage: Some("test"),
             },
             StubJob {
                 name: "lint",
@@ -389,11 +517,31 @@ static ALL_GREEN: &[StubPipeline] = &[
                 required: true,
                 duration: "21s",
                 can_rerun: true,
+                stage: Some("test"),
+            },
+        ],
+    },
+    StubPipeline {
+        name: "CI",
+        run_label: "#2003",
+        kind: PipelineKind::WorkflowRun,
+        created: "1h ago",
+        state: JobState::Success,
+        can_rerun: true,
+        jobs: &[
+            StubJob {
+                name: "test",
+                state: JobState::Success,
+                required: true,
+                duration: "59s",
+                can_rerun: true,
+                stage: Some("test"),
             },
         ],
     },
     StubPipeline {
         name: "Codecov",
+        run_label: "suite",
         kind: PipelineKind::CheckSuite,
         created: "9m ago",
         state: JobState::Success,
@@ -404,6 +552,7 @@ static ALL_GREEN: &[StubPipeline] = &[
             required: false,
             duration: "9s",
             can_rerun: false,
+            stage: None,
         }],
     },
 ];

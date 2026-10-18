@@ -105,7 +105,7 @@ impl ReviewDesk {
             shell_nav: ShellNav::PullRequests,
             prototype_tab: PrototypeReviewTab::Pipelines,
             metadata_open: false,
-            pipelines_variant: PipelinesVariant::A,
+            pipelines_variant: PipelinesVariant::B,
             pipelines_scenario: StubScenario::FailingRequired,
             selected_pipeline: 0,
             collapsed_groups: HashSet::new(),
