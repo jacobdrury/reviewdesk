@@ -1215,7 +1215,7 @@ fn render_pr_rows(
 }
 
 /// Linear Issues/backlog row → PR.
-/// files · #71 · 2h · status · title ··· [repo] [labels] · avatar
+/// Fixed left columns so files / # / time / status stack vertically across rows.
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let author_initial = pr
         .author
@@ -1228,27 +1228,43 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let mut row = h_flex()
         .w_full()
         .items_center()
-        .gap_2()
-        .child(filesize_chip(pr.files, cx))
+        .gap_3()
+        // Tight fixed-width meta cluster — no flex growth between cells.
         .child(
-            div()
-                .min_w(px(36.))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("#{}", pr.number)),
-        )
-        // Time sits immediately right of the PR number.
-        .child(
-            div()
-                .min_w(px(28.))
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(pr.updated),
-        )
-        .child(
-            Icon::new(review_icon(pr.review_state, pr.is_draft))
-                .xsmall()
-                .text_color(status_color),
+            h_flex()
+                .items_center()
+                .gap_1()
+                .flex_shrink_0()
+                .child(filesize_chip(pr.files, cx))
+                .child(
+                    div()
+                        .w(px(40.))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("#{}", pr.number)),
+                )
+                .child(
+                    div()
+                        .w(px(24.))
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(pr.updated),
+                )
+                .child(
+                    div()
+                        .w(px(16.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(review_icon(pr.review_state, pr.is_draft))
+                                .xsmall()
+                                .text_color(status_color),
+                        ),
+                ),
         )
         .child(
             div()
@@ -1351,9 +1367,10 @@ fn label_pill(name: &str, cx: &App) -> impl IntoElement {
         )
 }
 
-/// Compact PR size signal: file count only (no ± line noise).
+/// Compact PR size signal: fixed width so columns stay aligned (icon + up to 2 digits).
 fn filesize_chip(files: u32, cx: &App) -> impl IntoElement {
     h_flex()
+        .w(px(36.))
         .items_center()
         .gap_1()
         .flex_shrink_0()
@@ -1364,6 +1381,7 @@ fn filesize_chip(files: u32, cx: &App) -> impl IntoElement {
         )
         .child(
             div()
+                .w(px(16.))
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(files.to_string()),
