@@ -19,6 +19,7 @@ use tokio::runtime::Handle;
 
 use crate::PULL_REQUESTS_REFRESH;
 use crate::review_session::{Effect, Intent, ReviewSession};
+use crate::metadata_write::apply_metadata_write;
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
     refresh_pull_request_detail, sync_pull_requests_from_provider,
@@ -58,6 +59,7 @@ pub struct ReviewDesk {
     _pull_requests_sync_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
+    _metadata_write_task: Task<()>,
     _refresh_timer: Task<()>,
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
@@ -87,6 +89,7 @@ impl ReviewDesk {
             _pull_requests_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
+            _metadata_write_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
             _window_activation: None,
             skip_next_activation_sync: false,
@@ -124,8 +127,38 @@ impl ReviewDesk {
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
+                Effect::RunMetadataWrite { id, write } => {
+                    self.run_metadata_write(id, write, cx)
+                }
             }
         }
+    }
+
+    fn run_metadata_write(
+        &mut self,
+        id: PullRequestId,
+        write: crate::metadata_write::MetadataWrite,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        self._metadata_write_task = cx.spawn(async move |this, cx| {
+            let finished_id = id.clone();
+            let result = runtime
+                .spawn(async move { apply_metadata_write(provider.as_ref(), &store, &id, write).await })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::MetadataWriteFinished {
+                        id: finished_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
     }
 
     fn sync_diff_widget(&mut self, cx: &mut Context<Self>) {

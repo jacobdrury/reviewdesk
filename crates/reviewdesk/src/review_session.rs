@@ -14,6 +14,8 @@ use reviewdesk_core::{
     Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
 };
 
+use crate::metadata_write::MetadataWrite;
+
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
     details_effective_open, open_details_ids, parse_body_segments,
@@ -66,6 +68,11 @@ pub enum Intent {
         had_cache: bool,
         result: Result<Patch, ProviderError>,
     },
+    MetadataWrite(MetadataWrite),
+    MetadataWriteFinished {
+        id: PullRequestId,
+        result: Result<PullRequestDetail, ProviderError>,
+    },
 }
 
 /// Work the shell must perform against LocalStore / Provider / timers.
@@ -76,6 +83,10 @@ pub enum Effect {
     FetchDetail { id: PullRequestId },
     FetchPatch { id: PullRequestId },
     ArmPullRequestsRefreshTimer,
+    RunMetadataWrite {
+        id: PullRequestId,
+        write: MetadataWrite,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +186,8 @@ pub struct SessionView {
     /// Bumps when Diff surface inputs change (mode, selected file, materialization).
     pub diff_revision: u64,
     pub annotations: Vec<AnnotationView>,
+    pub metadata_write_pending: bool,
+    pub metadata_write_error: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -212,6 +225,8 @@ pub struct ReviewSession {
     details_open: HashMap<usize, bool>,
     overview_compose_cache: Option<OverviewComposeCache>,
     file_list_paths: Arc<[SharedString]>,
+    metadata_write_pending: bool,
+    metadata_write_error: Option<String>,
 }
 
 impl ReviewSession {
@@ -237,6 +252,8 @@ impl ReviewSession {
             details_open: HashMap::new(),
             overview_compose_cache: None,
             file_list_paths: Arc::from([]),
+            metadata_write_pending: false,
+            metadata_write_error: None,
         }
     }
 
@@ -329,6 +346,11 @@ impl ReviewSession {
                 self.on_patch_network(id, had_cache, result);
                 Vec::new()
             }
+            Intent::MetadataWrite(write) => self.begin_metadata_write(write),
+            Intent::MetadataWriteFinished { id, result } => {
+                self.on_metadata_write_finished(id, result);
+                Vec::new()
+            }
         }
     }
 
@@ -366,6 +388,35 @@ impl ReviewSession {
             diff_mode: self.diff_mode,
             diff_revision: self.diff_revision,
             annotations,
+            metadata_write_pending: self.metadata_write_pending,
+            metadata_write_error: self.metadata_write_error.clone(),
+        }
+    }
+
+    fn begin_metadata_write(&mut self, write: MetadataWrite) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        self.metadata_write_pending = true;
+        self.metadata_write_error = None;
+        vec![Effect::RunMetadataWrite { id, write }]
+    }
+
+    fn on_metadata_write_finished(
+        &mut self,
+        id: PullRequestId,
+        result: Result<PullRequestDetail, ProviderError>,
+    ) {
+        self.metadata_write_pending = false;
+        match result {
+            Ok(detail) => {
+                if self.selected_id.as_ref() == Some(&id) {
+                    self.apply_detail(detail);
+                }
+            }
+            Err(error) => {
+                self.metadata_write_error = Some(error.to_string());
+            }
         }
     }
 
@@ -749,6 +800,7 @@ impl ReviewSession {
             body: &detail.body,
             segments: &self.overview_segments,
             is_open: &is_open,
+            codeowners_rules: &detail.codeowners_rules,
         }));
         self.overview_compose_cache = Some(OverviewComposeCache {
             pr_id: key.0,
@@ -798,6 +850,8 @@ mod tests {
     }
 
     fn sample_detail(id: &str, body: &str) -> PullRequestDetail {
+        let (assignees, head_ref, base_ref, review_decision, mergeable, codeowners_rules, write_capabilities) =
+            reviewdesk_core::empty_metadata_fields();
         PullRequestDetail {
             id: pr_id(id),
             title: format!("Title {id}"),
@@ -808,6 +862,13 @@ mod tests {
             labels: Vec::new(),
             web_url: format!("https://example.test/{id}"),
             reviewers: Vec::new(),
+            assignees,
+            head_ref,
+            base_ref,
+            review_decision,
+            mergeable,
+            codeowners_rules,
+            write_capabilities,
         }
     }
 

@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod metadata_write;
 mod overview_body;
 mod patch_index;
 mod paths;

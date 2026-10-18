@@ -1,4 +1,7 @@
 use crate::id::PullRequestId;
+use crate::metadata::{
+    Assignee, CodeownersRule, MergeableState, MetadataWriteCapabilities, ReviewDecision,
+};
 use crate::pull_request_list::PullRequestLabel;
 
 /// Overview detail for a selected pull request.
@@ -13,10 +16,38 @@ pub struct PullRequestDetail {
     pub labels: Vec<PullRequestLabel>,
     pub web_url: String,
     pub reviewers: Vec<Reviewer>,
+    pub assignees: Vec<Assignee>,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub review_decision: ReviewDecision,
+    pub mergeable: MergeableState,
+    pub codeowners_rules: Vec<CodeownersRule>,
+    pub write_capabilities: MetadataWriteCapabilities,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reviewer {
     pub login: String,
     pub avatar_url: Option<String>,
+}
+
+/// Empty metadata-panel fields for tests and partial construction.
+pub fn empty_metadata_fields() -> (
+    Vec<Assignee>,
+    String,
+    String,
+    ReviewDecision,
+    MergeableState,
+    Vec<CodeownersRule>,
+    MetadataWriteCapabilities,
+) {
+    (
+        Vec::new(),
+        String::new(),
+        String::new(),
+        ReviewDecision::Unknown,
+        MergeableState::Unknown,
+        Vec::new(),
+        MetadataWriteCapabilities::default(),
+    )
 }

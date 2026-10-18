@@ -1,6 +1,8 @@
 //! Split a PR description into markdown runs and HTML `<details>` blocks,
 //! then compose a single Overview markdown document for virtualized scrolling.
 
+use reviewdesk_core::CodeownersRule;
+
 pub const DETAILS_FENCE_LANG: &str = "reviewdesk-details";
 
 /// Bodies at or above this nested character count are not inlined on first
@@ -50,6 +52,7 @@ pub struct OverviewMarkdownInput<'a> {
     pub body: &'a str,
     pub segments: &'a [BodySegment],
     pub is_open: &'a dyn Fn(&DetailsBlock) -> bool,
+    pub codeowners_rules: &'a [CodeownersRule],
 }
 
 /// Build the full Overview markdown, including title/meta and details fences.
@@ -75,6 +78,28 @@ pub fn compose_overview_markdown(input: OverviewMarkdownInput<'_>) -> String {
         return out;
     }
     out.push_str(&compose_body_segments(input.segments, input.is_open));
+    out.push_str(&compose_codeowners_section(input.codeowners_rules));
+    out
+}
+
+/// Markdown block for matched CODEOWNERS rules (after the description).
+pub fn compose_codeowners_section(rules: &[CodeownersRule]) -> String {
+    if rules.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\n## CODEOWNERS\n\n");
+    for rule in rules {
+        out.push_str("- `");
+        out.push_str(rule.pattern.trim());
+        out.push_str("` → ");
+        out.push_str(&rule.owners.join(", "));
+        if !rule.matched_paths.is_empty() {
+            out.push_str(" (");
+            out.push_str(&rule.matched_paths.join(", "));
+            out.push(')');
+        }
+        out.push('\n');
+    }
     out
 }
 

@@ -1,5 +1,6 @@
 use reviewdesk_core::{
-    LocalStoreError, Patch, PullRequestDetail, PullRequestId, PullRequestLabel, Reviewer,
+    Assignee, CodeownersRule, LocalStoreError, MergeableState, MetadataWriteCapabilities, Patch,
+    PullRequestDetail, PullRequestId, PullRequestLabel, ReviewDecision, Reviewer,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Connection, Value};
@@ -18,20 +19,46 @@ struct StoredReviewer {
     avatar_url: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct StoredAssignee {
+    login: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredCodeownersRule {
+    pattern: String,
+    owners: Vec<String>,
+    matched_paths: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct StoredWriteCapabilities {
+    labels: bool,
+    assignees: bool,
+    reviewers: bool,
+    draft_ready: bool,
+    base_ref: bool,
+}
+
 pub async fn put_pull_request_detail(
     conn: &Connection,
     detail: &PullRequestDetail,
 ) -> Result<(), LocalStoreError> {
     let labels = encode_labels(&detail.labels)?;
     let reviewers = encode_reviewers(&detail.reviewers)?;
+    let assignees = encode_assignees(&detail.assignees)?;
+    let codeowners = encode_codeowners(&detail.codeowners_rules)?;
+    let capabilities = encode_capabilities(&detail.write_capabilities)?;
     let is_draft = if detail.is_draft { 1i64 } else { 0i64 };
 
     conn.execute(
         "
-INSERT INTO pull_request_details (
-    id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-ON CONFLICT(id) DO UPDATE SET
+insert into pull_request_details (
+    id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json,
+    assignees_json, head_ref, base_ref, review_decision, mergeable, codeowners_rules_json, write_capabilities_json
+) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+on conflict(id) do update set
     title = excluded.title,
     body = excluded.body,
     author_login = excluded.author_login,
@@ -39,7 +66,14 @@ ON CONFLICT(id) DO UPDATE SET
     is_draft = excluded.is_draft,
     labels_json = excluded.labels_json,
     web_url = excluded.web_url,
-    reviewers_json = excluded.reviewers_json
+    reviewers_json = excluded.reviewers_json,
+    assignees_json = excluded.assignees_json,
+    head_ref = excluded.head_ref,
+    base_ref = excluded.base_ref,
+    review_decision = excluded.review_decision,
+    mergeable = excluded.mergeable,
+    codeowners_rules_json = excluded.codeowners_rules_json,
+    write_capabilities_json = excluded.write_capabilities_json
 ",
         (
             detail.id.as_str(),
@@ -51,6 +85,13 @@ ON CONFLICT(id) DO UPDATE SET
             labels.as_str(),
             detail.web_url.as_str(),
             reviewers.as_str(),
+            assignees.as_str(),
+            detail.head_ref.as_str(),
+            detail.base_ref.as_str(),
+            review_decision_to_str(detail.review_decision),
+            mergeable_to_str(detail.mergeable),
+            codeowners.as_str(),
+            capabilities.as_str(),
         ),
     )
     .await
@@ -66,10 +107,11 @@ pub async fn get_pull_request_detail(
     let mut rows = conn
         .query(
             "
-SELECT
-    id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json
-FROM pull_request_details
-WHERE id = ?1
+select
+    id, title, body, author_login, author_avatar_url, is_draft, labels_json, web_url, reviewers_json,
+    assignees_json, head_ref, base_ref, review_decision, mergeable, codeowners_rules_json, write_capabilities_json
+from pull_request_details
+where id = ?1
 ",
             [id.as_str()],
         )
@@ -91,6 +133,17 @@ WHERE id = ?1
     let labels_json = text_at(&row, 6)?;
     let web_url = text_at(&row, 7)?;
     let reviewers_json = text_at(&row, 8)?;
+    let assignees_json = optional_text_at(&row, 9)?.unwrap_or_else(|| "[]".into());
+    let head_ref = optional_text_at(&row, 10)?.unwrap_or_default();
+    let base_ref = optional_text_at(&row, 11)?.unwrap_or_default();
+    let review_decision = optional_text_at(&row, 12)?
+        .map(|s| review_decision_from_str(&s))
+        .unwrap_or(ReviewDecision::Unknown);
+    let mergeable = optional_text_at(&row, 13)?
+        .map(|s| mergeable_from_str(&s))
+        .unwrap_or(MergeableState::Unknown);
+    let codeowners_json = optional_text_at(&row, 14)?.unwrap_or_else(|| "[]".into());
+    let capabilities_json = optional_text_at(&row, 15)?.unwrap_or_else(|| "{}".into());
 
     Ok(Some(PullRequestDetail {
         id: pr_id,
@@ -102,6 +155,13 @@ WHERE id = ?1
         labels: decode_labels(&labels_json)?,
         web_url,
         reviewers: decode_reviewers(&reviewers_json)?,
+        assignees: decode_assignees(&assignees_json)?,
+        head_ref,
+        base_ref,
+        review_decision,
+        mergeable,
+        codeowners_rules: decode_codeowners(&codeowners_json)?,
+        write_capabilities: decode_capabilities(&capabilities_json)?,
     }))
 }
 
@@ -175,6 +235,113 @@ fn encode_reviewers(reviewers: &[Reviewer]) -> Result<String, LocalStoreError> {
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
+}
+
+fn encode_assignees(assignees: &[Assignee]) -> Result<String, LocalStoreError> {
+    let stored = assignees
+        .iter()
+        .map(|assignee| StoredAssignee {
+            login: assignee.login.clone(),
+            avatar_url: assignee.avatar_url.clone(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
+}
+
+fn decode_assignees(json: &str) -> Result<Vec<Assignee>, LocalStoreError> {
+    let stored: Vec<StoredAssignee> =
+        serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
+    Ok(stored
+        .into_iter()
+        .map(|assignee| Assignee {
+            login: assignee.login,
+            avatar_url: assignee.avatar_url,
+        })
+        .collect())
+}
+
+fn encode_codeowners(rules: &[CodeownersRule]) -> Result<String, LocalStoreError> {
+    let stored = rules
+        .iter()
+        .map(|rule| StoredCodeownersRule {
+            pattern: rule.pattern.clone(),
+            owners: rule.owners.clone(),
+            matched_paths: rule.matched_paths.clone(),
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
+}
+
+fn decode_codeowners(json: &str) -> Result<Vec<CodeownersRule>, LocalStoreError> {
+    let stored: Vec<StoredCodeownersRule> =
+        serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
+    Ok(stored
+        .into_iter()
+        .map(|rule| CodeownersRule {
+            pattern: rule.pattern,
+            owners: rule.owners,
+            matched_paths: rule.matched_paths,
+        })
+        .collect())
+}
+
+fn encode_capabilities(caps: &MetadataWriteCapabilities) -> Result<String, LocalStoreError> {
+    let stored = StoredWriteCapabilities {
+        labels: caps.labels,
+        assignees: caps.assignees,
+        reviewers: caps.reviewers,
+        draft_ready: caps.draft_ready,
+        base_ref: caps.base_ref,
+    };
+    serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
+}
+
+fn decode_capabilities(json: &str) -> Result<MetadataWriteCapabilities, LocalStoreError> {
+    let stored: StoredWriteCapabilities =
+        serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
+    Ok(MetadataWriteCapabilities {
+        labels: stored.labels,
+        assignees: stored.assignees,
+        reviewers: stored.reviewers,
+        draft_ready: stored.draft_ready,
+        base_ref: stored.base_ref,
+    })
+}
+
+fn review_decision_to_str(value: ReviewDecision) -> &'static str {
+    match value {
+        ReviewDecision::Approved => "approved",
+        ReviewDecision::ChangesRequested => "changes_requested",
+        ReviewDecision::ReviewRequired => "review_required",
+        ReviewDecision::Unknown => "unknown",
+    }
+}
+
+fn review_decision_from_str(value: &str) -> ReviewDecision {
+    match value {
+        "approved" => ReviewDecision::Approved,
+        "changes_requested" => ReviewDecision::ChangesRequested,
+        "review_required" => ReviewDecision::ReviewRequired,
+        _ => ReviewDecision::Unknown,
+    }
+}
+
+fn mergeable_to_str(value: MergeableState) -> &'static str {
+    match value {
+        MergeableState::Mergeable => "mergeable",
+        MergeableState::Conflicting => "conflicting",
+        MergeableState::Blocked => "blocked",
+        MergeableState::Unknown => "unknown",
+    }
+}
+
+fn mergeable_from_str(value: &str) -> MergeableState {
+    match value {
+        "mergeable" => MergeableState::Mergeable,
+        "conflicting" => MergeableState::Conflicting,
+        "blocked" => MergeableState::Blocked,
+        _ => MergeableState::Unknown,
+    }
 }
 
 fn decode_reviewers(json: &str) -> Result<Vec<Reviewer>, LocalStoreError> {

@@ -51,12 +51,26 @@ impl AppLocalStore {
         self.inner.sync_pull_requests(items).await
     }
 
-    async fn put_pull_request_detail_locked(
+    pub async fn put_pull_request_detail(
         &self,
         detail: &PullRequestDetail,
     ) -> Result<(), LocalStoreError> {
         let _guard = self.store_lock.lock().await;
         self.inner.put_pull_request_detail(detail).await
+    }
+
+    pub async fn sync_pull_requests(
+        &self,
+        items: &[PullRequestListItem],
+    ) -> Result<(), LocalStoreError> {
+        self.sync_pull_requests_locked(items).await
+    }
+
+    async fn put_pull_request_detail_locked(
+        &self,
+        detail: &PullRequestDetail,
+    ) -> Result<(), LocalStoreError> {
+        self.put_pull_request_detail(detail).await
     }
 
     async fn put_patch_locked(

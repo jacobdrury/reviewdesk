@@ -96,6 +96,18 @@ create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_lis
 create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
 ",
     ),
+    (
+        5,
+        "
+alter table pull_request_details add column assignees_json text not null default '[]';
+alter table pull_request_details add column head_ref text not null default '';
+alter table pull_request_details add column base_ref text not null default '';
+alter table pull_request_details add column review_decision text not null default 'unknown';
+alter table pull_request_details add column mergeable text not null default 'unknown';
+alter table pull_request_details add column codeowners_rules_json text not null default '[]';
+alter table pull_request_details add column write_capabilities_json text not null default '{}';
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
