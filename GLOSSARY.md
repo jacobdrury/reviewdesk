@@ -9,7 +9,7 @@ The product: a desktop app for reviewing code changes from a Provider.
 _Avoid_: Diff Desk, the app, the client
 
 **Provider**:
-A host that exposes pull requests and their patches. The first provider is github.com.
+A host that exposes pull requests, patches, notifications, and review writeback. The first provider is github.com.
 _Avoid_: forge, backend, integration, SCM, GitLab (as the default; GitLab is a later provider)
 
 **Inbox**:
