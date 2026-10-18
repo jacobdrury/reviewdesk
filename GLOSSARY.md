@@ -33,15 +33,35 @@ The textual diff of a pull request, loaded for display on the Diff surface.
 _Avoid_: diff (as the data), changeset file list alone
 
 **Review pane**:
-The right side of the first-slice shell. It holds Overview and Files for the selected pull request.
+The surface for a selected pull request: Overview, peer tabs Pipelines / Conversation / Changes, and the Metadata panel.
 _Avoid_: detail pane, main pane, content area
 
 **Overview**:
-The Review pane tab that shows pull-request metadata for reading (title, description, reviewers, and related fields). Not the Diff.
-_Avoid_: details tab, PR header, metadata panel
+The Review pane surface for the pull request's title, description, author and web URL chrome, and the CODEOWNERS rule breakdown after the description. Not the Metadata panel or Diff.
+_Avoid_: details tab, PR header, sidebar
+
+**Metadata panel**:
+A foldable, hideable Review pane panel (open by default on Overview) for pull-request status and mutations: labels, assignees, reviewers, draft↔ready, branches, review-gate summary, merge and auto-merge, plus a compact Check rollup that activates Pipelines. Folds to a status strip; hide restores only from Review pane chrome.
+_Avoid_: sidebar, details pane, PR header, properties panel
+
+**Pipelines**:
+The Review pane tab that shows the Check rollup and a newest-first list of Pipelines for the pull request head. Not a workflow-file browser, in-app job-log viewer, or merge box.
+_Avoid_: Checks tab, CI tab, Actions tab, status checks panel
+
+**Pipeline**:
+One CI execution for the pull request head, shaped like a GitLab pipeline: a GitHub Actions workflow run when available; otherwise a third-party check suite; otherwise a lone legacy status context. Sorted newest-first by Provider creation time. Nested units are Jobs. Stages are out of scope for v1.
+_Avoid_: workflow run (as the product name), check suite (as the product name), build, CI run
+
+**Job**:
+A unit of work inside a Pipeline: an Actions job / check run, or the single context of a legacy status Pipeline. May offer Re-run only when the Provider can perform it for this identity (typically Actions); foreign App checks are display-only.
+_Avoid_: step, check (as the product name for the nested row), task
+
+**Check rollup**:
+The combined status-check state for the pull request head (success, pending, failure, or error). Required checks drive urgency: required failure → failure; required pending → pending even if optional Jobs are green; optional-only failures stay visible but do not flip the rollup to failure when all required contexts succeed. Shown as compact chrome when Pipelines is not focused (activates the tab) and as the summary at the top of Pipelines when it is. Empty (no checks) is neutral/absent, not success.
+_Avoid_: CI badge, combined status (as the product name), build status
 
 **Diff surface**:
-The UI that shows a Patch and accepts Annotations. Lives under the Files tab of the Review pane. Read-only for provider writeback in the first slice.
+The UI that shows a Patch and accepts Annotations. Lives under the Changes tab of the Review pane. Read-only for provider writeback in the first slice.
 _Avoid_: editor, diff view (as the domain name)
 
 **Annotation**:

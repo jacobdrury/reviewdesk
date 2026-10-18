@@ -3,15 +3,12 @@
 use std::sync::Arc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
+    WindowExt as _,
     diff::{DiffMode, DiffState},
-    h_flex,
-    resizable::{h_resizable, resizable_panel},
-    v_flex,
 };
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
+    AppContext as _, Context, Entity, IntoElement, Render, Subscription, Task,
+    UniformListScrollHandle, Window, WindowAppearance,
 };
 use reviewdesk_core::{
     InboxOptions, InboxQuery, LocalStoreError, Provider, ProviderError, PullRequestId,
@@ -19,6 +16,8 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::INBOX_REFRESH;
+use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
+use crate::pipelines_prototype::{PipelinesVariant, StubScenario};
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
@@ -28,7 +27,7 @@ use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{render_inbox, render_review_pane};
+use crate::ui::{PrototypeChrome, render_prototype_shell, sync_session_tab};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -55,6 +54,19 @@ pub struct ReviewDesk {
     diff: Entity<DiffState>,
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    notif_scroll: UniformListScrollHandle,
+    pipelines_scroll: UniformListScrollHandle,
+    pipelines_detail_scroll: UniformListScrollHandle,
+    /// PROTOTYPE: baked shell chrome (primary-shell pick A).
+    chrome: ChromeVariant,
+    shell_nav: ShellNav,
+    prototype_tab: PrototypeReviewTab,
+    metadata_open: bool,
+    /// PROTOTYPE: Pipelines tab layout variant + stub scenario.
+    pipelines_variant: PipelinesVariant,
+    pipelines_scenario: StubScenario,
+    pipeline_expanded: Vec<bool>,
+    selected_pipeline: usize,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -84,6 +96,17 @@ impl ReviewDesk {
             diff,
             inbox_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            notif_scroll: UniformListScrollHandle::new(),
+            pipelines_scroll: UniformListScrollHandle::new(),
+            pipelines_detail_scroll: UniformListScrollHandle::new(),
+            chrome: ChromeVariant::A,
+            shell_nav: ShellNav::PullRequests,
+            prototype_tab: PrototypeReviewTab::Pipelines,
+            metadata_open: false,
+            pipelines_variant: PipelinesVariant::A,
+            pipelines_scenario: StubScenario::FailingRequired,
+            pipeline_expanded: vec![true, false, false],
+            selected_pipeline: 0,
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -118,7 +141,7 @@ impl ReviewDesk {
     fn run_effects(&mut self, effects: Vec<Effect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
-                Effect::QueryInbox => self.run_query_inbox(cx),
+                Effect::QueryInbox { generation } => self.run_query_inbox(generation, cx),
                 Effect::SyncInbox { generation } => self.run_sync_inbox(generation, cx),
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
@@ -156,7 +179,7 @@ impl ReviewDesk {
         cx.notify();
     }
 
-    fn run_query_inbox(&mut self, cx: &mut Context<Self>) {
+    fn run_query_inbox(&mut self, generation: u64, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let runtime = self.runtime.clone();
         self._inbox_reload_task = cx.spawn(async move |this, cx| {
@@ -166,7 +189,10 @@ impl ReviewDesk {
                 .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
             let result = result.map_err(map_store_error);
             let _ = this.update(cx, |this, cx| {
-                this.dispatch(Intent::InboxQueryFinished { result }, cx);
+                this.dispatch(
+                    Intent::InboxQueryFinished { generation, result },
+                    cx,
+                );
             });
         });
     }
@@ -257,6 +283,69 @@ impl ReviewDesk {
         });
     }
 
+    pub(crate) fn cycle_pipelines_variant(&mut self, next: bool, cx: &mut Context<Self>) {
+        self.pipelines_variant = if next {
+            self.pipelines_variant.next()
+        } else {
+            self.pipelines_variant.prev()
+        };
+        cx.notify();
+    }
+
+    pub(crate) fn cycle_pipelines_scenario(&mut self, next: bool, cx: &mut Context<Self>) {
+        self.pipelines_scenario = if next {
+            self.pipelines_scenario.next()
+        } else {
+            self.pipelines_scenario.prev()
+        };
+        let n = self.pipelines_scenario.data().pipelines.len();
+        self.pipeline_expanded = (0..n).map(|i| i == 0).collect();
+        self.selected_pipeline = 0;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_pipeline_expanded(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.pipeline_expanded.len() {
+            self.pipeline_expanded.resize(index + 1, false);
+        }
+        self.pipeline_expanded[index] = !self.pipeline_expanded[index];
+        cx.notify();
+    }
+
+    pub(crate) fn select_pipeline(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.selected_pipeline = index;
+        cx.notify();
+    }
+
+    pub(crate) fn open_pipelines_tab(&mut self, cx: &mut Context<Self>) {
+        self.set_prototype_tab(PrototypeReviewTab::Pipelines, cx);
+    }
+
+    pub(crate) fn set_shell_nav(&mut self, nav: ShellNav, cx: &mut Context<Self>) {
+        self.shell_nav = nav;
+        cx.notify();
+    }
+
+    pub(crate) fn set_prototype_tab(&mut self, tab: PrototypeReviewTab, cx: &mut Context<Self>) {
+        self.prototype_tab = tab;
+        // Overview opens Metadata by default; other tabs collapse it (user can re-open).
+        self.metadata_open = tab.metadata_open_by_default();
+        if let Some(session_tab) = sync_session_tab(tab) {
+            self.dispatch(Intent::SetReviewTab(session_tab), cx);
+            return;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_metadata(&mut self, cx: &mut Context<Self>) {
+        self.metadata_open = !self.metadata_open;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_selected_pull_request(&mut self, cx: &mut Context<Self>) {
+        self.dispatch(Intent::ClearPullRequestSelection, cx);
+    }
+
     fn run_fetch_patch(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
         let store = self.store.clone();
@@ -314,40 +403,26 @@ impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.session.view();
         let entity = cx.entity().downgrade();
-        let sync_label = view.inbox_sync.status_label();
-
-        v_flex()
-            .size_full()
-            .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .items_center()
-                        .pr_2()
-                        .child(div().text_sm().font_medium().child("Review Desk"))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(sync_label),
-                        ),
-                ),
-            )
-            .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("shell")
-                        .child(
-                            resizable_panel()
-                                .size(px(240.))
-                                .size_range(px(200.)..px(480.))
-                                .child(render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)),
-                        )
-                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
-                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
-                        )),
-                ),
-            )
+        render_prototype_shell(
+            PrototypeChrome {
+                chrome: self.chrome,
+                shell_nav: self.shell_nav,
+                review_tab: self.prototype_tab,
+                metadata_open: self.metadata_open,
+                pipelines_variant: self.pipelines_variant,
+                pipelines_scenario: self.pipelines_scenario,
+                pipeline_expanded: self.pipeline_expanded.clone(),
+                selected_pipeline: self.selected_pipeline,
+                view,
+                diff: self.diff.clone(),
+                inbox_scroll: self.inbox_scroll.clone(),
+                files_scroll: self.files_scroll.clone(),
+                notif_scroll: self.notif_scroll.clone(),
+                pipelines_scroll: self.pipelines_scroll.clone(),
+                pipelines_detail_scroll: self.pipelines_detail_scroll.clone(),
+                entity,
+            },
+            cx,
+        )
     }
 }
