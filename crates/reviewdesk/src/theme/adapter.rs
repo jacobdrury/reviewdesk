@@ -153,12 +153,14 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
         &mut colors,
         "tab.background",
     );
-    copy_string(
-        style,
-        "element.selected",
-        &mut colors,
-        "list.active.background",
-    );
+    // Kit paints ListItem selection as list_active capped at ~0.2 alpha. Zed's
+    // opaque near-panel `element.selected` washes become invisible; prefer a
+    // translucent selected fill, else accent (chromatic), else selected.
+    if let Some(active) = list_active_color(style) {
+        colors.insert("list.active.background".into(), Value::String(active.clone()));
+        // ListItem falls back to accent when list.active_highlight is off.
+        insert_if_absent(&mut colors, "accent.background", &active);
+    }
     copy_string(
         style,
         "element.hover",
@@ -167,33 +169,18 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
     );
 
     // Status dual-write into chrome info/success/warning/danger.
-    // Diff hunks: created → success, deleted → danger (else status success/error).
-    if let Some(success) = first_string(
-        style,
-        &[
-            "created.background",
-            "created",
-            "success.background",
-            "success",
-        ],
-    ) {
+    // Diff hunks tint with `theme.success|danger.opacity(0.12)`, so write solid
+    // status colors (not Zed's already-dim `.background` fills).
+    if let Some(success) = first_string(style, &["created", "success"]) {
         colors.insert("success.background".into(), Value::String(success));
     }
-    if let Some(danger) = first_string(
-        style,
-        &[
-            "deleted.background",
-            "deleted",
-            "error.background",
-            "error",
-        ],
-    ) {
+    if let Some(danger) = first_string(style, &["deleted", "error"]) {
         colors.insert("danger.background".into(), Value::String(danger));
     }
-    if let Some(info) = first_string(style, &["info.background", "info"]) {
+    if let Some(info) = first_string(style, &["info"]) {
         colors.insert("info.background".into(), Value::String(info));
     }
-    if let Some(warning) = first_string(style, &["warning.background", "warning"]) {
+    if let Some(warning) = first_string(style, &["warning"]) {
         colors.insert("warning.background".into(), Value::String(warning));
     }
 
@@ -313,6 +300,44 @@ fn insert_if_absent(colors: &mut Map<String, Value>, key: &str, value: &str) {
     colors.insert(key.into(), Value::String(value.to_string()));
 }
 
+/// Color for kit `list.active.background` (selection wash).
+fn list_active_color(style: &Map<String, Value>) -> Option<String> {
+    let selected = style.get("element.selected").and_then(Value::as_str);
+    if let Some(selected) = selected {
+        if hex_has_useful_wash_alpha(selected) {
+            return Some(selected.to_string());
+        }
+    }
+    if let Some(accent) = style.get("text.accent").and_then(Value::as_str) {
+        return Some(accent.to_string());
+    }
+    selected.map(str::to_string)
+}
+
+/// True when a hex color already carries a translucent alpha suitable for kit's
+/// list-active wash (kit also clamps to ≤0.2). Opaque near-black fills return false.
+fn hex_has_useful_wash_alpha(hex: &str) -> bool {
+    let Some(alpha) = hex_alpha_byte(hex) else {
+        return false;
+    };
+    // Already a wash (kit default list.active uses ~0x33).
+    alpha > 0 && alpha < 0xE0
+}
+
+fn hex_alpha_byte(hex: &str) -> Option<u8> {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    match hex.len() {
+        8 => u8::from_str_radix(&hex[6..8], 16).ok(),
+        4 => {
+            let nibble = u8::from_str_radix(&hex[3..4], 16).ok()?;
+            Some(nibble * 17)
+        }
+        // 6 / 3 digit hex → opaque
+        6 | 3 => Some(0xFF),
+        _ => None,
+    }
+}
+
 /// True when `family_json` deserializes as a kit `ThemeSet` without a Zed rewrite.
 ///
 /// Used in tests to prove raw Zed JSON is not a usable kit theme family.
@@ -404,9 +429,10 @@ mod tests {
                 "#282c33ff",
             ),
             (
+                // One Dark element.selected is opaque gray; kit wash needs accent.
                 "list_active",
                 color(&config.colors, |c| &c.list_active),
-                "#454a56ff",
+                "#74ade8ff",
             ),
             (
                 "list_hover",
@@ -416,19 +442,71 @@ mod tests {
             (
                 "success_from_created",
                 color(&config.colors, |c| &c.success),
-                "#a1c1811a",
+                "#a1c181ff",
             ),
             (
                 "danger_from_deleted",
                 color(&config.colors, |c| &c.danger),
-                "#d072771a",
+                "#d07277ff",
             ),
-            ("info", color(&config.colors, |c| &c.info), "#74ade81a"),
-            ("warning", color(&config.colors, |c| &c.warning), "#dec1841a"),
+            ("info", color(&config.colors, |c| &c.info), "#74ade8ff"),
+            ("warning", color(&config.colors, |c| &c.warning), "#dec184ff"),
         ];
         for (name, got, want) in cases {
             assert_eq!(got.as_deref(), Some(want), "{name}");
         }
+    }
+
+    #[test]
+    fn list_active_prefers_wash_or_accent_over_opaque_panel_selected() {
+        let cases = [
+            (
+                "already_wash",
+                r##"{"name":"T","appearance":"dark","style":{"element.selected":"#3b82f633","text.accent":"#ff00ffff"}}"##,
+                "#3b82f633",
+            ),
+            (
+                "opaque_selected_uses_accent",
+                r##"{"name":"T","appearance":"dark","style":{"element.selected":"#222226","text.accent":"#C58FFF"}}"##,
+                "#C58FFF",
+            ),
+            (
+                "opaque_selected_no_accent",
+                r##"{"name":"T","appearance":"dark","style":{"element.selected":"#222226"}}"##,
+                "#222226",
+            ),
+        ];
+        for (name, theme, want) in cases {
+            let config = adapt_zed_theme(theme).unwrap();
+            assert_eq!(
+                color(&config.colors, |c| &c.list_active).as_deref(),
+                Some(want),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn status_dual_write_prefers_solid_created_deleted_for_diff_tints() {
+        let theme = r##"{
+            "name": "Solid",
+            "appearance": "dark",
+            "style": {
+                "created": "#08BD8A",
+                "created.background": "#09221A",
+                "deleted": "#FF6FAE",
+                "deleted.background": "#26141A"
+            }
+        }"##;
+        let config = adapt_zed_theme(theme).unwrap();
+        assert_eq!(
+            color(&config.colors, |c| &c.success).as_deref(),
+            Some("#08BD8A")
+        );
+        assert_eq!(
+            color(&config.colors, |c| &c.danger).as_deref(),
+            Some("#FF6FAE")
+        );
     }
 
     #[test]
