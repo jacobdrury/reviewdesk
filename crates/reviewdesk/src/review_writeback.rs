@@ -2,7 +2,7 @@
 
 use reviewdesk_core::{
     PendingDiffReviewComment, Provider, ProviderError, PullRequestId, PullRequestThreads,
-    ReviewSubmitEvent,
+    ReviewSubmitEvent, ThreadId, ThreadStatus, TimelineConversationComment,
 };
 
 use crate::sync::AppLocalStore;
@@ -80,6 +80,37 @@ pub async fn discard_pending_review(
     id: &PullRequestId,
 ) -> Result<PullRequestThreads, ProviderError> {
     let snapshot = provider.discard_pending_review(id).await?;
+    store
+        .put_pull_request_threads(id, &snapshot)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(snapshot)
+}
+
+pub async fn set_thread_status(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+    thread_id: &ThreadId,
+    status: ThreadStatus,
+) -> Result<PullRequestThreads, ProviderError> {
+    let snapshot = provider
+        .set_thread_status(id, thread_id, status)
+        .await?;
+    store
+        .put_pull_request_threads(id, &snapshot)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(snapshot)
+}
+
+pub async fn publish_timeline_comment(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+    comment: TimelineConversationComment,
+) -> Result<PullRequestThreads, ProviderError> {
+    let snapshot = provider.publish_timeline_comment(id, comment).await?;
     store
         .put_pull_request_threads(id, &snapshot)
         .await
@@ -297,6 +328,66 @@ mod tests {
             map.insert(id.as_str().to_string(), snapshot.clone());
             Ok(snapshot)
         }
+
+        async fn set_thread_status(
+            &self,
+            id: &PullRequestId,
+            thread_id: &ThreadId,
+            status: ThreadStatus,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            if *self.fail_writes.lock().expect("lock") {
+                return Err(ProviderError::other("provider write failed"));
+            }
+            let mut map = self.threads.lock().expect("lock");
+            let mut snapshot = map.get(id.as_str()).cloned().unwrap_or_default();
+            let thread = snapshot
+                .threads
+                .iter_mut()
+                .find(|t| t.id.as_str() == thread_id.as_str())
+                .ok_or(ProviderError::NotFound)?;
+            if matches!(thread.status, ThreadStatus::Outdated) {
+                return Err(ProviderError::other("cannot resolve outdated thread"));
+            }
+            thread.status = status;
+            map.insert(id.as_str().to_string(), snapshot.clone());
+            Ok(snapshot)
+        }
+
+        async fn publish_timeline_comment(
+            &self,
+            id: &PullRequestId,
+            comment: TimelineConversationComment,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            if *self.fail_writes.lock().expect("lock") {
+                return Err(ProviderError::other("provider write failed"));
+            }
+            let mut map = self.threads.lock().expect("lock");
+            let mut snapshot = map.get(id.as_str()).cloned().unwrap_or_default();
+            let suggestion = suggestion_from_body(&comment.body);
+            let new_comment = ReviewComment {
+                id: ReviewCommentId::new(format!(
+                    "c-timeline-{}",
+                    snapshot
+                        .threads
+                        .iter()
+                        .map(|t| t.comments.len())
+                        .sum::<usize>()
+                        + 1
+                )),
+                author_login: "viewer".into(),
+                body: comment.body,
+                is_pending: false,
+                suggestion,
+            };
+            snapshot.threads.push(Thread {
+                id: ThreadId::new(format!("t-timeline-{}", snapshot.threads.len() + 1)),
+                anchor: None,
+                status: ThreadStatus::Open,
+                comments: vec![new_comment],
+            });
+            map.insert(id.as_str().to_string(), snapshot.clone());
+            Ok(snapshot)
+        }
     }
 
     async fn open_app_store() -> (tempfile::TempDir, AppLocalStore) {
@@ -393,6 +484,126 @@ mod tests {
             .expect("snapshot");
         assert!(cached.pending_review.is_none());
         assert!(cached.threads.is_empty());
+    }
+
+    fn sample_open_thread() -> Thread {
+        Thread {
+            id: ThreadId::new("t-resolve"),
+            anchor: Some(DiffAnchor {
+                path: "src/lib.rs".into(),
+                side: DiffLineSide::Right,
+                start_line: 1,
+                end_line: 1,
+            }),
+            status: ThreadStatus::Open,
+            comments: vec![ReviewComment {
+                id: ReviewCommentId::new("c-1"),
+                author_login: "alice".into(),
+                body: "Please fix.".into(),
+                is_pending: false,
+                suggestion: None,
+            }],
+        }
+    }
+
+    async fn seed_threads(provider: &MemoryProvider, store: &AppLocalStore, id: &PullRequestId) {
+        let snapshot = PullRequestThreads {
+            threads: vec![sample_open_thread()],
+            pending_review: None,
+        };
+        provider
+            .threads
+            .lock()
+            .expect("lock")
+            .insert(id.as_str().to_string(), snapshot.clone());
+        store
+            .put_pull_request_threads(id, &snapshot)
+            .await
+            .expect("seed");
+    }
+
+    #[tokio::test]
+    async fn resolve_thread_write_through_updates_store() {
+        let (_dir, store) = open_app_store().await;
+        let provider = MemoryProvider::new();
+        let id = pr_id("acme/widgets#10");
+        seed_threads(&provider, &store, &id).await;
+
+        set_thread_status(
+            &provider,
+            &store,
+            &id,
+            &ThreadId::new("t-resolve"),
+            ThreadStatus::Resolved,
+        )
+        .await
+        .expect("resolve");
+
+        let cached = store
+            .get_pull_request_threads(&id)
+            .await
+            .expect("read")
+            .expect("snapshot");
+        assert!(matches!(
+            cached.threads[0].status,
+            ThreadStatus::Resolved
+        ));
+    }
+
+    #[tokio::test]
+    async fn timeline_comment_publishes_immediately_not_pending_review() {
+        let (_dir, store) = open_app_store().await;
+        let provider = MemoryProvider::new();
+        let id = pr_id("acme/widgets#11");
+
+        publish_timeline_comment(
+            &provider,
+            &store,
+            &id,
+            TimelineConversationComment {
+                body: "Ship when green.".into(),
+            },
+        )
+        .await
+        .expect("publish");
+
+        let cached = store
+            .get_pull_request_threads(&id)
+            .await
+            .expect("read")
+            .expect("snapshot");
+        assert!(cached.pending_review.is_none());
+        assert_eq!(cached.threads.len(), 1);
+        assert!(cached.threads[0].anchor.is_none());
+        assert!(!cached.threads[0].comments[0].is_pending);
+        assert_eq!(cached.threads[0].comments[0].body, "Ship when green.");
+    }
+
+    #[tokio::test]
+    async fn resolve_failure_does_not_write_through_to_store() {
+        let (_dir, store) = open_app_store().await;
+        let provider = MemoryProvider::new();
+        let id = pr_id("acme/widgets#12");
+        seed_threads(&provider, &store, &id).await;
+        provider.set_fail_writes(true);
+
+        let err = set_thread_status(
+            &provider,
+            &store,
+            &id,
+            &ThreadId::new("t-resolve"),
+            ThreadStatus::Resolved,
+        )
+        .await
+        .expect_err("expected failure");
+        assert!(matches!(err, ProviderError::Other(_)));
+
+        let cached = store
+            .get_pull_request_threads(&id)
+            .await
+            .expect("read")
+            .expect("snapshot");
+        assert!(matches!(cached.threads[0].status, ThreadStatus::Open));
     }
 
     #[tokio::test]

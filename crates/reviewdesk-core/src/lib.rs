@@ -32,5 +32,5 @@ pub use pull_request_list::{
 pub use review_threads::{
     DiffAnchor, DiffLineSide, PendingDiffReviewComment, PendingReview, PullRequestThreads,
     ReviewComment, ReviewCommentId, ReviewSubmitEvent, Thread, ThreadId, ThreadStatus,
-    suggestion_from_body,
+    TimelineConversationComment, suggestion_from_body,
 };

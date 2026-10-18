@@ -13,7 +13,10 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, MetadataDock, ReviewTab, SessionView};
-use crate::ui::{render_files, render_metadata_panel, render_metadata_strip, render_overview};
+use crate::ui::{
+    render_conversation, render_files, render_metadata_panel, render_metadata_strip,
+    render_overview,
+};
 
 const TABS: [(ReviewTab, &str); 4] = [
     (ReviewTab::Overview, "Overview"),
@@ -73,11 +76,9 @@ pub(crate) fn render_review_pane(
         ReviewTab::Pipelines => {
             render_empty_tab("Pipelines", "CI pipelines arrive in a later ticket.", cx)
         }
-        ReviewTab::Conversation => render_empty_tab(
-            "Conversation",
-            "Threads and timeline comments arrive in a later ticket.",
-            cx,
-        ),
+        ReviewTab::Conversation => {
+            render_conversation(view, entity.clone(), cx).into_any_element()
+        }
         ReviewTab::Changes => {
             render_files(view, diff, files_scroll, entity.clone(), cx).into_any_element()
         }
