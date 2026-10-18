@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::id::PullRequestId;
+use crate::notification::{NotificationQuery, NotificationThread, NotificationThreadId};
 use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
@@ -75,4 +76,23 @@ pub trait LocalStore: Send + Sync {
 
     /// Returns cached patch text, or `None` on cache miss.
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError>;
+
+    /// Upserts Inbox notification threads from a poll snapshot and removes rows not in `threads`.
+    async fn sync_notifications(
+        &self,
+        threads: &[NotificationThread],
+    ) -> Result<(), LocalStoreError>;
+
+    /// Lists Inbox notification threads matching `query`, `updated_at` descending.
+    async fn query_notifications(
+        &self,
+        query: &NotificationQuery,
+    ) -> Result<Vec<NotificationThread>, LocalStoreError>;
+
+    /// Clears the unread flag on a notification thread after Provider write-through.
+    async fn set_notification_read(&self, id: &NotificationThreadId)
+    -> Result<(), LocalStoreError>;
+
+    /// Removes a notification thread after a Done Provider write-through.
+    async fn remove_notification(&self, id: &NotificationThreadId) -> Result<(), LocalStoreError>;
 }
