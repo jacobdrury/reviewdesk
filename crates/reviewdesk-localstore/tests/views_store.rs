@@ -1,6 +1,4 @@
-use reviewdesk_core::{
-    DraftFilter, LocalStore, View, ViewFilter, ViewGroupBy, ViewId, ViewKind,
-};
+use reviewdesk_core::{DraftFilter, LocalStore, View, ViewFilter, ViewGroupBy, ViewId, ViewKind};
 use reviewdesk_localstore::TursoLocalStore;
 use tempfile::tempdir;
 
@@ -69,7 +67,11 @@ async fn delete_view_removes_only_that_row() {
 
     let listed = store.list_views().await.expect("list");
     assert_eq!(listed.len(), View::seed_set().len() - 1);
-    assert!(!listed.iter().any(|v| v.id.as_str() == reviewdesk_core::VIEW_ID_MINE));
+    assert!(
+        !listed
+            .iter()
+            .any(|v| v.id.as_str() == reviewdesk_core::VIEW_ID_MINE)
+    );
 }
 
 #[tokio::test]
@@ -79,11 +81,7 @@ async fn reorder_views_rewrites_positions() {
         store.save_view(&view).await.expect("save");
     }
 
-    let reversed: Vec<ViewId> = View::seed_set()
-        .into_iter()
-        .rev()
-        .map(|v| v.id)
-        .collect();
+    let reversed: Vec<ViewId> = View::seed_set().into_iter().rev().map(|v| v.id).collect();
     store.reorder_views(&reversed).await.expect("reorder");
 
     let listed = store.list_views().await.expect("list");

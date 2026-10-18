@@ -6,6 +6,7 @@ use turso::{Connection, Value};
 use crate::error::map_other;
 
 const LAST_USED_VIEW_KEY: &str = "last_used_view";
+const SCOPED_REPOSITORY_KEY: &str = "scoped_repository";
 
 pub async fn list_views(conn: &Connection) -> Result<Vec<View>, LocalStoreError> {
     let mut rows = conn
@@ -60,12 +61,9 @@ on conflict(id) do update set
 }
 
 pub async fn delete_view(conn: &Connection, id: &ViewId) -> Result<(), LocalStoreError> {
-    conn.execute(
-        "delete from reviewdesk_views where id = ?1",
-        [id.as_str()],
-    )
-    .await
-    .map_err(map_other)?;
+    conn.execute("delete from reviewdesk_views where id = ?1", [id.as_str()])
+        .await
+        .map_err(map_other)?;
     Ok(())
 }
 
@@ -94,6 +92,49 @@ pub async fn get_last_used_view(conn: &Connection) -> Result<Option<ViewId>, Loc
         return Ok(None);
     };
     Ok(Some(ViewId::new(text_at(&row, 0)?)))
+}
+
+pub async fn get_scoped_repository(conn: &Connection) -> Result<Option<String>, LocalStoreError> {
+    let mut rows = conn
+        .query(
+            "select value from reviewdesk_preferences where key = ?1",
+            [SCOPED_REPOSITORY_KEY],
+        )
+        .await
+        .map_err(map_other)?;
+
+    let Some(row) = rows.next().await.map_err(map_other)? else {
+        return Ok(None);
+    };
+    Ok(Some(text_at(&row, 0)?))
+}
+
+pub async fn set_scoped_repository(
+    conn: &Connection,
+    repo: Option<&str>,
+) -> Result<(), LocalStoreError> {
+    match repo {
+        Some(value) => {
+            conn.execute(
+                "
+insert into reviewdesk_preferences (key, value) values (?1, ?2)
+on conflict(key) do update set value = excluded.value
+",
+                (SCOPED_REPOSITORY_KEY, value),
+            )
+            .await
+            .map_err(map_other)?;
+        }
+        None => {
+            conn.execute(
+                "delete from reviewdesk_preferences where key = ?1",
+                [SCOPED_REPOSITORY_KEY],
+            )
+            .await
+            .map_err(map_other)?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn set_last_used_view(conn: &Connection, id: &ViewId) -> Result<(), LocalStoreError> {

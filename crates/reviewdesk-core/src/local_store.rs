@@ -94,4 +94,10 @@ pub trait LocalStore: Send + Sync {
 
     /// Persists the last-used View id preference.
     async fn set_last_used_view(&self, id: &ViewId) -> Result<(), LocalStoreError>;
+
+    /// Returns the sidebar repo scope for Pull requests, or `None` for all repositories.
+    async fn get_scoped_repository(&self) -> Result<Option<String>, LocalStoreError>;
+
+    /// Persists sidebar repo scope (`None` clears scope).
+    async fn set_scoped_repository(&self, repo: Option<&str>) -> Result<(), LocalStoreError>;
 }

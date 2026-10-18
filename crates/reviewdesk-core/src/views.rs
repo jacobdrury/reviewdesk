@@ -170,8 +170,7 @@ impl ViewFilter {
         if !self.repos.is_empty() && !self.repos.iter().any(|repo| repo == &item.repo_label) {
             return false;
         }
-        if !self.authors.is_empty()
-            && !self.authors.iter().any(|login| login == &item.author_login)
+        if !self.authors.is_empty() && !self.authors.iter().any(|login| login == &item.author_login)
         {
             return false;
         }

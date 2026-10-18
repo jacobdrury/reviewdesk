@@ -106,4 +106,12 @@ impl LocalStore for TursoLocalStore {
     async fn set_last_used_view(&self, id: &ViewId) -> Result<(), LocalStoreError> {
         views::set_last_used_view(&self.conn, id).await
     }
+
+    async fn get_scoped_repository(&self) -> Result<Option<String>, LocalStoreError> {
+        views::get_scoped_repository(&self.conn).await
+    }
+
+    async fn set_scoped_repository(&self, repo: Option<&str>) -> Result<(), LocalStoreError> {
+        views::set_scoped_repository(&self.conn, repo).await
+    }
 }
