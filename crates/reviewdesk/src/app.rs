@@ -3,15 +3,12 @@
 use std::sync::Arc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
+    WindowExt as _,
     diff::{DiffMode, DiffState},
-    h_flex,
-    resizable::{h_resizable, resizable_panel},
-    v_flex,
 };
 use gpui_kit::{
-    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
+    AppContext as _, Context, Entity, IntoElement, Render, Subscription, Task,
+    UniformListScrollHandle, Window, WindowAppearance,
 };
 use reviewdesk_core::{
     InboxOptions, InboxQuery, LocalStoreError, Provider, ProviderError, PullRequestId,
@@ -19,6 +16,7 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::INBOX_REFRESH;
+use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
@@ -28,7 +26,7 @@ use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{render_inbox, render_review_pane};
+use crate::ui::{PrototypeChrome, render_prototype_shell, sync_session_tab};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -55,6 +53,12 @@ pub struct ReviewDesk {
     diff: Entity<DiffState>,
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    notif_scroll: UniformListScrollHandle,
+    /// PROTOTYPE chrome state (throwaway with `prototype/primary-shell-chrome`).
+    chrome: ChromeVariant,
+    shell_nav: ShellNav,
+    prototype_tab: PrototypeReviewTab,
+    metadata_open: bool,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -84,6 +88,11 @@ impl ReviewDesk {
             diff,
             inbox_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            notif_scroll: UniformListScrollHandle::new(),
+            chrome: ChromeVariant::A,
+            shell_nav: ShellNav::PullRequests,
+            prototype_tab: PrototypeReviewTab::Overview,
+            metadata_open: true,
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -257,6 +266,38 @@ impl ReviewDesk {
         });
     }
 
+    pub(crate) fn cycle_chrome(&mut self, next: bool, cx: &mut Context<Self>) {
+        self.chrome = if next {
+            self.chrome.next()
+        } else {
+            self.chrome.prev()
+        };
+        cx.notify();
+    }
+
+    pub(crate) fn set_shell_nav(&mut self, nav: ShellNav, cx: &mut Context<Self>) {
+        self.shell_nav = nav;
+        cx.notify();
+    }
+
+    pub(crate) fn set_prototype_tab(&mut self, tab: PrototypeReviewTab, cx: &mut Context<Self>) {
+        self.prototype_tab = tab;
+        if let Some(session_tab) = sync_session_tab(tab) {
+            self.dispatch(Intent::SetReviewTab(session_tab), cx);
+            return;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_metadata(&mut self, cx: &mut Context<Self>) {
+        self.metadata_open = !self.metadata_open;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_selected_pull_request(&mut self, cx: &mut Context<Self>) {
+        self.dispatch(Intent::ClearPullRequestSelection, cx);
+    }
+
     fn run_fetch_patch(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
         let store = self.store.clone();
@@ -314,40 +355,20 @@ impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.session.view();
         let entity = cx.entity().downgrade();
-        let sync_label = view.inbox_sync.status_label();
-
-        v_flex()
-            .size_full()
-            .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .items_center()
-                        .pr_2()
-                        .child(div().text_sm().font_medium().child("Review Desk"))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(sync_label),
-                        ),
-                ),
-            )
-            .child(
-                div().flex_1().min_h_0().child(
-                    h_resizable("shell")
-                        .child(
-                            resizable_panel()
-                                .size(px(240.))
-                                .size_range(px(200.)..px(480.))
-                                .child(render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)),
-                        )
-                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
-                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
-                        )),
-                ),
-            )
+        render_prototype_shell(
+            PrototypeChrome {
+                chrome: self.chrome,
+                shell_nav: self.shell_nav,
+                review_tab: self.prototype_tab,
+                metadata_open: self.metadata_open,
+                view,
+                diff: self.diff.clone(),
+                inbox_scroll: self.inbox_scroll.clone(),
+                files_scroll: self.files_scroll.clone(),
+                notif_scroll: self.notif_scroll.clone(),
+                entity,
+            },
+            cx,
+        )
     }
 }

@@ -24,6 +24,8 @@ pub enum Intent {
     Boot,
     RefreshInbox,
     SelectPullRequest(PullRequestId),
+    /// PROTOTYPE: Focus Stack back affordance. Drop before folding into main.
+    ClearPullRequestSelection,
     SetReviewTab(ReviewTab),
     ToggleDetails {
         id: usize,
@@ -209,6 +211,18 @@ impl ReviewSession {
             Intent::Boot => self.boot(),
             Intent::RefreshInbox => self.begin_inbox_sync(),
             Intent::SelectPullRequest(id) => self.select_pull_request(id),
+            Intent::ClearPullRequestSelection => {
+                self.selected_id = None;
+                self.detail = LoadState::Idle;
+                self.patch_index = LoadState::Idle;
+                self.selected_file = None;
+                self.selected_diff_file = None;
+                self.overview_segments.clear();
+                self.details_open.clear();
+                self.overview_compose_cache = None;
+                self.file_list_paths = Arc::from([]);
+                Vec::new()
+            }
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
                 Vec::new()
