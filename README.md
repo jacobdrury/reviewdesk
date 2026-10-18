@@ -25,4 +25,4 @@ cargo test
 cargo run -p reviewdesk
 ```
 
-Provider auth: `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token` (see `crates/reviewdesk/src/auth.rs`).
+Provider auth: `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Scopes and classic-vs-fine-grained gaps (Inbox needs classic PAT): [docs/auth-github.md](docs/auth-github.md).
