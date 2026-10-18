@@ -12,10 +12,15 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 chrono = { workspace = true }
+directories = { workspace = true }
 gpui-kit = { version = "0.7.3", features = ["tree-sitter", "tree-sitter-languages"] }
 json-strip-comments = "3.1.2"
 reviewdesk-core = { path = "../reviewdesk-core" }
 reviewdesk-github = { path = "../reviewdesk-github" }
+reviewdesk-localstore = { path = "../reviewdesk-localstore" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3.25.0"
