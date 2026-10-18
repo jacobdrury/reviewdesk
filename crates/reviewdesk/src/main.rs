@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod theme;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,6 +12,7 @@ use tokio::runtime::Runtime;
 
 use app::ReviewDesk;
 use auth::resolve_credentials;
+use theme::{apply_sync_result, sync_theme, SyncInputs};
 
 fn main() {
     let credentials = match resolve_credentials() {
@@ -43,6 +45,10 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // #22: silent dark Fallback when Zed/settings are absent.
+            // #23 replaces SyncInputs::absent_zed() with real discovery.
+            let theme = sync_theme(SyncInputs::absent_zed());
+            apply_sync_result(cx, &theme);
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.), px(800.)), cx)),
