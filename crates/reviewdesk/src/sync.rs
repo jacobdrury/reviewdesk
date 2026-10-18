@@ -8,21 +8,22 @@ use reviewdesk_core::{
 };
 use tokio::sync::Mutex;
 
-/// Wraps a [`LocalStore`] so write operations do not overlap (Turso same-connection rule).
+/// Wraps a [`LocalStore`] so all access is serialized (Turso same-connection rule).
 pub struct AppLocalStore {
     inner: Arc<dyn LocalStore>,
-    write_lock: Mutex<()>,
+    store_lock: Mutex<()>,
 }
 
 impl AppLocalStore {
     pub fn new(inner: Arc<dyn LocalStore>) -> Self {
         Self {
             inner,
-            write_lock: Mutex::new(()),
+            store_lock: Mutex::new(()),
         }
     }
 
     pub async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
         self.inner.query_inbox(query).await
     }
 
@@ -30,15 +31,17 @@ impl AppLocalStore {
         &self,
         id: &PullRequestId,
     ) -> Result<Option<PullRequestDetail>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
         self.inner.get_pull_request_detail(id).await
     }
 
     pub async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
         self.inner.get_patch(id).await
     }
 
     async fn sync_inbox_locked(&self, items: &[InboxItem]) -> Result<(), LocalStoreError> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.store_lock.lock().await;
         self.inner.sync_inbox(items).await
     }
 
@@ -46,7 +49,7 @@ impl AppLocalStore {
         &self,
         detail: &PullRequestDetail,
     ) -> Result<(), LocalStoreError> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.store_lock.lock().await;
         self.inner.put_pull_request_detail(detail).await
     }
 
@@ -55,7 +58,7 @@ impl AppLocalStore {
         id: &PullRequestId,
         patch: &Patch,
     ) -> Result<(), LocalStoreError> {
-        let _guard = self.write_lock.lock().await;
+        let _guard = self.store_lock.lock().await;
         self.inner.put_patch(id, patch).await
     }
 }
@@ -110,6 +113,34 @@ pub async fn load_patch_via_store(
         return Ok(patch);
     }
 
+    let patch = provider.fetch_patch(id).await?;
+    store
+        .put_patch_locked(id, &patch)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(patch)
+}
+
+/// Fetches detail from the Provider, updates LocalStore, and returns it.
+pub async fn refresh_pull_request_detail(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+) -> Result<PullRequestDetail, ProviderError> {
+    let detail = provider.fetch_pull_request(id).await?;
+    store
+        .put_pull_request_detail_locked(&detail)
+        .await
+        .map_err(|e| ProviderError::other(e.to_string()))?;
+    Ok(detail)
+}
+
+/// Fetches patch from the Provider, updates LocalStore, and returns it.
+pub async fn refresh_patch(
+    provider: &dyn Provider,
+    store: &AppLocalStore,
+    id: &PullRequestId,
+) -> Result<Patch, ProviderError> {
     let patch = provider.fetch_patch(id).await?;
     store
         .put_patch_locked(id, &patch)

@@ -28,7 +28,10 @@ use reviewdesk_core::{
 };
 use tokio::runtime::Handle;
 
-use crate::sync::{load_detail_via_store, load_patch_via_store, sync_inbox_from_provider, AppLocalStore};
+use crate::sync::{
+    load_detail_via_store, load_patch_via_store, refresh_patch, refresh_pull_request_detail,
+    sync_inbox_from_provider, AppLocalStore,
+};
 use crate::overview_body::{
     compose_overview_markdown, parse_body_segments, parse_details_fence, BodySegment, DetailsBlock,
     DetailsFence,
@@ -96,7 +99,9 @@ pub struct ReviewDesk {
     files_scroll: UniformListScrollHandle,
     overview_segments: Vec<BodySegment>,
     details_open: HashMap<usize, bool>,
-    _inbox_task: Task<()>,
+    _inbox_reload_task: Task<()>,
+    _inbox_sync_task: Task<()>,
+    inbox_sync_generation: u64,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
@@ -123,7 +128,7 @@ impl ReviewDesk {
             store,
             runtime: runtime.handle().clone(),
             _runtime: runtime,
-            inbox: LoadState::Ready(Vec::new()),
+            inbox: LoadState::Loading,
             inbox_sync: InboxSyncState::default(),
             selected_id: None,
             review_tab: ReviewTab::Overview,
@@ -137,7 +142,9 @@ impl ReviewDesk {
             files_scroll: UniformListScrollHandle::new(),
             overview_segments: Vec::new(),
             details_open: HashMap::new(),
-            _inbox_task: Task::ready(()),
+            _inbox_reload_task: Task::ready(()),
+            _inbox_sync_task: Task::ready(()),
+            inbox_sync_generation: 0,
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
@@ -179,7 +186,7 @@ impl ReviewDesk {
         let runtime = self.runtime.clone();
         let previous = self.selected_id.clone();
 
-        self._inbox_task = cx.spawn(async move |this, cx| {
+        self._inbox_reload_task = cx.spawn(async move |this, cx| {
             let result = runtime
                 .spawn(async move { store.query_inbox(&InboxQuery::default()).await })
                 .await
@@ -205,6 +212,8 @@ impl ReviewDesk {
     }
 
     fn sync_inbox_from_provider(&mut self, cx: &mut Context<Self>) {
+        self.inbox_sync_generation += 1;
+        let generation = self.inbox_sync_generation;
         self.inbox_sync.syncing = true;
         self.inbox_sync.error = None;
         cx.notify();
@@ -214,7 +223,7 @@ impl ReviewDesk {
         let runtime = self.runtime.clone();
         let options = InboxOptions::default();
 
-        self._inbox_task = cx.spawn(async move |this, cx| {
+        self._inbox_sync_task = cx.spawn(async move |this, cx| {
             let result = runtime
                 .spawn(async move {
                     sync_inbox_from_provider(provider.as_ref(), &store, &options).await
@@ -223,20 +232,31 @@ impl ReviewDesk {
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
             let _ = this.update(cx, |this, cx| {
+                if this.inbox_sync_generation != generation {
+                    return;
+                }
                 this.inbox_sync.syncing = false;
                 match result {
                     Ok(()) => {
                         this.inbox_sync.last_success = Some(Utc::now());
                         this.inbox_sync.error = None;
-                        this.reload_inbox_from_store(cx);
                     }
                     Err(error) => {
                         this.inbox_sync.error = Some(error.to_string());
                     }
                 }
+                this.reload_inbox_from_store(cx);
                 cx.notify();
             });
         });
+    }
+
+    fn inbox_placeholder_message(&self) -> &'static str {
+        if self.inbox_sync.syncing {
+            "Syncing pull requests…"
+        } else {
+            "No pull requests waiting for your review."
+        }
     }
 
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -325,6 +345,8 @@ impl ReviewDesk {
                 .await
                 .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
 
+            let had_cache = matches!(&cached, Ok(Some(_)));
+
             if let Ok(Some(detail)) = cached {
                 let _ = this.update(cx, |this, cx| {
                     if this.selected_id.as_ref() != Some(&request_id) {
@@ -335,26 +357,39 @@ impl ReviewDesk {
                     this.detail = LoadState::Ready(detail);
                     cx.notify();
                 });
-                return;
+            } else {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.detail = LoadState::Loading;
+                    cx.notify();
+                });
             }
-
-            let _ = this.update(cx, |this, cx| {
-                if this.selected_id.as_ref() != Some(&request_id) {
-                    return;
-                }
-                this.detail = LoadState::Loading;
-                cx.notify();
-            });
 
             let result = runtime
                 .spawn(async move {
-                    load_detail_via_store(provider.as_ref(), &store, &fetch_id).await
+                    if had_cache {
+                        // stale-while-revalidate: show cache first, then refresh from Provider.
+                        refresh_pull_request_detail(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_detail_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
             let _ = this.update(cx, |this, cx| {
                 if this.selected_id.as_ref() != Some(&request_id) {
+                    return;
+                }
+                if had_cache {
+                    if let Ok(detail) = result {
+                        this.details_open.clear();
+                        this.overview_segments = parse_body_segments(&detail.body);
+                        this.detail = LoadState::Ready(detail);
+                        cx.notify();
+                    }
                     return;
                 }
                 this.details_open.clear();
@@ -390,6 +425,8 @@ impl ReviewDesk {
                 .await
                 .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
 
+            let had_cache = matches!(&cached, Ok(Some(_)));
+
             if let Ok(Some(patch)) = cached {
                 let _ = this.update(cx, |this, cx| {
                     if this.selected_id.as_ref() != Some(&request_id) {
@@ -398,26 +435,37 @@ impl ReviewDesk {
                     this.patch_files = apply_parsed_patch(this, &patch, cx);
                     cx.notify();
                 });
-                return;
+            } else {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.patch_files = LoadState::Loading;
+                    cx.notify();
+                });
             }
-
-            let _ = this.update(cx, |this, cx| {
-                if this.selected_id.as_ref() != Some(&request_id) {
-                    return;
-                }
-                this.patch_files = LoadState::Loading;
-                cx.notify();
-            });
 
             let result = runtime
                 .spawn(async move {
-                    load_patch_via_store(provider.as_ref(), &store, &fetch_id).await
+                    if had_cache {
+                        // stale-while-revalidate: show cache first, then refresh from Provider.
+                        refresh_patch(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_patch_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
             let _ = this.update(cx, |this, cx| {
                 if this.selected_id.as_ref() != Some(&request_id) {
+                    return;
+                }
+                if had_cache {
+                    if let Ok(patch) = result {
+                        this.patch_files = apply_parsed_patch(this, &patch, cx);
+                        cx.notify();
+                    }
                     return;
                 }
                 this.patch_files = match result {
@@ -549,11 +597,7 @@ impl ReviewDesk {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .text_center()
-                            .child(if self.inbox_sync.syncing {
-                                "Syncing pull requests…"
-                            } else {
-                                "No pull requests waiting for your review."
-                            }),
+                            .child(self.inbox_placeholder_message()),
                     )
                     .into_any_element(),
                 LoadState::Error(error) => {
@@ -592,7 +636,7 @@ impl ReviewDesk {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .text_center()
-                            .child("No pull requests waiting for your review."),
+                            .child(self.inbox_placeholder_message()),
                     )
                     .into_any_element(),
                 LoadState::Ready(items) => {
