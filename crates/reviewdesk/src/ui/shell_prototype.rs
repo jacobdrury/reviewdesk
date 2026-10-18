@@ -65,6 +65,11 @@ const STUB_METADATA_ROWS: &[(&str, &str)] = &[
 ];
 
 #[derive(Clone, Copy)]
+struct StubLabel {
+    name: &'static str,
+}
+
+#[derive(Clone, Copy)]
 struct StubPr {
     id: &'static str,
     number: u32,
@@ -74,7 +79,10 @@ struct StubPr {
     review_state: &'static str,
     ci: &'static str,
     updated: &'static str,
-    labels: &'static [&'static str],
+    labels: &'static [StubLabel],
+    files: u32,
+    additions: u32,
+    deletions: u32,
     is_draft: bool,
     i_am_reviewer: bool,
     i_am_author: bool,
@@ -90,7 +98,12 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Passing",
         updated: "2h",
-        labels: &["wayfinder:prototype"],
+        labels: &[StubLabel {
+            name: "wayfinder:prototype",
+        }],
+        files: 8,
+        additions: 420,
+        deletions: 95,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: true,
@@ -104,7 +117,15 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Approved",
         ci: "Passing",
         updated: "1d",
-        labels: &["wayfinder:prototype", "shell"],
+        labels: &[
+            StubLabel {
+                name: "wayfinder:prototype",
+            },
+            StubLabel { name: "shell" },
+        ],
+        files: 12,
+        additions: 680,
+        deletions: 140,
         is_draft: false,
         i_am_reviewer: false,
         i_am_author: true,
@@ -118,7 +139,12 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Changes requested",
         ci: "Failing",
         updated: "3h",
-        labels: &["wayfinder:grilling"],
+        labels: &[StubLabel {
+            name: "wayfinder:grilling",
+        }],
+        files: 3,
+        additions: 88,
+        deletions: 12,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -132,7 +158,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Pending",
         updated: "4h",
-        labels: &["billing"],
+        labels: &[StubLabel { name: "billing" }],
+        files: 5,
+        additions: 210,
+        deletions: 18,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -146,7 +175,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Draft",
         ci: "—",
         updated: "5d",
-        labels: &["design", "billing"],
+        labels: &[StubLabel { name: "design" }, StubLabel { name: "billing" }],
+        files: 4,
+        additions: 156,
+        deletions: 40,
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -160,7 +192,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Approved",
         ci: "Passing",
         updated: "6h",
-        labels: &["ui"],
+        labels: &[StubLabel { name: "ui" }],
+        files: 2,
+        additions: 34,
+        deletions: 9,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -174,7 +209,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Draft",
         ci: "—",
         updated: "2d",
-        labels: &["theme"],
+        labels: &[StubLabel { name: "theme" }],
+        files: 6,
+        additions: 290,
+        deletions: 55,
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -188,7 +226,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Passing",
         updated: "8h",
-        labels: &["core"],
+        labels: &[StubLabel { name: "core" }],
+        files: 15,
+        additions: 920,
+        deletions: 310,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -202,7 +243,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Review required",
         ci: "Passing",
         updated: "1d",
-        labels: &["billing", "infra"],
+        labels: &[StubLabel { name: "billing" }, StubLabel { name: "infra" }],
+        files: 7,
+        additions: 188,
+        deletions: 22,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -216,7 +260,10 @@ const STUB_PRS: &[StubPr] = &[
         review_state: "Approved",
         ci: "Passing",
         updated: "3d",
-        labels: &["ui"],
+        labels: &[StubLabel { name: "ui" }],
+        files: 3,
+        additions: 72,
+        deletions: 14,
         is_draft: false,
         i_am_reviewer: false,
         i_am_author: false,
@@ -245,6 +292,9 @@ pub(crate) struct PrototypeChrome {
     pub selected_stub_id: Option<&'static str>,
     pub selected_repo: Option<&'static str>,
     pub collapsed_groups: HashSet<String>,
+    pub filter_menu_open: bool,
+    /// Dismissed Linear-style filter chips (prototype).
+    pub dismissed_filters: HashSet<&'static str>,
     pub view: SessionView,
     pub diff: Entity<DiffState>,
     pub inbox_scroll: UniformListScrollHandle,
@@ -1144,7 +1194,7 @@ fn render_linear_view_tabs(
     )
 }
 
-/// Linear Filter (left) + Display (right) — not a full search field.
+/// Linear Filter row: Filter button + composed chips + Display.
 fn render_linear_filter_display(
     proto: &PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
@@ -1155,27 +1205,34 @@ fn render_linear_filter_display(
         Some(g) => g,
         None => "Status",
     };
-    let filter_label = match proto.selected_repo {
-        Some(repo) => format!("repo:{repo} · {}", view.filter_summary()),
-        None => view.filter_summary().to_string(),
-    };
-    h_flex()
+
+    let mut bar = v_flex()
+        .w_full()
+        .border_b_1()
+        .border_color(cx.theme().border);
+
+    let mut row = h_flex()
         .w_full()
         .px_4()
         .py_2()
         .items_center()
         .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border)
         .child(
             h_flex()
+                .id("filter-toggle")
                 .items_center()
                 .gap_1()
                 .px_2()
                 .py(px(4.))
                 .rounded_md()
                 .cursor_pointer()
+                .when(proto.filter_menu_open, |el| {
+                    el.bg(cx.theme().secondary.opacity(0.55))
+                })
                 .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_filter_menu(cx);
+                }))
                 .child(
                     Icon::new(IconName::Menu)
                         .xsmall()
@@ -1187,41 +1244,224 @@ fn render_linear_filter_display(
                         .text_color(cx.theme().muted_foreground)
                         .child("Filter"),
                 ),
-        )
-        .child(
+        );
+
+    // Active Linear-style chips for the current View / repo scope.
+    if !proto.dismissed_filters.contains("view") && view != StubViewId::AllPrs {
+        row = row.child(linear_filter_chip(
+            "view",
+            "View",
+            "is",
+            view.label(),
+            None,
+            cx,
+        ));
+    }
+    if let Some(repo) = proto.selected_repo {
+        if !proto.dismissed_filters.contains("repo") {
+            row = row.child(linear_filter_chip(
+                "repo",
+                "Repository",
+                "is",
+                short_repo(repo),
+                Some(IconName::Github),
+                cx,
+            ));
+        }
+    }
+    if matches!(
+        view,
+        StubViewId::NeedsMyReview | StubViewId::Mine | StubViewId::Drafts
+    ) && !proto.dismissed_filters.contains("review")
+    {
+        let value = match view {
+            StubViewId::NeedsMyReview => "Review required",
+            StubViewId::Drafts => "Draft",
+            _ => "Open",
+        };
+        row = row.child(linear_filter_chip(
+            "review",
+            "Status",
+            "is any of",
+            value,
+            Some(review_icon(value, value == "Draft")),
+            cx,
+        ));
+    }
+
+    let has_chips = view != StubViewId::AllPrs || proto.selected_repo.is_some();
+    if has_chips {
+        row = row.child(
             div()
-                .flex_1()
-                .min_w_0()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .truncate()
-                .child(filter_label),
-        )
-        .child(
+                .id("clear-filters")
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.45)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.clear_filters(cx);
+                }))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Clear filters"),
+                ),
+        );
+    }
+
+    row = row.child(div().flex_1()).child(
+        h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py(px(4.))
+            .rounded_md()
+            .cursor_pointer()
+            .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
+            .child(
+                Icon::new(IconName::Settings2)
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Display"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("· {group}")),
+            ),
+    );
+
+    bar = bar.child(row);
+
+    if proto.filter_menu_open {
+        bar = bar.child(render_filter_dimension_menu(cx));
+    }
+
+    bar
+}
+
+/// Linear “add filter” dimensions strip.
+fn render_filter_dimension_menu(cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+    const DIMENSIONS: &[(&str, IconName)] = &[
+        ("Status", IconName::CircleCheck),
+        ("Repository", IconName::Github),
+        ("Author", IconName::User),
+        ("Label", IconName::Asterisk),
+        ("Draft", IconName::Square),
+        ("CI", IconName::LoaderCircle),
+        ("I am reviewer", IconName::Eye),
+        ("Updated", IconName::Calendar),
+    ];
+    let mut menu = h_flex()
+        .w_full()
+        .px_4()
+        .pb_2()
+        .gap_1()
+        .items_center();
+    menu = menu.child(
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child("Filter by"),
+    );
+    for (label, icon) in DIMENSIONS {
+        let icon = icon.clone();
+        menu = menu.child(
             h_flex()
                 .items_center()
                 .gap_1()
                 .px_2()
                 .py(px(4.))
                 .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
                 .cursor_pointer()
-                .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.45)))
                 .child(
-                    Icon::new(IconName::Settings2)
+                    Icon::new(icon)
                         .xsmall()
                         .text_color(cx.theme().muted_foreground),
                 )
                 .child(
                     div()
                         .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Display"),
-                )
+                        .text_color(cx.theme().foreground)
+                        .child(*label),
+                ),
+        );
+    }
+    menu
+}
+
+/// Linear composed filter chip: `Status` `is any of` [icon] `value` ×
+fn linear_filter_chip(
+    id: &'static str,
+    field: &str,
+    op: &str,
+    value: &str,
+    value_icon: Option<IconName>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let field = field.to_string();
+    let op = op.to_string();
+    let value = value.to_string();
+    h_flex()
+        .id(SharedString::from(format!("fchip-{id}")))
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py(px(3.))
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.35))
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().muted_foreground)
+                .child(field),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(op),
+        )
+        .when_some(value_icon, |el, icon| {
+            el.child(
+                Icon::new(icon)
+                    .xsmall()
+                    .text_color(cx.theme().foreground),
+            )
+        })
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().foreground)
+                .child(value),
+        )
+        .child(
+            div()
+                .id(SharedString::from(format!("fchip-x-{id}")))
+                .cursor_pointer()
+                .px_1()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dismiss_filter_chip(id, cx);
+                }))
                 .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("· {group}")),
+                    Icon::new(IconName::Close)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
                 ),
         )
 }
@@ -1631,7 +1871,7 @@ fn render_pr_rows(
 }
 
 /// Linear Issues/backlog row → PR.
-/// priority · #71 · status · title ··· [repo] [labels] · date · avatar
+/// grip · #71 · 2h · status · title ··· [repo] [labels] · files ±lines · avatar
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let author_initial = pr
         .author
@@ -1645,13 +1885,11 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         .w_full()
         .items_center()
         .gap_2()
-        // Priority / grip (Linear left affordance)
         .child(
             Icon::new(IconName::EllipsisVertical)
                 .xsmall()
                 .text_color(cx.theme().muted_foreground.opacity(0.45)),
         )
-        // PR id only
         .child(
             div()
                 .min_w(px(36.))
@@ -1659,13 +1897,19 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
                 .text_color(cx.theme().muted_foreground)
                 .child(format!("#{}", pr.number)),
         )
-        // Status icon (review state)
+        // Time sits immediately right of the PR number.
+        .child(
+            div()
+                .min_w(px(28.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(pr.updated),
+        )
         .child(
             Icon::new(review_icon(pr.review_state, pr.is_draft))
                 .xsmall()
                 .text_color(status_color),
         )
-        // Title
         .child(
             div()
                 .flex_1()
@@ -1675,10 +1919,9 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
                 .child(pr.title),
         );
 
-    // Right-side pills sit immediately before date (Linear project/label zone).
-    row = row.child(row_pill(Some(IconName::LayoutDashboard), short_repo(pr.repo), cx));
+    row = row.child(repo_pill(short_repo(pr.repo), cx));
     for label in pr.labels.iter().take(2) {
-        row = row.child(row_pill(None, label, cx));
+        row = row.child(label_pill(label.name, cx));
     }
 
     if pr.ci == "Failing" {
@@ -1698,55 +1941,121 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         );
     }
 
-    row.child(
-        div()
-            .min_w(px(36.))
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(pr.updated),
-    )
-    .child(
-        div()
-            .size(px(20.))
-            .rounded_full()
-            .bg(author_color(pr.author, cx))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .text_xs()
-                    .font_medium()
-                    .text_color(cx.theme().background)
-                    .child(author_initial),
-            ),
-    )
+    row.child(diffstat_chip(pr.files, pr.additions, pr.deletions, cx))
+        .child(
+            div()
+                .size(px(20.))
+                .rounded_full()
+                .bg(author_color(pr.author, cx))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(cx.theme().background)
+                        .child(author_initial),
+                ),
+        )
 }
 
-fn row_pill(icon: Option<IconName>, text: &str, cx: &App) -> impl IntoElement {
-    let mut pill = h_flex()
+fn repo_pill(name: &str, cx: &App) -> impl IntoElement {
+    h_flex()
         .items_center()
         .gap_1()
         .px_1()
         .py(px(2.))
         .rounded_md()
         .bg(cx.theme().secondary.opacity(0.65))
-        .flex_shrink_0();
-    if let Some(icon) = icon {
-        pill = pill.child(
-            Icon::new(icon)
+        .flex_shrink_0()
+        .child(
+            Icon::new(IconName::Github)
                 .xsmall()
                 .text_color(cx.theme().muted_foreground),
-        );
+        )
+        .child(
+            div()
+                .max_w(px(110.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(name.to_string()),
+        )
+}
+
+fn label_pill(name: &str, cx: &App) -> impl IntoElement {
+    let color = provider_label_color(name, cx);
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .py(px(2.))
+        .rounded_md()
+        .bg(color.opacity(0.22))
+        .border_1()
+        .border_color(color.opacity(0.55))
+        .flex_shrink_0()
+        .child(
+            div()
+                .size(px(6.))
+                .rounded_full()
+                .bg(color),
+        )
+        .child(
+            div()
+                .max_w(px(120.))
+                .text_xs()
+                .text_color(color)
+                .truncate()
+                .child(name.to_string()),
+        )
+}
+
+fn diffstat_chip(files: u32, additions: u32, deletions: u32, cx: &App) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .flex_shrink_0()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("{files}")),
+        )
+        .child(
+            Icon::new(IconName::File)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().success)
+                .child(format!("+{additions}")),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().danger)
+                .child(format!("−{deletions}")),
+        )
+}
+
+/// Distinct colors per Provider label name (stub palette).
+fn provider_label_color(name: &str, cx: &App) -> gpui_kit::Hsla {
+    match name {
+        "wayfinder:prototype" => cx.theme().accent,
+        "wayfinder:grilling" => cx.theme().warning,
+        "billing" => cx.theme().success,
+        "design" => cx.theme().info,
+        "ui" => cx.theme().link,
+        "theme" => cx.theme().warning.opacity(0.85),
+        "core" => cx.theme().danger.opacity(0.75),
+        "shell" => cx.theme().accent.opacity(0.8),
+        "infra" => cx.theme().muted_foreground,
+        _ => cx.theme().muted_foreground,
     }
-    pill.child(
-        div()
-            .max_w(px(110.))
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .truncate()
-            .child(text.to_string()),
-    )
 }
 
 fn author_color(author: &str, cx: &App) -> gpui_kit::Hsla {

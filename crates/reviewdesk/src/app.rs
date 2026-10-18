@@ -69,6 +69,8 @@ pub struct ReviewDesk {
     selected_repo: Option<&'static str>,
     /// Collapsed group keys (headers + nested sub-headers).
     collapsed_groups: HashSet<String>,
+    filter_menu_open: bool,
+    dismissed_filters: HashSet<&'static str>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -108,6 +110,8 @@ impl ReviewDesk {
             selected_stub_id: None,
             selected_repo: None,
             collapsed_groups: HashSet::new(),
+            filter_menu_open: false,
+            dismissed_filters: HashSet::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -327,6 +331,31 @@ impl ReviewDesk {
         cx.notify();
     }
 
+    pub(crate) fn toggle_filter_menu(&mut self, cx: &mut Context<Self>) {
+        self.filter_menu_open = !self.filter_menu_open;
+        cx.notify();
+    }
+
+    pub(crate) fn dismiss_filter_chip(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.dismissed_filters.insert(id);
+        if id == "repo" {
+            self.selected_repo = None;
+        }
+        if id == "view" {
+            self.selected_view = StubViewId::AllPrs;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn clear_filters(&mut self, cx: &mut Context<Self>) {
+        self.dismissed_filters.clear();
+        self.selected_repo = None;
+        self.selected_view = StubViewId::AllPrs;
+        self.filter_menu_open = false;
+        self.selected_stub_id = None;
+        cx.notify();
+    }
+
     pub(crate) fn cycle_list_demo(&mut self, cx: &mut Context<Self>) {
         self.list_demo = self.list_demo.next();
         self.selected_stub_id = None;
@@ -434,6 +463,8 @@ impl Render for ReviewDesk {
                 selected_stub_id: self.selected_stub_id,
                 selected_repo: self.selected_repo,
                 collapsed_groups: self.collapsed_groups.clone(),
+                filter_menu_open: self.filter_menu_open,
+                dismissed_filters: self.dismissed_filters.clone(),
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),
