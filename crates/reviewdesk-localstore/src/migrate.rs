@@ -96,6 +96,22 @@ create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_lis
 create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
 ",
     ),
+    (
+        5,
+        "
+create table reviewdesk_notification_threads (
+    id text not null primary key,
+    pull_request_id text not null,
+    title text not null,
+    repo_label text not null,
+    reason text not null,
+    unread integer not null default 1 check (unread in (0, 1)),
+    updated_at text not null
+);
+create index idx_notification_threads_updated_at on reviewdesk_notification_threads(updated_at);
+create index idx_notification_threads_unread on reviewdesk_notification_threads(unread);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

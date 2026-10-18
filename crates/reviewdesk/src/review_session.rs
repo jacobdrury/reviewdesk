@@ -6,13 +6,18 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
 use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
 use reviewdesk_core::{
-    Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+    NotificationReason, NotificationThread, NotificationThreadId, Patch, ProviderError,
+    PullRequestDetail, PullRequestId, PullRequestListItem,
 };
+
+/// Fallback Inbox poll cadence when the Provider sends no `X-Poll-Interval`.
+pub const DEFAULT_INBOX_POLL: Duration = Duration::from_secs(60);
 
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
@@ -24,7 +29,11 @@ use crate::patch_index::{PatchIndex, index_patch};
 #[derive(Debug)]
 pub enum Intent {
     Boot,
+    SelectSidebarTab(SidebarTab),
     RefreshPullRequests,
+    RefreshInbox,
+    SelectNotification(NotificationThreadId),
+    NotificationDone(NotificationThreadId),
     SelectPullRequest(PullRequestId),
     SetReviewTab(ReviewTab),
     ToggleDetails {
@@ -42,6 +51,21 @@ pub enum Intent {
     },
     PullRequestListSyncFinished {
         generation: u64,
+        result: Result<(), ProviderError>,
+    },
+    InboxQueryFinished {
+        result: Result<Vec<NotificationThread>, ProviderError>,
+    },
+    InboxSyncFinished {
+        generation: u64,
+        result: Result<InboxSyncOutcome, ProviderError>,
+    },
+    NotificationReadFinished {
+        id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    },
+    NotificationDoneFinished {
+        id: NotificationThreadId,
         result: Result<(), ProviderError>,
     },
     DetailLocalFinished {
@@ -68,10 +92,45 @@ pub enum Intent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     QueryPullRequests,
-    SyncPullRequests { generation: u64 },
-    FetchDetail { id: PullRequestId },
-    FetchPatch { id: PullRequestId },
+    SyncPullRequests {
+        generation: u64,
+    },
+    QueryInbox,
+    SyncInbox {
+        generation: u64,
+        if_modified_since: Option<String>,
+    },
+    ArmInboxPollTimer {
+        interval: Duration,
+    },
+    MarkNotificationRead {
+        id: NotificationThreadId,
+    },
+    MarkNotificationDone {
+        id: NotificationThreadId,
+    },
+    FetchDetail {
+        id: PullRequestId,
+    },
+    FetchPatch {
+        id: PullRequestId,
+    },
     ArmPullRequestsRefreshTimer,
+}
+
+/// Which list the sidebar has selected for the left pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Inbox,
+    PullRequests,
+}
+
+/// Outcome of one Inbox poll, surfaced back into the kernel as an [`Intent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxSyncOutcome {
+    pub poll_interval: Option<Duration>,
+    pub last_modified: Option<String>,
+    pub not_modified: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
