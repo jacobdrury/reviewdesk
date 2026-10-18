@@ -80,8 +80,6 @@ struct StubPr {
     updated: &'static str,
     labels: &'static [StubLabel],
     files: u32,
-    additions: u32,
-    deletions: u32,
     is_draft: bool,
     i_am_reviewer: bool,
     i_am_author: bool,
@@ -101,8 +99,6 @@ const STUB_PRS: &[StubPr] = &[
             name: "wayfinder:prototype",
         }],
         files: 8,
-        additions: 420,
-        deletions: 95,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: true,
@@ -123,8 +119,6 @@ const STUB_PRS: &[StubPr] = &[
             StubLabel { name: "shell" },
         ],
         files: 12,
-        additions: 680,
-        deletions: 140,
         is_draft: false,
         i_am_reviewer: false,
         i_am_author: true,
@@ -142,8 +136,6 @@ const STUB_PRS: &[StubPr] = &[
             name: "wayfinder:grilling",
         }],
         files: 3,
-        additions: 88,
-        deletions: 12,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -159,8 +151,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "4h",
         labels: &[StubLabel { name: "billing" }],
         files: 5,
-        additions: 210,
-        deletions: 18,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -176,8 +166,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "5d",
         labels: &[StubLabel { name: "design" }, StubLabel { name: "billing" }],
         files: 4,
-        additions: 156,
-        deletions: 40,
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -193,8 +181,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "6h",
         labels: &[StubLabel { name: "ui" }],
         files: 2,
-        additions: 34,
-        deletions: 9,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -210,8 +196,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "2d",
         labels: &[StubLabel { name: "theme" }],
         files: 6,
-        additions: 290,
-        deletions: 55,
         is_draft: true,
         i_am_reviewer: false,
         i_am_author: true,
@@ -227,8 +211,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "8h",
         labels: &[StubLabel { name: "core" }],
         files: 15,
-        additions: 920,
-        deletions: 310,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -244,8 +226,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "1d",
         labels: &[StubLabel { name: "billing" }, StubLabel { name: "infra" }],
         files: 7,
-        additions: 188,
-        deletions: 22,
         is_draft: false,
         i_am_reviewer: true,
         i_am_author: false,
@@ -261,8 +241,6 @@ const STUB_PRS: &[StubPr] = &[
         updated: "3d",
         labels: &[StubLabel { name: "ui" }],
         files: 3,
-        additions: 72,
-        deletions: 14,
         is_draft: false,
         i_am_reviewer: false,
         i_am_author: false,
@@ -1307,7 +1285,7 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         );
     }
 
-    row.child(diffstat_chip(pr.files, pr.additions, pr.deletions, cx))
+    row.child(filesize_chip(pr.files, cx))
         .child(
             div()
                 .size(px(20.))
@@ -1378,17 +1356,12 @@ fn label_pill(name: &str, cx: &App) -> impl IntoElement {
         )
 }
 
-fn diffstat_chip(files: u32, additions: u32, deletions: u32, cx: &App) -> impl IntoElement {
+/// Compact PR size signal: file count only (no ± line noise).
+fn filesize_chip(files: u32, cx: &App) -> impl IntoElement {
     h_flex()
         .items_center()
         .gap_1()
         .flex_shrink_0()
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("{files}")),
-        )
         .child(
             Icon::new(IconName::File)
                 .xsmall()
@@ -1397,14 +1370,8 @@ fn diffstat_chip(files: u32, additions: u32, deletions: u32, cx: &App) -> impl I
         .child(
             div()
                 .text_xs()
-                .text_color(cx.theme().success)
-                .child(format!("+{additions}")),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().danger)
-                .child(format!("−{deletions}")),
+                .text_color(cx.theme().muted_foreground)
+                .child(files.to_string()),
         )
 }
 
