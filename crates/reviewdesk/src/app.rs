@@ -7,23 +7,35 @@ use gpui_kit::component::{
     diff::{Diff, DiffAnnotation, DiffFile, DiffLinePosition, DiffLineRange, DiffMode, DiffState},
     h_flex,
     list::ListItem,
+    notification::Notification,
     resizable::{h_resizable, resizable_panel},
     scroll::Scrollbar,
     spinner::Spinner,
     tab::{Tab, TabBar},
-    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar,
+    v_flex, ActiveTheme as _, IconName, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
 };
 use gpui_kit::{
     div, point, px, uniform_list, AppContext as _, Context, ElementId, Entity,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, UniformListScrollHandle, Window,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
+    Window, WindowAppearance,
 };
 use reviewdesk_core::{
     InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
+use crate::theme::{
+    apply_sync_result, discover_macos, missing_theme_toast_message, Appearance, ToastIntent,
+};
 use crate::INBOX_REFRESH;
+
+fn appearance_from_window(window: &Window) -> Appearance {
+    match window.appearance() {
+        WindowAppearance::Dark | WindowAppearance::VibrantDark => Appearance::Dark,
+        WindowAppearance::Light | WindowAppearance::VibrantLight => Appearance::Light,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewTab {
@@ -65,6 +77,7 @@ pub struct ReviewDesk {
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
+    _window_activation: Option<Subscription>,
 }
 
 impl ReviewDesk {
@@ -96,10 +109,31 @@ impl ReviewDesk {
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
+            _window_activation: None,
         };
+        this.sync_theme(window, cx);
+        this._window_activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if !window.is_window_active() {
+                return;
+            }
+            this.sync_theme(window, cx);
+        }));
         this.refresh_inbox(cx);
         this.start_inbox_timer(cx);
         this
+    }
+
+    fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = appearance_from_window(window);
+        let result = discover_macos().sync(appearance);
+        apply_sync_result(cx, &result);
+        if let ToastIntent::MissingTheme { name } = &result.toast {
+            window.push_notification(
+                Notification::warning(missing_theme_toast_message(name)),
+                cx,
+            );
+        }
+        cx.notify();
     }
 
     fn start_inbox_timer(&mut self, cx: &mut Context<Self>) {
