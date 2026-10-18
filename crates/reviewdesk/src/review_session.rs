@@ -13,8 +13,13 @@ use gpui_kit::SharedString;
 use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode, DiffSide};
 use reviewdesk_core::{
     DiffAnchor, DiffLineSide, NotificationReason, NotificationThread, NotificationThreadId, Patch,
-    ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestThreads,
-    ReviewSubmitEvent, ThreadStatus,
+    ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListSort,
+    PullRequestThreads, ReviewSubmitEvent, ThreadStatus, View, ViewFilter, ViewGroupBy, ViewId,
+    ViewKind, resolve_launch_view_id,
+};
+
+use crate::pull_requests_pane::{
+    PullRequestsPaneInputs, PullRequestsPaneView, project_pull_requests_pane,
 };
 
 /// Fallback Inbox poll cadence when the Provider sends no `X-Poll-Interval`.
@@ -66,6 +71,34 @@ pub enum Intent {
     PullRequestListSyncFinished {
         generation: u64,
         result: Result<(), ProviderError>,
+    },
+    PullRequestsViewsBootstrapFinished {
+        views: Result<Vec<View>, ProviderError>,
+        last_used: Result<Option<ViewId>, ProviderError>,
+        scoped_repository: Result<Option<String>, ProviderError>,
+    },
+    ViewerLoginFinished {
+        result: Result<String, ProviderError>,
+    },
+    SelectView(ViewId),
+    SetRepoScope {
+        repo: Option<String>,
+    },
+    SaveActiveView,
+    SaveViewAsNew {
+        name: String,
+    },
+    DiscardViewEdits,
+    RenameActiveView {
+        name: String,
+    },
+    DeleteActiveView,
+    #[allow(dead_code)]
+    ReorderViews {
+        order: Vec<ViewId>,
+    },
+    ViewsPersistFinished {
+        views: Result<Vec<View>, ProviderError>,
     },
     InboxQueryFinished {
         result: Result<Vec<NotificationThread>, ProviderError>,
@@ -162,6 +195,13 @@ pub enum Effect {
         id: PullRequestId,
     },
     ArmPullRequestsRefreshTimer,
+    BootstrapPullRequestsViews,
+    FetchViewerLogin,
+    PersistViews {
+        views: Vec<View>,
+        last_used: Option<ViewId>,
+        scoped_repository: Option<String>,
+    },
 }
 
 /// Which list the sidebar has selected for the left pane.
@@ -300,8 +340,7 @@ pub struct SessionView {
     pub inbox: LoadState<Arc<[NotificationThread]>>,
     pub inbox_sync: InboxSyncView,
     pub inbox_auth_error: Option<String>,
-    pub pull_requests: LoadState<Arc<[PullRequestListItem]>>,
-    pub pull_requests_sync: PullRequestsSyncView,
+    pub pull_requests_pane: PullRequestsPaneView,
     pub selected_id: Option<PullRequestId>,
     pub review_tab: ReviewTab,
     pub metadata_dock: MetadataDock,
@@ -336,9 +375,18 @@ pub struct ReviewSession {
     inbox_auth_error: Option<String>,
     inbox_sync_generation: u64,
     inbox_last_modified: Option<String>,
-    pull_requests: LoadState<Arc<[PullRequestListItem]>>,
+    pull_request_cache: LoadState<Arc<[PullRequestListItem]>>,
     pull_requests_sync: PullRequestsSyncView,
     pull_requests_sync_generation: u64,
+    views: LoadState<Arc<[View]>>,
+    active_view_id: Option<ViewId>,
+    working_filter: ViewFilter,
+    working_group_by: ViewGroupBy,
+    working_sort: PullRequestListSort,
+    saved_snapshot: Option<(ViewFilter, ViewGroupBy, PullRequestListSort)>,
+    viewer_login: Option<String>,
+    repo_scope: Option<String>,
+    next_user_view_seq: u64,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     metadata_dock: MetadataDock,
@@ -367,9 +415,18 @@ impl ReviewSession {
             inbox_auth_error: None,
             inbox_sync_generation: 0,
             inbox_last_modified: None,
-            pull_requests: LoadState::Loading,
+            pull_request_cache: LoadState::Loading,
             pull_requests_sync: PullRequestsSyncView::default(),
             pull_requests_sync_generation: 0,
+            views: LoadState::Loading,
+            active_view_id: None,
+            working_filter: ViewFilter::default(),
+            working_group_by: ViewGroupBy::default(),
+            working_sort: PullRequestListSort::default(),
+            saved_snapshot: None,
+            viewer_login: None,
+            repo_scope: None,
+            next_user_view_seq: 1,
             selected_id: None,
             review_tab: ReviewTab::Overview,
             metadata_dock: MetadataDock::Open,
@@ -464,6 +521,32 @@ impl ReviewSession {
             Intent::PullRequestListSyncFinished { generation, result } => {
                 self.on_pull_requests_sync_finished(generation, result)
             }
+            Intent::PullRequestsViewsBootstrapFinished {
+                views,
+                last_used,
+                scoped_repository,
+            } => self.on_views_bootstrap_finished(views, last_used, scoped_repository),
+            Intent::ViewerLoginFinished { result } => {
+                if let Ok(login) = result {
+                    self.viewer_login = Some(login);
+                }
+                Vec::new()
+            }
+            Intent::SelectView(id) => self.select_view(id),
+            Intent::SetRepoScope { repo } => self.set_repo_scope(repo),
+            Intent::SaveActiveView => self.save_active_view(),
+            Intent::SaveViewAsNew { name } => self.save_view_as_new(name),
+            Intent::DiscardViewEdits => {
+                self.discard_view_edits();
+                Vec::new()
+            }
+            Intent::RenameActiveView { name } => self.rename_active_view(name),
+            Intent::DeleteActiveView => self.delete_active_view(),
+            Intent::ReorderViews { order } => self.reorder_views(order),
+            Intent::ViewsPersistFinished { views } => {
+                self.on_views_persist_finished(views);
+                Vec::new()
+            }
             Intent::InboxQueryFinished { result } => {
                 self.on_inbox_query_finished(result);
                 Vec::new()
@@ -543,8 +626,18 @@ impl ReviewSession {
             inbox: self.inbox.clone(),
             inbox_sync: self.inbox_sync.clone(),
             inbox_auth_error: self.inbox_auth_error.clone(),
-            pull_requests: self.pull_requests.clone(),
-            pull_requests_sync: self.pull_requests_sync.clone(),
+            pull_requests_pane: project_pull_requests_pane(&PullRequestsPaneInputs {
+                sync: self.pull_requests_sync.clone(),
+                cache: &self.pull_request_cache,
+                views: &self.views,
+                active_view_id: &self.active_view_id,
+                working_filter: &self.working_filter,
+                working_group_by: self.working_group_by,
+                working_sort: &self.working_sort,
+                saved_snapshot: &self.saved_snapshot,
+                viewer_login: &self.viewer_login,
+                repo_scope: &self.repo_scope,
+            }),
             selected_id: self.selected_id.clone(),
             review_tab: self.review_tab,
             metadata_dock: self.metadata_dock,
@@ -568,7 +661,7 @@ impl ReviewSession {
     }
 
     fn boot(&mut self) -> Vec<Effect> {
-        self.pull_requests = LoadState::Loading;
+        self.pull_request_cache = LoadState::Loading;
         self.inbox = LoadState::Loading;
         self.sidebar_tab = SidebarTab::Inbox;
         let mut effects = vec![Effect::QueryPullRequests, Effect::QueryInbox];
@@ -701,10 +794,10 @@ impl ReviewSession {
                 {
                     self.clear_selection();
                 }
-                self.pull_requests = LoadState::Ready(Arc::from(items));
+                self.pull_request_cache = LoadState::Ready(Arc::from(items));
             }
             Err(error) => {
-                self.pull_requests = LoadState::Error(error);
+                self.pull_request_cache = LoadState::Error(error);
             }
         }
     }
@@ -954,6 +1047,255 @@ impl ReviewSession {
             }
         }
     }
+
+    fn on_views_bootstrap_finished(
+        &mut self,
+        views: Result<Vec<View>, ProviderError>,
+        last_used: Result<Option<ViewId>, ProviderError>,
+        scoped_repository: Result<Option<String>, ProviderError>,
+    ) -> Vec<Effect> {
+        let views = views.unwrap_or_default();
+        let last_used = last_used.ok().flatten();
+        self.repo_scope = scoped_repository.ok().flatten();
+
+        let mut views = views;
+        if views.is_empty() {
+            views = View::seed_set();
+            let launch = resolve_launch_view_id(&views, last_used.as_ref());
+            self.active_view_id = Some(launch.clone());
+            self.load_working_from_active_view();
+            return vec![Effect::PersistViews {
+                views,
+                last_used: Some(launch),
+                scoped_repository: self.repo_scope.clone(),
+            }];
+        }
+
+        self.views = LoadState::Ready(Arc::from(views.clone()));
+        let launch = resolve_launch_view_id(&views, last_used.as_ref());
+        self.activate_view(launch);
+        Vec::new()
+    }
+
+    fn on_views_persist_finished(&mut self, views: Result<Vec<View>, ProviderError>) {
+        match views {
+            Ok(list) => {
+                self.views = LoadState::Ready(Arc::from(list));
+                if self.saved_snapshot.is_none() {
+                    self.load_working_from_active_view();
+                }
+            }
+            Err(_) => {
+                self.views = LoadState::Error(ProviderError::other("views persist failed"));
+            }
+        }
+    }
+
+    fn select_view(&mut self, id: ViewId) -> Vec<Effect> {
+        if self.active_view_id.as_ref() == Some(&id) {
+            return Vec::new();
+        }
+        self.activate_view(id.clone());
+        vec![Effect::PersistViews {
+            views: self.current_views_vec(),
+            last_used: Some(id),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn set_repo_scope(&mut self, repo: Option<String>) -> Vec<Effect> {
+        self.repo_scope = repo;
+        vec![Effect::PersistViews {
+            views: self.current_views_vec(),
+            last_used: self.active_view_id.clone(),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn save_active_view(&mut self) -> Vec<Effect> {
+        let Some(active) = self.active_view_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let Some(mut view) = views.iter().find(|v| v.id == active).cloned() else {
+            return Vec::new();
+        };
+        if !view.can_save_in_place() {
+            return Vec::new();
+        }
+        view.filter = self.working_filter.clone();
+        view.group_by = self.working_group_by;
+        view.sort = self.working_sort.clone();
+        let mut updated: Vec<View> = views.to_vec();
+        if let Some(slot) = updated.iter_mut().find(|v| v.id == active) {
+            *slot = view;
+        }
+        self.saved_snapshot = Some((
+            self.working_filter.clone(),
+            self.working_group_by,
+            self.working_sort.clone(),
+        ));
+        vec![Effect::PersistViews {
+            views: updated,
+            last_used: Some(active),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn save_view_as_new(&mut self, name: String) -> Vec<Effect> {
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Vec::new();
+        }
+        let id = ViewId::new(format!("user-{}", self.next_user_view_seq));
+        self.next_user_view_seq += 1;
+        let position = views.len() as i64;
+        let view = View {
+            id: id.clone(),
+            name: name.to_string(),
+            kind: ViewKind::User,
+            position,
+            filter: self.working_filter.clone(),
+            group_by: self.working_group_by,
+            sort: self.working_sort.clone(),
+        };
+        let mut updated = views.to_vec();
+        updated.push(view);
+        self.active_view_id = Some(id.clone());
+        self.saved_snapshot = Some((
+            self.working_filter.clone(),
+            self.working_group_by,
+            self.working_sort.clone(),
+        ));
+        vec![Effect::PersistViews {
+            views: updated,
+            last_used: Some(id),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn discard_view_edits(&mut self) {
+        self.load_working_from_active_view();
+    }
+
+    fn rename_active_view(&mut self, name: String) -> Vec<Effect> {
+        let Some(active) = self.active_view_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return Vec::new();
+        }
+        let mut updated: Vec<View> = views.to_vec();
+        let Some(slot) = updated.iter_mut().find(|v| v.id == active) else {
+            return Vec::new();
+        };
+        if !slot.can_rename() {
+            return Vec::new();
+        }
+        slot.name = name.to_string();
+        vec![Effect::PersistViews {
+            views: updated,
+            last_used: Some(active),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn delete_active_view(&mut self) -> Vec<Effect> {
+        let Some(active) = self.active_view_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let Some(view) = views.iter().find(|v| v.id == active) else {
+            return Vec::new();
+        };
+        if !view.can_delete() {
+            return Vec::new();
+        }
+        let mut updated: Vec<View> = views.iter().filter(|v| v.id != active).cloned().collect();
+        for (ix, view) in updated.iter_mut().enumerate() {
+            view.position = ix as i64;
+        }
+        let fallback = resolve_launch_view_id(&updated, None);
+        self.views = LoadState::Ready(Arc::from(updated.clone()));
+        self.activate_view(fallback.clone());
+        vec![Effect::PersistViews {
+            views: updated,
+            last_used: Some(fallback),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn reorder_views(&mut self, order: Vec<ViewId>) -> Vec<Effect> {
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        if order.len() != views.len() {
+            return Vec::new();
+        }
+        let mut by_id: std::collections::HashMap<&ViewId, &View> =
+            views.iter().map(|v| (&v.id, v)).collect();
+        let mut reordered = Vec::with_capacity(order.len());
+        for (position, id) in order.iter().enumerate() {
+            let Some(view) = by_id.remove(id) else {
+                return Vec::new();
+            };
+            let mut copy = (*view).clone();
+            copy.position = position as i64;
+            reordered.push(copy);
+        }
+        if !by_id.is_empty() {
+            return Vec::new();
+        }
+        vec![Effect::PersistViews {
+            views: reordered,
+            last_used: self.active_view_id.clone(),
+            scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn activate_view(&mut self, id: ViewId) {
+        self.active_view_id = Some(id);
+        self.load_working_from_active_view();
+    }
+
+    fn current_views_vec(&self) -> Vec<View> {
+        match &self.views {
+            LoadState::Ready(views) => views.to_vec(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn load_working_from_active_view(&mut self) {
+        let Some(active) = &self.active_view_id else {
+            self.working_filter = ViewFilter::default();
+            self.working_group_by = ViewGroupBy::default();
+            self.working_sort = PullRequestListSort::default();
+            self.saved_snapshot = None;
+            return;
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return;
+        };
+        let Some(view) = views.iter().find(|v| &v.id == active) else {
+            return;
+        };
+        self.working_filter = view.filter.clone();
+        self.working_group_by = view.group_by;
+        self.working_sort = view.sort.clone();
+        self.saved_snapshot = Some((view.filter.clone(), view.group_by, view.sort.clone()));
+    }
+
 
     fn begin_add_diff_review_comment(&mut self, range: DiffLineRange) -> Vec<Effect> {
         let Some(id) = self.selected_id.clone() else {
@@ -1287,8 +1629,11 @@ mod tests {
                 },
             ]
         );
-        assert!(matches!(session.view().pull_requests, LoadState::Loading));
-        assert!(session.view().pull_requests_sync.syncing);
+        assert!(matches!(
+            session.view().pull_requests_pane.cache,
+            LoadState::Loading
+        ));
+        assert!(session.view().pull_requests_pane.sync.syncing);
         assert!(matches!(session.view().inbox, LoadState::Loading));
         assert!(session.view().inbox_sync.syncing);
         assert_eq!(session.view().sidebar_tab, SidebarTab::Inbox);
@@ -1434,15 +1779,20 @@ mod tests {
             result: Ok(()),
         });
         assert!(stale.is_empty());
-        assert!(session.view().pull_requests_sync.syncing);
+        assert!(session.view().pull_requests_pane.sync.syncing);
 
         let fresh = session.apply(Intent::PullRequestListSyncFinished {
             generation: 2,
             result: Ok(()),
         });
         assert_eq!(fresh, vec![Effect::QueryPullRequests]);
-        assert!(!session.view().pull_requests_sync.syncing);
-        assert!(session.view().pull_requests_sync.last_success.is_some());
+        assert!(!session.view().pull_requests_pane.sync.syncing);
+        assert!(session
+            .view()
+            .pull_requests_pane
+            .sync
+            .last_success
+            .is_some());
     }
 
     #[test]
@@ -1592,6 +1942,66 @@ mod tests {
         });
         assert!(matches!(session.view().patch_index, LoadState::Ready(())));
         assert_eq!(session.view().selected_file.as_deref(), Some("new"));
+    }
+
+    fn views_bootstrap_seeds_when_store_empty() {
+        let mut session = ReviewSession::new();
+        let effects = session.apply(Intent::PullRequestsViewsBootstrapFinished {
+            views: Ok(Vec::new()),
+            last_used: Ok(None),
+            scoped_repository: Ok(None),
+        });
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::PersistViews { .. }));
+        assert_eq!(
+            session.active_view_id.as_ref().map(|id| id.as_str()),
+            Some(reviewdesk_core::VIEW_ID_NEEDS_MY_REVIEW)
+        );
+    }
+
+    #[test]
+    fn reorder_views_emits_persist_effect() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::PullRequestsViewsBootstrapFinished {
+            views: Ok(View::seed_set()),
+            last_used: Ok(None),
+            scoped_repository: Ok(None),
+        });
+        let order: Vec<ViewId> = View::seed_set().into_iter().rev().map(|v| v.id).collect();
+        let effects = session.apply(Intent::ReorderViews { order });
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::PersistViews { .. }));
+    }
+
+    #[test]
+    fn empty_store_vs_zero_match_in_pane() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::PullRequestsViewsBootstrapFinished {
+            views: Ok(View::seed_set()),
+            last_used: Ok(None),
+            scoped_repository: Ok(None),
+        });
+        let _ = session.apply(Intent::PullRequestListQueryFinished {
+            result: Ok(Vec::new()),
+        });
+        assert_eq!(
+            session.view().pull_requests_pane.empty,
+            Some(reviewdesk_core::PullRequestsEmptyKind::EmptyStore)
+        );
+
+        let _ = session.apply(Intent::PullRequestListQueryFinished {
+            result: Ok(vec![sample_item("acme/widgets#1")]),
+        });
+        let _ = session.apply(Intent::SelectView(ViewId::new(
+            reviewdesk_core::VIEW_ID_MINE,
+        )));
+        let _ = session.apply(Intent::ViewerLoginFinished {
+            result: Ok("not-author".into()),
+        });
+        assert_eq!(
+            session.view().pull_requests_pane.empty,
+            Some(reviewdesk_core::PullRequestsEmptyKind::ZeroMatch)
+        );
     }
 
     #[test]

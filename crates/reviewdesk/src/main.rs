@@ -3,6 +3,7 @@ mod auth;
 mod overview_body;
 mod patch_index;
 mod paths;
+mod pull_requests_pane;
 mod review_session;
 mod review_writeback;
 mod sync;

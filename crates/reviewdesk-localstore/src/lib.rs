@@ -7,5 +7,6 @@ mod migrate;
 mod notification;
 mod pull_request_list;
 mod store;
+mod views;
 
 pub use store::TursoLocalStore;

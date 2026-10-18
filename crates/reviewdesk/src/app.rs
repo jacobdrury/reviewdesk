@@ -1,20 +1,23 @@
 //! Thin GPUI shell: chrome, Effect driver, and Render over [`ReviewSession`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
     ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
     diff::{DiffMode, DiffState},
-    h_flex, v_flex,
+    h_flex,
+    resizable::{h_resizable, resizable_panel},
+    v_flex,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div,
+    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
 };
 use reviewdesk_core::{
-    DiffAnchor, LocalStoreError, NotificationListOptions, NotificationQuery,
+    DiffAnchor, DraftFilter, LocalStoreError, NotificationListOptions, NotificationQuery,
     NotificationThreadId, PendingDiffReviewComment, Provider, ProviderError, PullRequestId,
-    PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent,
+    PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent, View,
 };
 use tokio::runtime::Handle;
 
@@ -33,7 +36,8 @@ use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{render_review_pane, render_sidebar};
+use crate::ui::{PullRequestsListChrome, render_inbox, render_pull_requests, render_review_pane, render_sidebar};
+use crate::review_session::SidebarTab;
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -52,7 +56,7 @@ fn map_store_error(error: LocalStoreError) -> ProviderError {
 
 /// Window Entity: session kernel + GPUI-only chrome and Effect execution.
 pub struct ReviewDesk {
-    session: ReviewSession,
+    pub(crate) session: ReviewSession,
     provider: Arc<dyn Provider>,
     store: Arc<AppLocalStore>,
     _runtime: Arc<tokio::runtime::Runtime>,
@@ -61,6 +65,7 @@ pub struct ReviewDesk {
     inbox_scroll: UniformListScrollHandle,
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    collapsed_groups: HashSet<String>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _inbox_poll_timer: Task<()>,
@@ -68,6 +73,9 @@ pub struct ReviewDesk {
     _pull_requests_sync_task: Task<()>,
     _notification_read_task: Task<()>,
     _notification_done_task: Task<()>,
+    _views_bootstrap_task: Task<()>,
+    _viewer_login_task: Task<()>,
+    _views_persist_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _threads_task: Task<()>,
@@ -98,6 +106,7 @@ impl ReviewDesk {
             inbox_scroll: UniformListScrollHandle::new(),
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            collapsed_groups: HashSet::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _inbox_poll_timer: Task::ready(()),
@@ -105,6 +114,9 @@ impl ReviewDesk {
             _pull_requests_sync_task: Task::ready(()),
             _notification_read_task: Task::ready(()),
             _notification_done_task: Task::ready(()),
+            _views_bootstrap_task: Task::ready(()),
+            _viewer_login_task: Task::ready(()),
+            _views_persist_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _threads_task: Task::ready(()),
@@ -159,6 +171,13 @@ impl ReviewDesk {
                     self.run_discard_pending_review(id, cx)
                 }
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
+                Effect::BootstrapPullRequestsViews => self.run_bootstrap_views(cx),
+                Effect::FetchViewerLogin => self.run_fetch_viewer_login(cx),
+                Effect::PersistViews {
+                    views,
+                    last_used,
+                    scoped_repository,
+                } => self.run_persist_views(views, last_used, scoped_repository, cx),
                 Effect::QueryInbox => self.run_query_inbox(cx),
                 Effect::SyncInbox {
                     generation,
@@ -169,6 +188,15 @@ impl ReviewDesk {
                 Effect::MarkNotificationDone { id } => self.run_mark_notification_done(id, cx),
             }
         }
+    }
+
+    pub(crate) fn toggle_collapsed_group(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.collapsed_groups.contains(&key) {
+            self.collapsed_groups.remove(&key);
+        } else {
+            self.collapsed_groups.insert(key);
+        }
+        cx.notify();
     }
 
     fn sync_diff_widget(&mut self, cx: &mut Context<Self>) {
@@ -223,7 +251,10 @@ impl ReviewDesk {
         let provider = self.provider.clone();
         let store = self.store.clone();
         let runtime = self.runtime.clone();
-        let options = PullRequestListOptions::default();
+        let options = PullRequestListOptions {
+            include_authored: true,
+            drafts: DraftFilter::All,
+        };
         self._pull_requests_sync_task = cx.spawn(async move |this, cx| {
             let result = runtime
                 .spawn(async move {
@@ -236,6 +267,82 @@ impl ReviewDesk {
                     Intent::PullRequestListSyncFinished { generation, result },
                     cx,
                 );
+            });
+        });
+    }
+
+    fn run_bootstrap_views(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        self._views_bootstrap_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    let views = store.list_views().await.map_err(map_store_error);
+                    let last_used = store.get_last_used_view().await.map_err(map_store_error);
+                    let scoped = store.get_scoped_repository().await.map_err(map_store_error);
+                    (views, last_used, scoped)
+                })
+                .await
+                .unwrap_or_else(|e| {
+                    (
+                        Err(map_store_error(LocalStoreError::other(e.to_string()))),
+                        Err(map_store_error(LocalStoreError::other("join"))),
+                        Err(map_store_error(LocalStoreError::other("join"))),
+                    )
+                });
+            let (views, last_used, scoped_repository) = result;
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::PullRequestsViewsBootstrapFinished {
+                        views,
+                        last_used,
+                        scoped_repository,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_fetch_viewer_login(&mut self, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let runtime = self.runtime.clone();
+        self._viewer_login_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move { provider.current_user().await })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(Intent::ViewerLoginFinished { result }, cx);
+            });
+        });
+    }
+
+    fn run_persist_views(
+        &mut self,
+        views: Vec<View>,
+        last_used: Option<reviewdesk_core::ViewId>,
+        scoped_repository: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        self._views_persist_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    store
+                        .persist_views_preferences(
+                            &views,
+                            last_used.as_ref(),
+                            scoped_repository.as_deref(),
+                        )
+                        .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+            let result = result.map_err(map_store_error);
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(Intent::ViewsPersistFinished { views: result }, cx);
             });
         });
     }
@@ -654,7 +761,7 @@ impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.session.view();
         let entity = cx.entity().downgrade();
-        let sync_label = view.pull_requests_sync.status_label();
+        let sync_label = view.pull_requests_pane.sync.status_label();
 
         v_flex()
             .size_full()
@@ -676,22 +783,38 @@ impl Render for ReviewDesk {
                 ),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(if view.selected_id.is_some() {
-                        render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx)
-                            .into_any_element()
-                    } else {
-                        render_sidebar(
-                            &view,
-                            &self.inbox_scroll,
-                            &self.pull_requests_scroll,
-                            entity,
-                            cx,
+                div().flex_1().min_h_0().child(
+                    h_resizable("shell")
+                        .child(
+                            resizable_panel()
+                                .size(px(244.))
+                                .size_range(px(200.)..px(360.))
+                                .child(render_sidebar(&view, entity.clone(), cx)),
                         )
-                        .into_any_element()
-                    }),
+                        .child({
+                            let middle = if view.sidebar_tab == SidebarTab::Inbox {
+                                render_inbox(&view, &self.inbox_scroll, entity.clone(), cx).into_any_element()
+                            } else {
+                                render_pull_requests(
+                                    &view,
+                                    PullRequestsListChrome {
+                                        scroll: &self.pull_requests_scroll,
+                                        collapsed_groups: &self.collapsed_groups,
+                                    },
+                                    entity.clone(),
+                                    cx,
+                                )
+                                .into_any_element()
+                            };
+                            resizable_panel()
+                                .size(px(360.))
+                                .size_range(px(280.)..px(720.))
+                                .child(middle)
+                        })
+                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
+                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
+                        )),
+                ),
             )
     }
 }

@@ -7,6 +7,7 @@ use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
 use crate::review_threads::PullRequestThreads;
+use crate::views::{View, ViewId};
 
 /// Errors from the local persistence layer. Distinct from [`ProviderError`](crate::ProviderError).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -77,6 +78,30 @@ pub trait LocalStore: Send + Sync {
 
     /// Returns cached patch text, or `None` on cache miss.
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError>;
+
+    /// Lists locally-saved Views ordered by `position` ascending.
+    async fn list_views(&self) -> Result<Vec<View>, LocalStoreError>;
+
+    /// Inserts or replaces a View by id (filters, group-by, sort, name, position, kind).
+    async fn save_view(&self, view: &View) -> Result<(), LocalStoreError>;
+
+    /// Deletes a View by id. No-op when the id is absent.
+    async fn delete_view(&self, id: &ViewId) -> Result<(), LocalStoreError>;
+
+    /// Rewrites `position` for the given ids in the supplied order (0-based).
+    async fn reorder_views(&self, order: &[ViewId]) -> Result<(), LocalStoreError>;
+
+    /// Returns the last-used View id preference, or `None` if unset.
+    async fn get_last_used_view(&self) -> Result<Option<ViewId>, LocalStoreError>;
+
+    /// Persists the last-used View id preference.
+    async fn set_last_used_view(&self, id: &ViewId) -> Result<(), LocalStoreError>;
+
+    /// Returns the sidebar repo scope for Pull requests, or `None` for all repositories.
+    async fn get_scoped_repository(&self) -> Result<Option<String>, LocalStoreError>;
+
+    /// Persists sidebar repo scope (`None` clears scope).
+    async fn set_scoped_repository(&self, repo: Option<&str>) -> Result<(), LocalStoreError>;
 
     /// Upserts Inbox notification threads from a poll snapshot and removes rows not in `threads`.
     async fn sync_notifications(

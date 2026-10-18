@@ -18,6 +18,16 @@ pub struct GraphQlError {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ViewerData {
+    pub viewer: Viewer,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Viewer {
+    pub login: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SearchData {
     pub search: SearchConnection,
 }
