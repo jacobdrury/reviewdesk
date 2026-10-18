@@ -41,6 +41,72 @@ pub enum ReviewState {
     Unknown,
 }
 
+/// Sort direction for Inbox queries and future saved views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
+}
+
+/// Fields supported for Inbox ordering in v1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxSortField {
+    UpdatedAt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxSort {
+    pub field: InboxSortField,
+    pub direction: SortDirection,
+}
+
+impl Default for InboxSort {
+    fn default() -> Self {
+        Self {
+            field: InboxSortField::UpdatedAt,
+            direction: SortDirection::Desc,
+        }
+    }
+}
+
+/// Filter criteria for Inbox queries. Extends [`InboxOptions`] with optional view filters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxFilter {
+    pub options: InboxOptions,
+    pub repo_label: Option<String>,
+    pub author_login: Option<String>,
+    pub review_state: Option<ReviewState>,
+    pub has_label: Option<String>,
+}
+
+impl Default for InboxFilter {
+    fn default() -> Self {
+        Self {
+            options: InboxOptions::default(),
+            repo_label: None,
+            author_login: None,
+            review_state: None,
+            has_label: None,
+        }
+    }
+}
+
+/// Query shape for listing Inbox rows from LocalStore (baseline Inbox and future custom views).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxQuery {
+    pub filter: InboxFilter,
+    pub sort: InboxSort,
+}
+
+impl Default for InboxQuery {
+    fn default() -> Self {
+        Self {
+            filter: InboxFilter::default(),
+            sort: InboxSort::default(),
+        }
+    }
+}
+
 /// One row in the Inbox list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboxItem {

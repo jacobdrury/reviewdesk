@@ -7,10 +7,12 @@ description = "Turso-backed LocalStore for Review Desk"
 
 [dependencies]
 async-trait = { workspace = true }
+chrono = { workspace = true }
 reviewdesk-core = { path = "../reviewdesk-core" }
 turso = { workspace = true }
 
 [dev-dependencies]
+chrono = { workspace = true }
 reviewdesk-core = { path = "../reviewdesk-core" }
 tempfile = "3.25.0"
 tokio = { workspace = true }

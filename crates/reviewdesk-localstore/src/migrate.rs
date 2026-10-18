@@ -4,9 +4,10 @@ use turso::Connection;
 use crate::error::{map_migration, map_other};
 
 /// Ordered, idempotent schema steps. Each version runs at most once per database.
-const MIGRATIONS: &[(u32, &str)] = &[(
-    1,
-    "
+const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        1,
+        "
 CREATE TABLE IF NOT EXISTS reviewdesk_schema_migrations (
     version INTEGER NOT NULL PRIMARY KEY
 );
@@ -14,7 +15,38 @@ CREATE TABLE IF NOT EXISTS reviewdesk_inbox_items (
     id TEXT NOT NULL PRIMARY KEY
 );
 ",
-)];
+    ),
+    (
+        2,
+        "
+DROP TABLE IF EXISTS reviewdesk_inbox_item_labels;
+DROP TABLE IF EXISTS reviewdesk_inbox_items;
+CREATE TABLE reviewdesk_inbox_items (
+    id TEXT NOT NULL PRIMARY KEY,
+    title TEXT NOT NULL,
+    web_url TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    author_login TEXT NOT NULL,
+    author_avatar_url TEXT,
+    repo_label TEXT NOT NULL,
+    review_state TEXT NOT NULL,
+    is_draft INTEGER NOT NULL DEFAULT 0 CHECK (is_draft IN (0, 1))
+);
+CREATE TABLE reviewdesk_inbox_item_labels (
+    inbox_item_id TEXT NOT NULL REFERENCES reviewdesk_inbox_items(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    color TEXT NOT NULL,
+    PRIMARY KEY (inbox_item_id, name)
+);
+CREATE INDEX idx_inbox_items_updated_at ON reviewdesk_inbox_items(updated_at);
+CREATE INDEX idx_inbox_items_repo_label ON reviewdesk_inbox_items(repo_label);
+CREATE INDEX idx_inbox_items_author_login ON reviewdesk_inbox_items(author_login);
+CREATE INDEX idx_inbox_items_review_state ON reviewdesk_inbox_items(review_state);
+CREATE INDEX idx_inbox_items_is_draft ON reviewdesk_inbox_items(is_draft);
+CREATE INDEX idx_inbox_item_labels_name ON reviewdesk_inbox_item_labels(name);
+",
+    ),
+];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
     let mut rows = conn
@@ -26,7 +58,7 @@ pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
 }
 
 pub async fn run(conn: &Connection) -> Result<(), LocalStoreError> {
-    let applied = applied_version(conn).await?;
+    let mut applied = applied_version(conn).await?;
     let latest = MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0);
 
     if applied > latest {
@@ -52,6 +84,7 @@ pub async fn run(conn: &Connection) -> Result<(), LocalStoreError> {
         )
         .await
         .map_err(map_migration)?;
+        applied = version;
     }
 
     Ok(())

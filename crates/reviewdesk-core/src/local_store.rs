@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use crate::inbox::{InboxItem, InboxQuery};
+
 /// Errors from the local persistence layer. Distinct from [`ProviderError`](crate::ProviderError).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum LocalStoreError {
@@ -40,4 +42,10 @@ impl LocalStoreError {
 pub trait LocalStore: Send + Sync {
     /// Schema version after the latest successful migration.
     async fn schema_version(&self) -> Result<u32, LocalStoreError>;
+
+    /// Upserts Inbox rows from a Provider sync snapshot and removes rows not in `items`.
+    async fn sync_inbox(&self, items: &[InboxItem]) -> Result<(), LocalStoreError>;
+
+    /// Lists Inbox rows matching `query` (filters, sort). Does not load Patch blobs.
+    async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError>;
 }
