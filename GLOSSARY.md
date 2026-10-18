@@ -64,10 +64,26 @@ _Avoid_: comments tab, activity, timeline (as the tab name)
 The Review pane tab for checks and CI status on the pull request.
 _Avoid_: checks tab, CI tab, status tab
 
-**Diff surface**:
-The UI that shows a Patch and accepts Annotations. Lives under the Files tab of the Review pane. Read-only for provider writeback in the first slice.
-_Avoid_: editor, diff view (as the domain name)
+**Conversation**:
+The Review pane surface that shows Threads and non-diff timeline comments for the selected pull request.
+_Avoid_: comments tab, activity, timeline (as the surface name)
 
-**Annotation**:
-A review remark anchored to a location on the Diff surface. In the first slice it exists only in memory.
-_Avoid_: comment (when meaning the in-app stub), suggestion, note
+**Diff surface**:
+The UI that shows a Patch and the Threads anchored on it. Lives under the Files tab of the Review pane.
+_Avoid_: editor, diff view (as the domain name), Annotation
+
+**Thread**:
+An anchored conversation of Review comments on a pull request, shared by Conversation and the Diff surface. Resolve state and outdatedness belong to the Thread.
+_Avoid_: Annotation, comment thread (as the type name), discussion
+
+**Review comment**:
+One remark in a Thread (or a draft on a Pending review before Submit). Diff-anchored remarks use path plus line range/side or file-level; they are never a separate “Annotation” product type.
+_Avoid_: Annotation, note, comment (when meaning the domain type)
+
+**Suggestion**:
+A Review comment whose body proposes replacement text for its Diff selection via a suggestion block. Compose and display only in product language; applying a Suggestion onto the branch is out of scope for day-to-day readiness.
+_Avoid_: Annotation, inline patch, code fix (as the type name)
+
+**Pending review**:
+The viewer’s single unsubmitted review session on a pull request. Draft Review comments and replies attach here until Submit as comment, approve, or request changes (or Discard clears the whole session).
+_Avoid_: draft Annotation, in-memory Annotation, review draft (as the type name)
