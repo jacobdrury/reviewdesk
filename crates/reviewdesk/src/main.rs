@@ -99,5 +99,5 @@ fn main() {
         });
 }
 
-/// Inbox auto-refresh interval while the app is foregrounded.
-pub const INBOX_REFRESH: Duration = Duration::from_secs(5 * 60);
+/// Pull requests list auto-refresh interval while the app is foregrounded.
+pub const PULL_REQUESTS_REFRESH: Duration = Duration::from_secs(5 * 60);

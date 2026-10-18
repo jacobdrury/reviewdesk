@@ -14,21 +14,22 @@ use gpui_kit::{
     Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
 };
 use reviewdesk_core::{
-    InboxOptions, InboxQuery, LocalStoreError, Provider, ProviderError, PullRequestId,
+    LocalStoreError, Provider, ProviderError, PullRequestId, PullRequestListOptions,
+    PullRequestListQuery,
 };
 use tokio::runtime::Handle;
 
-use crate::INBOX_REFRESH;
+use crate::PULL_REQUESTS_REFRESH;
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
-    refresh_pull_request_detail, sync_inbox_from_provider,
+    refresh_pull_request_detail, sync_pull_requests_from_provider,
 };
 use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{render_inbox, render_review_pane};
+use crate::ui::{render_pull_requests, render_review_pane};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -53,10 +54,10 @@ pub struct ReviewDesk {
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
     diff: Entity<DiffState>,
-    inbox_scroll: UniformListScrollHandle,
+    pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
-    _inbox_reload_task: Task<()>,
-    _inbox_sync_task: Task<()>,
+    _pull_requests_reload_task: Task<()>,
+    _pull_requests_sync_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
@@ -82,10 +83,10 @@ impl ReviewDesk {
             runtime: runtime.handle().clone(),
             _runtime: runtime,
             diff,
-            inbox_scroll: UniformListScrollHandle::new(),
+            pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
-            _inbox_reload_task: Task::ready(()),
-            _inbox_sync_task: Task::ready(()),
+            _pull_requests_reload_task: Task::ready(()),
+            _pull_requests_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
@@ -118,11 +119,13 @@ impl ReviewDesk {
     fn run_effects(&mut self, effects: Vec<Effect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
-                Effect::QueryInbox => self.run_query_inbox(cx),
-                Effect::SyncInbox { generation } => self.run_sync_inbox(generation, cx),
+                Effect::QueryPullRequests => self.run_query_pull_requests(cx),
+                Effect::SyncPullRequests { generation } => {
+                    self.run_sync_pull_requests(generation, cx)
+                }
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
-                Effect::ArmInboxRefreshTimer => self.arm_inbox_refresh_timer(cx),
+                Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
             }
         }
     }
@@ -156,46 +159,53 @@ impl ReviewDesk {
         cx.notify();
     }
 
-    fn run_query_inbox(&mut self, cx: &mut Context<Self>) {
+    fn run_query_pull_requests(&mut self, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let runtime = self.runtime.clone();
-        self._inbox_reload_task = cx.spawn(async move |this, cx| {
+        self._pull_requests_reload_task = cx.spawn(async move |this, cx| {
             let result = runtime
-                .spawn(async move { store.query_inbox(&InboxQuery::default()).await })
+                .spawn(async move {
+                    store
+                        .query_pull_requests(&PullRequestListQuery::default())
+                        .await
+                })
                 .await
                 .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
             let result = result.map_err(map_store_error);
             let _ = this.update(cx, |this, cx| {
-                this.dispatch(Intent::InboxQueryFinished { result }, cx);
+                this.dispatch(Intent::PullRequestListQueryFinished { result }, cx);
             });
         });
     }
 
-    fn run_sync_inbox(&mut self, generation: u64, cx: &mut Context<Self>) {
+    fn run_sync_pull_requests(&mut self, generation: u64, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
         let store = self.store.clone();
         let runtime = self.runtime.clone();
-        let options = InboxOptions::default();
-        self._inbox_sync_task = cx.spawn(async move |this, cx| {
+        let options = PullRequestListOptions::default();
+        self._pull_requests_sync_task = cx.spawn(async move |this, cx| {
             let result = runtime
                 .spawn(async move {
-                    sync_inbox_from_provider(provider.as_ref(), &store, &options).await
+                    sync_pull_requests_from_provider(provider.as_ref(), &store, &options).await
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
             let _ = this.update(cx, |this, cx| {
-                this.dispatch(Intent::InboxSyncFinished { generation, result }, cx);
+                this.dispatch(
+                    Intent::PullRequestListSyncFinished { generation, result },
+                    cx,
+                );
             });
         });
     }
 
-    fn arm_inbox_refresh_timer(&mut self, cx: &mut Context<Self>) {
+    fn arm_pull_requests_refresh_timer(&mut self, cx: &mut Context<Self>) {
         self._refresh_timer = cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(INBOX_REFRESH).await;
+                cx.background_executor().timer(PULL_REQUESTS_REFRESH).await;
                 if this
                     .update(cx, |this, cx| {
-                        this.dispatch(Intent::RefreshInbox, cx);
+                        this.dispatch(Intent::RefreshPullRequests, cx);
                     })
                     .is_err()
                 {
@@ -314,7 +324,7 @@ impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.session.view();
         let entity = cx.entity().downgrade();
-        let sync_label = view.inbox_sync.status_label();
+        let sync_label = view.pull_requests_sync.status_label();
 
         v_flex()
             .size_full()
@@ -342,7 +352,12 @@ impl Render for ReviewDesk {
                             resizable_panel()
                                 .size(px(240.))
                                 .size_range(px(200.)..px(480.))
-                                .child(render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)),
+                                .child(render_pull_requests(
+                                    &view,
+                                    &self.pull_requests_scroll,
+                                    entity.clone(),
+                                    cx,
+                                )),
                         )
                         .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
                             render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),

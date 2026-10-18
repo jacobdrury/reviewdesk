@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    InboxItem, InboxLabel, ProviderError, PullRequestDetail, ReviewState, Reviewer,
+    ProviderError, PullRequestDetail, PullRequestLabel, PullRequestListItem, ReviewState, Reviewer,
 };
 use serde::Deserialize;
 
@@ -110,7 +110,9 @@ pub struct RepositoryPull {
     pub pull_request: Option<PullRequestNode>,
 }
 
-pub fn map_inbox_item(node: &PullRequestNode) -> Result<InboxItem, ProviderError> {
+pub fn map_pull_request_list_item(
+    node: &PullRequestNode,
+) -> Result<PullRequestListItem, ProviderError> {
     let id = pull_request_id(
         &node.repository.owner.login,
         &node.repository.name,
@@ -118,7 +120,7 @@ pub fn map_inbox_item(node: &PullRequestNode) -> Result<InboxItem, ProviderError
     )?;
 
     let author = node.author.as_ref();
-    Ok(InboxItem {
+    Ok(PullRequestListItem {
         id,
         title: node.title.clone(),
         web_url: node.url.clone(),
@@ -132,7 +134,7 @@ pub fn map_inbox_item(node: &PullRequestNode) -> Result<InboxItem, ProviderError
             .labels
             .nodes
             .iter()
-            .map(|l| InboxLabel {
+            .map(|l| PullRequestLabel {
                 name: l.name.clone(),
                 color: l.color.clone(),
             })
@@ -143,7 +145,7 @@ pub fn map_inbox_item(node: &PullRequestNode) -> Result<InboxItem, ProviderError
 }
 
 pub fn map_pull_request_detail(node: &PullRequestNode) -> Result<PullRequestDetail, ProviderError> {
-    let item = map_inbox_item(node)?;
+    let item = map_pull_request_list_item(node)?;
     let reviewers = node
         .review_requests
         .as_ref()
@@ -198,7 +200,7 @@ fn map_review_state(node: &PullRequestNode) -> ReviewState {
 mod tests {
     use super::*;
 
-    const INBOX_FIXTURE: &str = r#"{
+    const PULL_REQUEST_SEARCH_FIXTURE: &str = r#"{
       "data": {
         "search": {
           "nodes": [
@@ -258,11 +260,12 @@ mod tests {
     }"#;
 
     #[test]
-    fn maps_inbox_search_fixture() {
-        let parsed: GraphQlResponse<SearchData> = serde_json::from_str(INBOX_FIXTURE).unwrap();
+    fn maps_pull_request_search_fixture() {
+        let parsed: GraphQlResponse<SearchData> =
+            serde_json::from_str(PULL_REQUEST_SEARCH_FIXTURE).unwrap();
         let data = parsed.data.unwrap();
         let node = data.search.nodes[0].as_ref().unwrap();
-        let item = map_inbox_item(node).unwrap();
+        let item = map_pull_request_list_item(node).unwrap();
         assert_eq!(item.id.as_str(), "acme/widgets#12");
         assert_eq!(item.title, "Add widgets");
         assert_eq!(item.author_login, "alice");

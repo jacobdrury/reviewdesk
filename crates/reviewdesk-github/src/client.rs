@@ -1,24 +1,25 @@
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, InboxItem, InboxOptions, Patch, Provider, ProviderError, PullRequestDetail,
-    PullRequestId,
+    Credentials, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListOptions,
 };
 use serde_json::json;
 
 use crate::error_map::from_status;
 use crate::id::parse_pull_request_id;
 use crate::map::{
-    GraphQlResponse, PullRequestData, SearchData, map_inbox_item, map_pull_request_detail,
+    GraphQlResponse, PullRequestData, SearchData, map_pull_request_detail,
+    map_pull_request_list_item,
 };
-use crate::query::inbox_search_query;
+use crate::query::pull_request_search_query;
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "reviewdesk";
 
-const INBOX_QUERY: &str = r#"
-query Inbox($q: String!) {
+const PULL_REQUEST_SEARCH_QUERY: &str = r#"
+query PullRequestSearch($q: String!) {
   search(query: $q, type: ISSUE, first: 50) {
     nodes {
       ... on PullRequest {
@@ -147,12 +148,17 @@ impl GitHubProvider {
 
 #[async_trait]
 impl Provider for GitHubProvider {
-    async fn list_inbox(&self, options: &InboxOptions) -> Result<Vec<InboxItem>, ProviderError> {
-        let q = inbox_search_query(options);
-        let data: SearchData = self.graphql(INBOX_QUERY, json!({ "q": q })).await?;
+    async fn list_pull_requests(
+        &self,
+        options: &PullRequestListOptions,
+    ) -> Result<Vec<PullRequestListItem>, ProviderError> {
+        let q = pull_request_search_query(options);
+        let data: SearchData = self
+            .graphql(PULL_REQUEST_SEARCH_QUERY, json!({ "q": q }))
+            .await?;
         let mut items = Vec::new();
         for node in data.search.nodes.into_iter().flatten() {
-            items.push(map_inbox_item(&node)?);
+            items.push(map_pull_request_list_item(&node)?);
         }
         Ok(items)
     }

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
 use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
-use reviewdesk_core::{InboxItem, Patch, ProviderError, PullRequestDetail, PullRequestId};
+use reviewdesk_core::{
+    Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+};
 
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
@@ -22,7 +24,7 @@ use crate::patch_index::{PatchIndex, index_patch};
 #[derive(Debug)]
 pub enum Intent {
     Boot,
-    RefreshInbox,
+    RefreshPullRequests,
     SelectPullRequest(PullRequestId),
     SetReviewTab(ReviewTab),
     ToggleDetails {
@@ -35,10 +37,10 @@ pub enum Intent {
     AddAnnotation(DiffLineRange),
     RetryDetail,
     RetryPatch,
-    InboxQueryFinished {
-        result: Result<Vec<InboxItem>, ProviderError>,
+    PullRequestListQueryFinished {
+        result: Result<Vec<PullRequestListItem>, ProviderError>,
     },
-    InboxSyncFinished {
+    PullRequestListSyncFinished {
         generation: u64,
         result: Result<(), ProviderError>,
     },
@@ -65,11 +67,11 @@ pub enum Intent {
 /// Work the shell must perform against LocalStore / Provider / timers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    QueryInbox,
-    SyncInbox { generation: u64 },
+    QueryPullRequests,
+    SyncPullRequests { generation: u64 },
     FetchDetail { id: PullRequestId },
     FetchPatch { id: PullRequestId },
-    ArmInboxRefreshTimer,
+    ArmPullRequestsRefreshTimer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,24 +89,24 @@ pub enum LoadState<T> {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InboxSyncView {
+pub struct PullRequestsSyncView {
     pub syncing: bool,
     pub last_success: Option<DateTime<Utc>>,
     pub error: Option<String>,
 }
 
-impl InboxSyncView {
+impl PullRequestsSyncView {
     pub fn status_label(&self) -> String {
         if self.syncing {
-            return "Syncing Inbox…".into();
+            return "Syncing pull requests…".into();
         }
         if let Some(error) = &self.error {
             return format!("Sync failed: {error}");
         }
         if let Some(at) = self.last_success {
-            return format!("Inbox synced {}", format_sync_time(at));
+            return format!("Pull requests synced {}", format_sync_time(at));
         }
-        "Inbox not synced yet".into()
+        "Pull requests not synced yet".into()
     }
 
     pub fn empty_placeholder(&self) -> &'static str {
@@ -126,8 +128,8 @@ pub struct AnnotationView {
 /// Paint projection. No LocalStore / Provider access from here.
 #[derive(Clone)]
 pub struct SessionView {
-    pub inbox: LoadState<Arc<[InboxItem]>>,
-    pub inbox_sync: InboxSyncView,
+    pub pull_requests: LoadState<Arc<[PullRequestListItem]>>,
+    pub pull_requests_sync: PullRequestsSyncView,
     pub selected_id: Option<PullRequestId>,
     pub review_tab: ReviewTab,
     pub detail: LoadState<PullRequestDetail>,
@@ -158,9 +160,9 @@ struct Annotation {
 
 /// Sole external seam for window session policy.
 pub struct ReviewSession {
-    inbox: LoadState<Arc<[InboxItem]>>,
-    inbox_sync: InboxSyncView,
-    inbox_sync_generation: u64,
+    pull_requests: LoadState<Arc<[PullRequestListItem]>>,
+    pull_requests_sync: PullRequestsSyncView,
+    pull_requests_sync_generation: u64,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
@@ -182,9 +184,9 @@ pub struct ReviewSession {
 impl ReviewSession {
     pub fn new() -> Self {
         Self {
-            inbox: LoadState::Loading,
-            inbox_sync: InboxSyncView::default(),
-            inbox_sync_generation: 0,
+            pull_requests: LoadState::Loading,
+            pull_requests_sync: PullRequestsSyncView::default(),
+            pull_requests_sync_generation: 0,
             selected_id: None,
             review_tab: ReviewTab::Overview,
             detail: LoadState::Idle,
@@ -207,7 +209,7 @@ impl ReviewSession {
     pub fn apply(&mut self, intent: Intent) -> Vec<Effect> {
         match intent {
             Intent::Boot => self.boot(),
-            Intent::RefreshInbox => self.begin_inbox_sync(),
+            Intent::RefreshPullRequests => self.begin_pull_requests_sync(),
             Intent::SelectPullRequest(id) => self.select_pull_request(id),
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
@@ -242,12 +244,12 @@ impl ReviewSession {
             }
             Intent::RetryDetail => self.retry_detail(),
             Intent::RetryPatch => self.retry_patch(),
-            Intent::InboxQueryFinished { result } => {
-                self.on_inbox_query_finished(result);
+            Intent::PullRequestListQueryFinished { result } => {
+                self.on_pull_request_list_query_finished(result);
                 Vec::new()
             }
-            Intent::InboxSyncFinished { generation, result } => {
-                self.on_inbox_sync_finished(generation, result)
+            Intent::PullRequestListSyncFinished { generation, result } => {
+                self.on_pull_requests_sync_finished(generation, result)
             }
             Intent::DetailLocalFinished { id, result } => {
                 self.on_detail_local(id, result);
@@ -295,8 +297,8 @@ impl ReviewSession {
         };
 
         SessionView {
-            inbox: self.inbox.clone(),
-            inbox_sync: self.inbox_sync.clone(),
+            pull_requests: self.pull_requests.clone(),
+            pull_requests_sync: self.pull_requests_sync.clone(),
             selected_id: self.selected_id.clone(),
             review_tab: self.review_tab,
             detail: self.detail.clone(),
@@ -317,22 +319,25 @@ impl ReviewSession {
     }
 
     fn boot(&mut self) -> Vec<Effect> {
-        self.inbox = LoadState::Loading;
-        let mut effects = self.begin_inbox_sync();
-        effects.insert(0, Effect::QueryInbox);
-        effects.push(Effect::ArmInboxRefreshTimer);
+        self.pull_requests = LoadState::Loading;
+        let mut effects = self.begin_pull_requests_sync();
+        effects.insert(0, Effect::QueryPullRequests);
+        effects.push(Effect::ArmPullRequestsRefreshTimer);
         effects
     }
 
-    fn begin_inbox_sync(&mut self) -> Vec<Effect> {
-        self.inbox_sync_generation += 1;
-        let generation = self.inbox_sync_generation;
-        self.inbox_sync.syncing = true;
-        self.inbox_sync.error = None;
-        vec![Effect::SyncInbox { generation }]
+    fn begin_pull_requests_sync(&mut self) -> Vec<Effect> {
+        self.pull_requests_sync_generation += 1;
+        let generation = self.pull_requests_sync_generation;
+        self.pull_requests_sync.syncing = true;
+        self.pull_requests_sync.error = None;
+        vec![Effect::SyncPullRequests { generation }]
     }
 
-    fn on_inbox_query_finished(&mut self, result: Result<Vec<InboxItem>, ProviderError>) {
+    fn on_pull_request_list_query_finished(
+        &mut self,
+        result: Result<Vec<PullRequestListItem>, ProviderError>,
+    ) {
         match result {
             Ok(items) => {
                 if let Some(selected) = &self.selected_id
@@ -340,33 +345,33 @@ impl ReviewSession {
                 {
                     self.clear_selection();
                 }
-                self.inbox = LoadState::Ready(Arc::from(items));
+                self.pull_requests = LoadState::Ready(Arc::from(items));
             }
             Err(error) => {
-                self.inbox = LoadState::Error(error);
+                self.pull_requests = LoadState::Error(error);
             }
         }
     }
 
-    fn on_inbox_sync_finished(
+    fn on_pull_requests_sync_finished(
         &mut self,
         generation: u64,
         result: Result<(), ProviderError>,
     ) -> Vec<Effect> {
-        if self.inbox_sync_generation != generation {
+        if self.pull_requests_sync_generation != generation {
             return Vec::new();
         }
-        self.inbox_sync.syncing = false;
+        self.pull_requests_sync.syncing = false;
         match result {
             Ok(()) => {
-                self.inbox_sync.last_success = Some(Utc::now());
-                self.inbox_sync.error = None;
+                self.pull_requests_sync.last_success = Some(Utc::now());
+                self.pull_requests_sync.error = None;
             }
             Err(error) => {
-                self.inbox_sync.error = Some(error.to_string());
+                self.pull_requests_sync.error = Some(error.to_string());
             }
         }
-        vec![Effect::QueryInbox]
+        vec![Effect::QueryPullRequests]
     }
 
     fn select_pull_request(&mut self, id: PullRequestId) -> Vec<Effect> {
@@ -721,8 +726,8 @@ mod tests {
         PullRequestId::new(raw).unwrap()
     }
 
-    fn sample_item(id: &str) -> InboxItem {
-        InboxItem {
+    fn sample_item(id: &str) -> PullRequestListItem {
+        PullRequestListItem {
             id: pr_id(id),
             title: format!("Title {id}"),
             web_url: format!("https://example.test/{id}"),
@@ -757,20 +762,20 @@ mod tests {
         assert_eq!(
             effects,
             vec![
-                Effect::QueryInbox,
-                Effect::SyncInbox { generation: 1 },
-                Effect::ArmInboxRefreshTimer,
+                Effect::QueryPullRequests,
+                Effect::SyncPullRequests { generation: 1 },
+                Effect::ArmPullRequestsRefreshTimer,
             ]
         );
-        assert!(matches!(session.view().inbox, LoadState::Loading));
-        assert!(session.view().inbox_sync.syncing);
+        assert!(matches!(session.view().pull_requests, LoadState::Loading));
+        assert!(session.view().pull_requests_sync.syncing);
     }
 
     #[test]
     fn selection_emits_parallel_fetches_and_resets_review_state() {
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::Boot);
-        let _ = session.apply(Intent::InboxQueryFinished {
+        let _ = session.apply(Intent::PullRequestListQueryFinished {
             result: Ok(vec![sample_item("pr-1"), sample_item("pr-2")]),
         });
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
@@ -804,14 +809,14 @@ mod tests {
     }
 
     #[test]
-    fn missing_selection_from_inbox_reload_clears_review_pane() {
+    fn missing_selection_from_pull_requests_reload_clears_review_pane() {
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
         let _ = session.apply(Intent::DetailLocalFinished {
             id: pr_id("pr-1"),
             result: Ok(Some(sample_detail("pr-1", "body"))),
         });
-        let _ = session.apply(Intent::InboxQueryFinished {
+        let _ = session.apply(Intent::PullRequestListQueryFinished {
             result: Ok(vec![sample_item("pr-other")]),
         });
         let view = session.view();
@@ -821,27 +826,27 @@ mod tests {
     }
 
     #[test]
-    fn stale_inbox_sync_finish_is_ignored() {
+    fn stale_pull_requests_sync_finish_is_ignored() {
         let mut session = ReviewSession::new();
-        let first = session.apply(Intent::RefreshInbox);
-        assert_eq!(first, vec![Effect::SyncInbox { generation: 1 }]);
-        let second = session.apply(Intent::RefreshInbox);
-        assert_eq!(second, vec![Effect::SyncInbox { generation: 2 }]);
+        let first = session.apply(Intent::RefreshPullRequests);
+        assert_eq!(first, vec![Effect::SyncPullRequests { generation: 1 }]);
+        let second = session.apply(Intent::RefreshPullRequests);
+        assert_eq!(second, vec![Effect::SyncPullRequests { generation: 2 }]);
 
-        let stale = session.apply(Intent::InboxSyncFinished {
+        let stale = session.apply(Intent::PullRequestListSyncFinished {
             generation: 1,
             result: Ok(()),
         });
         assert!(stale.is_empty());
-        assert!(session.view().inbox_sync.syncing);
+        assert!(session.view().pull_requests_sync.syncing);
 
-        let fresh = session.apply(Intent::InboxSyncFinished {
+        let fresh = session.apply(Intent::PullRequestListSyncFinished {
             generation: 2,
             result: Ok(()),
         });
-        assert_eq!(fresh, vec![Effect::QueryInbox]);
-        assert!(!session.view().inbox_sync.syncing);
-        assert!(session.view().inbox_sync.last_success.is_some());
+        assert_eq!(fresh, vec![Effect::QueryPullRequests]);
+        assert!(!session.view().pull_requests_sync.syncing);
+        assert!(session.view().pull_requests_sync.last_success.is_some());
     }
 
     #[test]

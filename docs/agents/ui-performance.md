@@ -1,6 +1,6 @@
 # UI performance
 
-How to keep Review Desk snappy when building Overview, Diff, Inbox, or any scrollable pane.
+How to keep Review Desk snappy when building Overview, Diff, Pull requests, or any scrollable pane.
 
 Read this before choosing a scroll or disclosure layout. Coding-standards judgement for review lives in root `CODING_STANDARDS.md` (Snappy UI).
 
@@ -14,9 +14,9 @@ Unbounded content must not lay out or paint the whole document on every scroll f
 
 | Principle | What it means in Review Desk | Where to look in [zed-industries/zed](https://github.com/zed-industries/zed) |
 | --- | --- | --- |
-| **Virtualize first** | Inbox and Files file list use `uniform_list`; Overview uses `TextView::scrollable`; Diff uses gpui-kit’s variable-height `list`. Do not lay out unbounded content in fit mode inside a scrolling div. | [`crates/gpui/src/elements/uniform_list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/uniform_list.rs), [`crates/gpui/src/elements/list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/list.rs) (`ListState`, scroll-to) |
+| **Virtualize first** | Pull requests and Files file list use `uniform_list`; Overview uses `TextView::scrollable`; Diff uses gpui-kit’s variable-height `list`. Do not lay out unbounded content in fit mode inside a scrolling div. | [`crates/gpui/src/elements/uniform_list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/uniform_list.rs), [`crates/gpui/src/elements/list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/list.rs) (`ListState`, scroll-to) |
 | **Flatten collapsed rows** | Closed `<details>` emit toggle fences only; open bodies inline as normal markdown blocks in the composed Overview document. File tree UIs omit children of collapsed folders from the visible row model. | [`crates/project_panel/src/project_panel.rs`](https://github.com/zed-industries/zed/blob/main/crates/project_panel/src/project_panel.rs) (`visible_entries`, expanded-dir filtering) |
-| **One vertical scroll owner** | Overview is one composed markdown document with one vertical scrollbar (title, meta, toggles, and body scroll together). Inbox is one list scroller under its header. | [`crates/agent_ui/src/conversation_view.rs`](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view.rs) (single `list` + `ListState` for the thread) |
+| **One vertical scroll owner** | Overview is one composed markdown document with one vertical scrollbar (title, meta, toggles, and body scroll together). Pull requests is one list scroller under its header. | [`crates/agent_ui/src/conversation_view.rs`](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view.rs) (single `list` + `ListState` for the thread) |
 | **Sticky as list decoration** | Sticky path/hunk headers must not add a second vertical scroller; they ride on the existing virtualized list as decorations. | [`crates/ui/src/components/sticky_items.rs`](https://github.com/zed-industries/zed/blob/main/crates/ui/src/components/sticky_items.rs) (`UniformListDecoration`, sticky on the list surface) |
 | **Horizontal-only nested scroll** | Wide code, tables, or diff hunks may use horizontal overflow inside a row; the pane’s vertical wheel still drives the pane’s vertical owner. | GPUI [`overflow_x_scroll`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/div.rs) on inner content; avoid pairing it with a second vertical scroller for the same pane |
 
@@ -35,13 +35,13 @@ The Files tab is a **horizontal split**, not one nested scroll region:
 
 Two vertical scrollbars in one tab is intentional: each pane owns its vertical scroll. Do not merge the list and Diff into a single scroller without engineer approval on the ticket or PR.
 
-### Inbox
+### Pull requests
 
-Same shape as other single-pane lists: pinned “INBOX” header, then one `uniform_list` scroller below (bounded height under the header).
+Same shape as other single-pane lists: pinned “PULL REQUESTS” header, then one `uniform_list` scroller below (bounded height under the header).
 
-## Local persistence and Inbox
+## Local persistence and the Pull requests list
 
-[LocalStore](../adr/0001-localstore-turso-local-first.md) makes Inbox and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Inbox row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Inbox reads from the store and refreshes when data changes.
+[LocalStore](../adr/0001-localstore-turso-local-first.md) makes the Pull requests list and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Pull requests row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Pull requests list reads from the store and refreshes when data changes.
 
 ## gpui-kit patterns
 
@@ -68,7 +68,7 @@ The Files tab is the documented exception: two panes, two vertical scrollbars (s
 
 ### Bounded flex under pinned chrome
 
-Pinned chrome (title bar, Inbox header, Review tab bar, Files header) is fine when the virtualized child sits in a **`flex_1().min_h_0()`** (or equivalent) chain so the scroller gets a max height. Pinned chrome that is not itself a scroller is allowed; pinned chrome that shrinks the rest into a **nested vertical scroller** for the main content is not.
+Pinned chrome (title bar, Pull requests header, Review tab bar, Files header) is fine when the virtualized child sits in a **`flex_1().min_h_0()`** (or equivalent) chain so the scroller gets a max height. Pinned chrome that is not itself a scroller is allowed; pinned chrome that shrinks the rest into a **nested vertical scroller** for the main content is not.
 
 ### Disclosure (`<details>` / `<summary>`)
 
@@ -97,7 +97,7 @@ If the design needs nested vertical scroll or pinned chrome that shrinks content
 ## Checklist before you call a UI change done
 
 - [ ] Unbounded content uses a virtualized surface (`TextView::scrollable`, `list`, or `uniform_list`), not fit layout in a scrolling div
-- [ ] Single-pane surfaces (Overview, Inbox, each Files sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Files tab is two panes (list + Diff), each with its own vertical scrollbar
+- [ ] Single-pane surfaces (Overview, Pull requests, each Files sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Files tab is two panes (list + Diff), each with its own vertical scrollbar
 - [ ] Virtualized children under pinned chrome sit in a bounded `flex_1().min_h_0()` (or equivalent) flex chain so virtualization engages
 - [ ] Sticky headers (if any) are list decorations on the existing vertical owner, not a second vertical scroller
 - [ ] Nested scroll is horizontal-only inside rows; the pane’s vertical wheel drives the pane’s vertical owner

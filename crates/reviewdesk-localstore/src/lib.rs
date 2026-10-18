@@ -2,8 +2,8 @@
 
 mod detail_patch;
 mod error;
-mod inbox;
 mod migrate;
+mod pull_request_list;
 mod store;
 
 pub use store::TursoLocalStore;

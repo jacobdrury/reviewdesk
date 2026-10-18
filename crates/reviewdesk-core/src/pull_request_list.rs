@@ -2,14 +2,14 @@ use chrono::{DateTime, Utc};
 
 use crate::id::PullRequestId;
 
-/// Options for listing the Inbox. Defaults match the first-slice hardcoded UI.
+/// Options for listing Pull requests. Defaults match the first-slice hardcoded UI.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InboxOptions {
+pub struct PullRequestListOptions {
     pub include_authored: bool,
     pub drafts: DraftFilter,
 }
 
-impl Default for InboxOptions {
+impl Default for PullRequestListOptions {
     fn default() -> Self {
         Self {
             include_authored: false,
@@ -26,7 +26,7 @@ pub enum DraftFilter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InboxLabel {
+pub struct PullRequestLabel {
     pub name: String,
     pub color: String,
 }
@@ -41,54 +41,54 @@ pub enum ReviewState {
     Unknown,
 }
 
-/// Sort direction for Inbox queries and future saved views.
+/// Sort direction for Pull requests queries and future saved views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortDirection {
     Asc,
     Desc,
 }
 
-/// Fields supported for Inbox ordering in v1.
+/// Fields supported for Pull requests ordering in v1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InboxSortField {
+pub enum PullRequestListSortField {
     UpdatedAt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InboxSort {
-    pub field: InboxSortField,
+pub struct PullRequestListSort {
+    pub field: PullRequestListSortField,
     pub direction: SortDirection,
 }
 
-impl Default for InboxSort {
+impl Default for PullRequestListSort {
     fn default() -> Self {
         Self {
-            field: InboxSortField::UpdatedAt,
+            field: PullRequestListSortField::UpdatedAt,
             direction: SortDirection::Desc,
         }
     }
 }
 
-/// Filter criteria for Inbox queries. Extends [`InboxOptions`] with optional view filters.
+/// Filter criteria for Pull requests queries. Extends [`PullRequestListOptions`] with optional view filters.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InboxFilter {
-    pub options: InboxOptions,
+pub struct PullRequestListFilter {
+    pub options: PullRequestListOptions,
     pub repo_label: Option<String>,
     pub author_login: Option<String>,
     pub review_state: Option<ReviewState>,
     pub has_label: Option<String>,
 }
 
-/// Query shape for listing Inbox rows from LocalStore (baseline Inbox and future custom views).
+/// Query shape for listing Pull requests rows from LocalStore (baseline list and future custom views).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct InboxQuery {
-    pub filter: InboxFilter,
-    pub sort: InboxSort,
+pub struct PullRequestListQuery {
+    pub filter: PullRequestListFilter,
+    pub sort: PullRequestListSort,
 }
 
-/// One row in the Inbox list.
+/// One row in the Pull requests list.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InboxItem {
+pub struct PullRequestListItem {
     pub id: PullRequestId,
     pub title: String,
     pub web_url: String,
@@ -96,7 +96,7 @@ pub struct InboxItem {
     pub author_login: String,
     pub author_avatar_url: Option<String>,
     pub repo_label: String,
-    pub labels: Vec<InboxLabel>,
+    pub labels: Vec<PullRequestLabel>,
     pub review_state: ReviewState,
     pub is_draft: bool,
 }
