@@ -1215,7 +1215,7 @@ fn render_pr_rows(
 }
 
 /// Linear Issues/backlog row → PR.
-/// grip · #71 · 2h · status · title ··· [repo] [labels] · files ±lines · avatar
+/// files · #71 · 2h · status · title ··· [repo] [labels] · avatar
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
     let author_initial = pr
         .author
@@ -1229,11 +1229,7 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         .w_full()
         .items_center()
         .gap_2()
-        .child(
-            Icon::new(IconName::EllipsisVertical)
-                .xsmall()
-                .text_color(cx.theme().muted_foreground.opacity(0.45)),
-        )
+        .child(filesize_chip(pr.files, cx))
         .child(
             div()
                 .min_w(px(36.))
@@ -1285,23 +1281,22 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
         );
     }
 
-    row.child(filesize_chip(pr.files, cx))
-        .child(
-            div()
-                .size(px(20.))
-                .rounded_full()
-                .bg(author_color(pr.author, cx))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(cx.theme().background)
-                        .child(author_initial),
-                ),
-        )
+    row.child(
+        div()
+            .size(px(20.))
+            .rounded_full()
+            .bg(author_color(pr.author, cx))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(cx.theme().background)
+                    .child(author_initial),
+            ),
+    )
 }
 
 fn repo_pill(name: &str, cx: &App) -> impl IntoElement {
