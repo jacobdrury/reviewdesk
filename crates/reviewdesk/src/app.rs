@@ -285,6 +285,8 @@ impl ReviewDesk {
 
     pub(crate) fn set_prototype_tab(&mut self, tab: PrototypeReviewTab, cx: &mut Context<Self>) {
         self.prototype_tab = tab;
+        // Overview opens Metadata by default; other tabs collapse it (user can re-open).
+        self.metadata_open = tab.metadata_open_by_default();
         if let Some(session_tab) = sync_session_tab(tab) {
             self.dispatch(Intent::SetReviewTab(session_tab), cx);
             return;

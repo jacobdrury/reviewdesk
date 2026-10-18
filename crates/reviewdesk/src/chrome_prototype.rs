@@ -9,7 +9,8 @@
 //! (Inbox + Pull requests). Variants only change Metadata placement / density.
 //!
 //! HITL pick so far: A's Linear + right Metadata dock, plus C's full-screen
-//! Review when a PR is opened. Tab order: Overview, Pipelines, Conversation, Diff.
+//! Review when a PR is opened. Tab order: Overview, Pipelines, Conversation,
+//! Changes. Metadata opens by default on Overview only; other tabs collapse it.
 //!
 //! Three variants on the live app, cycled with the bottom bar (or `[` / `]`):
 //! - A (Picked): dense Linear sidebar, right Metadata dock, focus Review on open
@@ -41,7 +42,7 @@ pub enum PrototypeReviewTab {
     Pipelines,
     Conversation,
     /// Last tab; paints the existing Files/Diff surface.
-    Diff,
+    Changes,
 }
 
 impl ChromeVariant {
@@ -138,7 +139,7 @@ impl PrototypeReviewTab {
             Self::Overview => "Overview",
             Self::Pipelines => "Pipelines",
             Self::Conversation => "Conversation",
-            Self::Diff => "Diff",
+            Self::Changes => "Changes",
         }
     }
 
@@ -147,7 +148,7 @@ impl PrototypeReviewTab {
             Self::Overview => 0,
             Self::Pipelines => 1,
             Self::Conversation => 2,
-            Self::Diff => 3,
+            Self::Changes => 3,
         }
     }
 
@@ -155,9 +156,14 @@ impl PrototypeReviewTab {
         match ix {
             1 => Self::Pipelines,
             2 => Self::Conversation,
-            3 => Self::Diff,
+            3 => Self::Changes,
             _ => Self::Overview,
         }
+    }
+
+    /// Metadata starts open on Overview; other tabs collapse it by default.
+    pub fn metadata_open_by_default(self) -> bool {
+        matches!(self, Self::Overview)
     }
 }
 

@@ -750,7 +750,7 @@ fn render_review_tabs(
                 .child(Tab::new().label(PrototypeReviewTab::Overview.label()))
                 .child(Tab::new().label(PrototypeReviewTab::Pipelines.label()))
                 .child(Tab::new().label(PrototypeReviewTab::Conversation.label()))
-                .child(Tab::new().label(PrototypeReviewTab::Diff.label())),
+                .child(Tab::new().label(PrototypeReviewTab::Changes.label())),
         )
         .child(
             Button::new("toggle-metadata")
@@ -795,7 +795,7 @@ fn render_tab_body(
             cx,
         )
         .into_any_element(),
-        PrototypeReviewTab::Diff => render_files(
+        PrototypeReviewTab::Changes => render_files(
             &proto.view,
             &proto.diff,
             &proto.files_scroll,
@@ -1069,11 +1069,11 @@ fn selected_title(view: &SessionView) -> String {
         .unwrap_or_else(|| "Pull request".into())
 }
 
-/// Keep session Overview/Diff in sync when the prototype tab changes.
+/// Keep session Overview/Changes in sync when the prototype tab changes.
 pub(crate) fn sync_session_tab(tab: PrototypeReviewTab) -> Option<ReviewTab> {
     match tab {
         PrototypeReviewTab::Overview => Some(ReviewTab::Overview),
-        PrototypeReviewTab::Diff => Some(ReviewTab::Files),
+        PrototypeReviewTab::Changes => Some(ReviewTab::Files),
         PrototypeReviewTab::Pipelines | PrototypeReviewTab::Conversation => None,
     }
 }
