@@ -1,107 +1,27 @@
 //! PROTOTYPE (throwaway): Conversation + Diff-anchored Threads for Review Desk.
 //!
 //! Question: how should Threads read and compose on Conversation and the Diff
-//! surface (shared Thread set), including a Pending review affordance and a
-//! Suggestion stub — concrete enough to grill remaining UX, without live
-//! Provider writeback?
+//! surface — concrete enough to grill remaining UX, without live Provider writeback?
 //!
-//! Domain from #54: Review comment / Thread / Suggestion / Pending review;
-//! Annotation is out of product language. One Thread set shared by Conversation
-//! and Diff. Suggestions are compose/display only.
+//! Baseline: clone Linear's issue comments
+//! ([comment-on-issues](https://linear.app/docs/comment-on-issues)) for Review Desk
+//! PRs. Sibling prototype `prototype/pull-requests-list-nav` locks the list chrome
+//! to Linear Issues; this branch locks Conversation/Threads to Linear comments.
 //!
-//! Shell chrome is locked to the #58 pick (Linear + right Metadata dock).
-//! Three Thread layout variants, cycled with the bottom bar (or `[` / `]`):
-//! - A (Inline): Conversation is a chronological feed; Diff shows full inline
-//!   Thread cards (incl. Suggestion + reply compose stubs).
-//! - B (Split rail): Conversation is Thread index + detail; Diff keeps compact
-//!   markers and a right Thread rail.
-//! - C (Inspector): Conversation is a filterable index; Diff markers open a
-//!   shared bottom inspector (Suggestion as proposed vs current).
+//! Mapping (Linear → Review Desk):
+//! - Issue comment feed → Conversation chronological comments + Thread roots
+//! - Reply-to-comment threads → Thread replies (shared with Diff)
+//! - Resolve thread (root or showcase reply) → Thread resolve
+//! - “Leave a comment…” bottom composer → Conversation compose (timeline posts
+//!   immediately; Diff-anchored drafts sit on Pending review per #54)
+//! - Unsent / Drafts → Pending review drafts (visible with Draft badge)
+//! - Inline comments on description → Diff-anchored Review comments / Suggestions
+//!
+//! Domain from #54: Review comment / Thread / Suggestion / Pending review.
+//! Annotation is out of product language. Iterate in place — no A/B/C switcher.
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/conversation-diff-threads` (never merge as-is)
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ThreadVariant {
-    #[default]
-    A,
-    B,
-    C,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThreadFilter {
-    All,
-    Open,
-    Resolved,
-    Outdated,
-    Pending,
-}
-
-impl ThreadVariant {
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::A => "A",
-            Self::B => "B",
-            Self::C => "C",
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::A => "Inline feed + Diff cards",
-            Self::B => "Split index + Diff rail",
-            Self::C => "Filter index + inspector",
-        }
-    }
-
-    pub fn label(self) -> String {
-        format!("{} ({})", self.key(), self.name())
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::A => Self::B,
-            Self::B => Self::C,
-            Self::C => Self::A,
-        }
-    }
-
-    pub fn prev(self) -> Self {
-        match self {
-            Self::A => Self::C,
-            Self::B => Self::A,
-            Self::C => Self::B,
-        }
-    }
-
-    /// Diff paints full inline Thread cards.
-    pub fn inline_diff_cards(self) -> bool {
-        matches!(self, Self::A)
-    }
-}
-
-impl ThreadFilter {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Open => "Open",
-            Self::Resolved => "Resolved",
-            Self::Outdated => "Outdated",
-            Self::Pending => "Pending",
-        }
-    }
-
-    pub fn all() -> &'static [Self] {
-        &[
-            Self::All,
-            Self::Open,
-            Self::Resolved,
-            Self::Outdated,
-            Self::Pending,
-        ]
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadStatus {
@@ -114,146 +34,161 @@ pub enum ThreadStatus {
 pub struct StubComment {
     pub author: &'static str,
     pub body: &'static str,
+    pub relative_time: &'static str,
     pub pending: bool,
     pub suggestion: Option<&'static str>,
+    /// When set, resolving from this reply “showcases” it (Linear).
+    pub showcase_resolve: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct StubThread {
     pub id: &'static str,
-    pub path: &'static str,
-    pub line_label: &'static str,
+    /// Diff anchor; `None` = timeline-only Conversation comment (Linear top-level).
+    pub path: Option<&'static str>,
+    pub line_label: Option<&'static str>,
     pub status: ThreadStatus,
-    pub pending_draft: bool,
     pub comments: &'static [StubComment],
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct StubTimeline {
-    pub author: &'static str,
-    pub body: &'static str,
 }
 
 /// Shared stub Thread set for Conversation + Diff (no Provider).
 pub const STUB_THREADS: &[StubThread] = &[
     StubThread {
-        id: "t1",
-        path: "crates/reviewdesk/src/chrome_prototype.rs",
-        line_label: "L42–L48 · RIGHT",
+        id: "t-timeline",
+        path: None,
+        line_label: None,
         status: ThreadStatus::Open,
-        pending_draft: false,
+        comments: &[StubComment {
+            author: "carol",
+            body: "Looks good overall — shipping the shell pick next.",
+            relative_time: "2h",
+            pending: false,
+            suggestion: None,
+            showcase_resolve: false,
+        }],
+    },
+    StubThread {
+        id: "t1",
+        path: Some("crates/reviewdesk/src/chrome_prototype.rs"),
+        line_label: Some("L42–L48"),
+        status: ThreadStatus::Open,
         comments: &[
             StubComment {
                 author: "alice",
                 body: "Can we keep Dock Dense padding on the sidebar list?",
+                relative_time: "1h",
                 pending: false,
                 suggestion: None,
+                showcase_resolve: false,
             },
             StubComment {
                 author: "you",
                 body: "Yes — chrome A locked that density for the pick.",
+                relative_time: "45m",
                 pending: false,
                 suggestion: None,
+                showcase_resolve: false,
             },
         ],
     },
     StubThread {
         id: "t2",
-        path: "crates/reviewdesk/src/ui/shell_prototype.rs",
-        line_label: "L120 · RIGHT",
+        path: Some("crates/reviewdesk/src/ui/shell_prototype.rs"),
+        line_label: Some("L120"),
         status: ThreadStatus::Open,
-        pending_draft: true,
         comments: &[
             StubComment {
                 author: "bob",
                 body: "Metadata should stay open by default only on Overview.",
+                relative_time: "40m",
                 pending: false,
                 suggestion: None,
+                showcase_resolve: false,
             },
             StubComment {
                 author: "you",
-                body: "Agree — draft reply on Pending review until Submit.",
+                body: "Agree — draft reply sits on Pending review until Submit.",
+                relative_time: "Draft",
                 pending: true,
                 suggestion: None,
+                showcase_resolve: false,
             },
         ],
     },
     StubThread {
         id: "t3",
-        path: "crates/reviewdesk/src/app.rs",
-        line_label: "L88–L92 · RIGHT",
+        path: Some("crates/reviewdesk/src/app.rs"),
+        line_label: Some("L88–L92"),
         status: ThreadStatus::Open,
-        pending_draft: true,
         comments: &[StubComment {
             author: "you",
             body: "Rename the Annotation label while we are here.",
+            relative_time: "Draft",
             pending: true,
             suggestion: Some(
                 "window.set_window_title(\"Review Desk\");\n// Pending review drafts, not Annotations",
             ),
+            showcase_resolve: false,
         }],
     },
     StubThread {
         id: "t4",
-        path: "docs/agents/domain.md",
-        line_label: "file",
+        path: Some("docs/agents/domain.md"),
+        line_label: Some("file"),
         status: ThreadStatus::Resolved,
-        pending_draft: false,
         comments: &[
             StubComment {
                 author: "carol",
                 body: "CODEOWNERS breakdown belongs on Overview, not Metadata.",
+                relative_time: "1d",
                 pending: false,
                 suggestion: None,
+                showcase_resolve: false,
             },
             StubComment {
                 author: "you",
-                body: "Resolved after #53.",
+                body: "Resolved after #53 — this reply is the showcase.",
+                relative_time: "1d",
                 pending: false,
                 suggestion: None,
+                showcase_resolve: true,
             },
         ],
     },
     StubThread {
         id: "t5",
-        path: "crates/reviewdesk/src/paths.rs",
-        line_label: "L12 · LEFT (outdated)",
+        path: Some("crates/reviewdesk/src/paths.rs"),
+        line_label: Some("L12 · outdated"),
         status: ThreadStatus::Outdated,
-        pending_draft: false,
         comments: &[StubComment {
             author: "dave",
             body: "This path helper moved — Thread is outdated but still replyable.",
+            relative_time: "3d",
             pending: false,
             suggestion: None,
+            showcase_resolve: false,
         }],
     },
 ];
 
-pub const STUB_TIMELINE: &[StubTimeline] = &[StubTimeline {
-    author: "carol",
-    body: "Looks good overall — non-diff Conversation comment (publishes immediately).",
-}];
-
-pub const PENDING_REVIEW_SUMMARY: &str =
-    "Pending review · 2 drafts (1 reply, 1 Suggestion) · not submitted";
+pub const PENDING_DRAFT_COUNT: usize = 2;
 
 pub fn thread_by_id(id: &str) -> Option<&'static StubThread> {
     STUB_THREADS.iter().find(|t| t.id == id)
 }
 
-pub fn filtered_threads(filter: ThreadFilter) -> Vec<&'static StubThread> {
+pub fn conversation_threads(hide_resolved: bool) -> Vec<&'static StubThread> {
     STUB_THREADS
         .iter()
-        .filter(|t| match filter {
-            ThreadFilter::All => true,
-            ThreadFilter::Open => matches!(t.status, ThreadStatus::Open),
-            ThreadFilter::Resolved => matches!(t.status, ThreadStatus::Resolved),
-            ThreadFilter::Outdated => matches!(t.status, ThreadStatus::Outdated),
-            ThreadFilter::Pending => t.pending_draft,
+        .filter(|t| {
+            if hide_resolved && matches!(t.status, ThreadStatus::Resolved) {
+                return false;
+            }
+            true
         })
         .collect()
 }
 
-pub fn default_selected_thread_id() -> &'static str {
+pub fn default_reply_thread_id() -> &'static str {
     "t2"
 }

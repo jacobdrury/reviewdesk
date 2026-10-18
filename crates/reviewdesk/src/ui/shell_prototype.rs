@@ -1,4 +1,4 @@
-//! PROTOTYPE paint: shell + Conversation/Diff Thread variants. Throwaway branch.
+//! PROTOTYPE paint: shell + Linear comments Conversation/Diff Threads.
 
 use gpui_kit::component::diff::DiffState;
 use gpui_kit::component::{
@@ -12,16 +12,15 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Context, Entity, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle,
-    WeakEntity, div, percentage, px, uniform_list,
+    Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, WeakEntity, div,
+    percentage, px, uniform_list,
     prelude::FluentBuilder as _,
 };
 
 use crate::app::ReviewDesk;
 use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
 use crate::review_session::{Intent, LoadState, ReviewTab, SessionView};
-use crate::threads_prototype::{ThreadFilter, ThreadVariant};
 use crate::ui::{
     render_changes_with_threads, render_conversation, render_files, render_overview,
 };
@@ -71,9 +70,8 @@ pub(crate) struct PrototypeChrome {
     pub shell_nav: ShellNav,
     pub review_tab: PrototypeReviewTab,
     pub metadata_open: bool,
-    pub thread_variant: ThreadVariant,
-    pub thread_filter: ThreadFilter,
-    pub selected_thread_id: &'static str,
+    pub hide_resolved_threads: bool,
+    pub reply_thread_id: Option<&'static str>,
     pub view: SessionView,
     pub diff: Entity<DiffState>,
     pub inbox_scroll: UniformListScrollHandle,
@@ -86,22 +84,11 @@ pub(crate) fn render_prototype_shell(
     proto: PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let thread_variant = proto.thread_variant;
     let sync_label = proto.view.inbox_sync.status_label();
 
     v_flex()
         .size_full()
         .bg(cx.theme().background)
-        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-            let key = event.keystroke.key.as_str();
-            if key == "[" || key == "left" {
-                this.cycle_thread_variant(false, cx);
-                return;
-            }
-            if key == "]" || key == "right" {
-                this.cycle_thread_variant(true, cx);
-            }
-        }))
         .child(render_title_bar(&sync_label, cx))
         .child(
             div()
@@ -109,7 +96,6 @@ pub(crate) fn render_prototype_shell(
                 .min_h_0()
                 .child(render_body(proto, cx)),
         )
-        .child(render_thread_switcher(thread_variant, cx))
 }
 
 fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
@@ -129,7 +115,7 @@ fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl Into
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("prototype threads"),
+                            .child("prototype · Linear comments"),
                     ),
             )
             .child(
@@ -790,9 +776,8 @@ fn render_tab_body(
         )
         .into_any_element(),
         PrototypeReviewTab::Conversation => render_conversation(
-            proto.thread_variant,
-            proto.thread_filter,
-            proto.selected_thread_id,
+            proto.hide_resolved_threads,
+            proto.reply_thread_id,
             proto.entity.clone(),
             cx,
         )
@@ -807,9 +792,9 @@ fn render_tab_body(
             )
             .into_any_element();
             render_changes_with_threads(
-                proto.thread_variant,
-                proto.selected_thread_id,
+                proto.reply_thread_id,
                 files,
+                proto.entity.clone(),
                 cx,
             )
             .into_any_element()
@@ -1060,55 +1045,6 @@ fn github_url_from_short_id(short: &str) -> Option<String> {
         return None;
     }
     Some(format!("https://github.com/{path}/pull/{number}"))
-}
-
-fn render_thread_switcher(
-    variant: ThreadVariant,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    h_flex()
-        .id("thread-prototype-switcher")
-        .w_full()
-        .justify_center()
-        .py_2()
-        .bg(cx.theme().background)
-        .child(
-            h_flex()
-                .gap_2()
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().popover)
-                .items_center()
-                .child(
-                    Button::new("thread-prev")
-                        .ghost()
-                        .xsmall()
-                        .label("←")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_thread_variant(false, cx);
-                        })),
-                )
-                .child(
-                    div()
-                        .min_w(px(280.))
-                        .text_sm()
-                        .text_center()
-                        .font_medium()
-                        .child(variant.label()),
-                )
-                .child(
-                    Button::new("thread-next")
-                        .ghost()
-                        .xsmall()
-                        .label("→")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_thread_variant(true, cx);
-                        })),
-                ),
-        )
 }
 
 fn selected_title(view: &SessionView) -> String {
