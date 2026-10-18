@@ -1,0 +1,5 @@
+projects:
+  reviewdesk-workspace: '.'
+
+vcs:
+  defaultBranch: 'main'

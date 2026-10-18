@@ -1,0 +1,6 @@
+# Task runner: managed by proto, not by moon's language toolchain
+moon = "2.6.0"
+
+# Rust channel/version: proto pin; moon inherits via versionFromPrototools.
+# 1.98+ required by gpui-pre 0.3.9 (std::hint::cold_path).
+rust = "1.98.1"

@@ -1,0 +1,3 @@
+# Enable Rust for moon. Version comes from root .prototools (default).
+rust:
+  syncToolchainConfig: true
