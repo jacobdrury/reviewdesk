@@ -639,7 +639,7 @@ impl ReviewSession {
         self.annotations.entry(pr_id).or_default().push(Annotation {
             id,
             range,
-            body: format!("Annotation on {lines}.").into(),
+            body: format!("Review comment on {lines} (draft on Pending review).").into(),
         });
     }
 

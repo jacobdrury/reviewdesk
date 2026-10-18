@@ -18,6 +18,8 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView};
+use crate::threads_prototype::ThreadVariant;
+use crate::ui::render_diff_thread_annotation;
 
 pub(crate) fn render_files(
     view: &SessionView,
@@ -111,6 +113,11 @@ pub(crate) fn render_files(
             .collect::<Vec<_>>(),
     );
     let add_entity = entity.clone();
+    let thread_variant = entity
+        .upgrade()
+        .map(|e| e.read(cx).thread_variant())
+        .unwrap_or(ThreadVariant::A);
+    let compact_markers = !thread_variant.inline_diff_cards();
 
     div()
         .size_full()
@@ -140,7 +147,11 @@ pub(crate) fn render_files(
                                                 .text_xs()
                                                 .text_color(cx.theme().muted_foreground)
                                                 .font_medium()
-                                                .child("FILES"),
+                                                .child(if compact_markers {
+                                                    "FILES · Thread markers"
+                                                } else {
+                                                    "FILES · inline Threads"
+                                                }),
                                         )
                                         .child(
                                             Button::new("diff-mode")
@@ -258,19 +269,12 @@ pub(crate) fn render_files(
                                                 .find(|(id, _)| id == annotation.id())
                                                 .map(|(_, body)| body.clone())
                                                 .unwrap_or_default();
-                                            v_flex()
-                                                .w_full()
-                                                .gap_1()
-                                                .p_2()
-                                                .rounded_md()
-                                                .bg(cx.theme().secondary)
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child("Annotation"),
-                                                )
-                                                .child(div().text_sm().child(body))
+                                            render_diff_thread_annotation(
+                                                thread_variant,
+                                                &body,
+                                                cx,
+                                            )
+                                            .into_any_element()
                                         })
                                         .on_add_annotation(move |range, _, _cx| {
                                             let _ = add_entity.update(_cx, |this, cx| {

@@ -1,4 +1,4 @@
-//! PROTOTYPE paint: primary shell chrome variants. Throwaway with the branch.
+//! PROTOTYPE paint: shell + Conversation/Diff Thread variants. Throwaway branch.
 
 use gpui_kit::component::diff::DiffState;
 use gpui_kit::component::{
@@ -21,7 +21,10 @@ use gpui_kit::{
 use crate::app::ReviewDesk;
 use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
 use crate::review_session::{Intent, LoadState, ReviewTab, SessionView};
-use crate::ui::{render_files, render_overview};
+use crate::threads_prototype::{ThreadFilter, ThreadVariant};
+use crate::ui::{
+    render_changes_with_threads, render_conversation, render_files, render_overview,
+};
 
 #[derive(Clone, Copy)]
 struct StubNotification {
@@ -68,6 +71,9 @@ pub(crate) struct PrototypeChrome {
     pub shell_nav: ShellNav,
     pub review_tab: PrototypeReviewTab,
     pub metadata_open: bool,
+    pub thread_variant: ThreadVariant,
+    pub thread_filter: ThreadFilter,
+    pub selected_thread_id: &'static str,
     pub view: SessionView,
     pub diff: Entity<DiffState>,
     pub inbox_scroll: UniformListScrollHandle,
@@ -80,7 +86,7 @@ pub(crate) fn render_prototype_shell(
     proto: PrototypeChrome,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let chrome = proto.chrome;
+    let thread_variant = proto.thread_variant;
     let sync_label = proto.view.inbox_sync.status_label();
 
     v_flex()
@@ -89,11 +95,11 @@ pub(crate) fn render_prototype_shell(
         .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
             let key = event.keystroke.key.as_str();
             if key == "[" || key == "left" {
-                this.cycle_chrome(false, cx);
+                this.cycle_thread_variant(false, cx);
                 return;
             }
             if key == "]" || key == "right" {
-                this.cycle_chrome(true, cx);
+                this.cycle_thread_variant(true, cx);
             }
         }))
         .child(render_title_bar(&sync_label, cx))
@@ -103,7 +109,7 @@ pub(crate) fn render_prototype_shell(
                 .min_h_0()
                 .child(render_body(proto, cx)),
         )
-        .child(render_chrome_switcher(chrome, cx))
+        .child(render_thread_switcher(thread_variant, cx))
 }
 
 fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
@@ -123,7 +129,7 @@ fn render_title_bar(sync_label: &str, cx: &mut Context<ReviewDesk>) -> impl Into
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("prototype shell"),
+                            .child("prototype threads"),
                     ),
             )
             .child(
@@ -783,25 +789,31 @@ fn render_tab_body(
             cx,
         )
         .into_any_element(),
-        PrototypeReviewTab::Conversation => stub_tab(
-            "Conversation",
-            &[
-                "alice: Can we keep Dock Dense padding on the list?",
-                "you: Metadata should stay open by default.",
-                "bob: CODEOWNERS wants a re-request control here.",
-                "(threaded replies stub)",
-            ],
-            cx,
-        )
-        .into_any_element(),
-        PrototypeReviewTab::Changes => render_files(
-            &proto.view,
-            &proto.diff,
-            &proto.files_scroll,
+        PrototypeReviewTab::Conversation => render_conversation(
+            proto.thread_variant,
+            proto.thread_filter,
+            proto.selected_thread_id,
             proto.entity.clone(),
             cx,
         )
         .into_any_element(),
+        PrototypeReviewTab::Changes => {
+            let files = render_files(
+                &proto.view,
+                &proto.diff,
+                &proto.files_scroll,
+                proto.entity.clone(),
+                cx,
+            )
+            .into_any_element();
+            render_changes_with_threads(
+                proto.thread_variant,
+                proto.selected_thread_id,
+                files,
+                cx,
+            )
+            .into_any_element()
+        }
     }
 }
 
@@ -1050,12 +1062,12 @@ fn github_url_from_short_id(short: &str) -> Option<String> {
     Some(format!("https://github.com/{path}/pull/{number}"))
 }
 
-fn render_chrome_switcher(
-    chrome: ChromeVariant,
+fn render_thread_switcher(
+    variant: ThreadVariant,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     h_flex()
-        .id("chrome-prototype-switcher")
+        .id("thread-prototype-switcher")
         .w_full()
         .justify_center()
         .py_2()
@@ -1071,29 +1083,29 @@ fn render_chrome_switcher(
                 .bg(cx.theme().popover)
                 .items_center()
                 .child(
-                    Button::new("chrome-prev")
+                    Button::new("thread-prev")
                         .ghost()
                         .xsmall()
                         .label("←")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_chrome(false, cx);
+                            this.cycle_thread_variant(false, cx);
                         })),
                 )
                 .child(
                     div()
-                        .min_w(px(220.))
+                        .min_w(px(280.))
                         .text_sm()
                         .text_center()
                         .font_medium()
-                        .child(chrome.label()),
+                        .child(variant.label()),
                 )
                 .child(
-                    Button::new("chrome-next")
+                    Button::new("thread-next")
                         .ghost()
                         .xsmall()
                         .label("→")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.cycle_chrome(true, cx);
+                            this.cycle_thread_variant(true, cx);
                         })),
                 ),
         )

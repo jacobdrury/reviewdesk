@@ -18,6 +18,9 @@ use tokio::runtime::Handle;
 use crate::INBOX_REFRESH;
 use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
 use crate::review_session::{Effect, Intent, ReviewSession};
+use crate::threads_prototype::{
+    ThreadFilter, ThreadVariant, default_selected_thread_id,
+};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
     refresh_pull_request_detail, sync_inbox_from_provider,
@@ -54,11 +57,14 @@ pub struct ReviewDesk {
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     notif_scroll: UniformListScrollHandle,
-    /// PROTOTYPE chrome state (throwaway with `prototype/primary-shell-chrome`).
+    /// PROTOTYPE: chrome locked to #58 pick; Thread variants cycle on the bar.
     chrome: ChromeVariant,
     shell_nav: ShellNav,
     prototype_tab: PrototypeReviewTab,
     metadata_open: bool,
+    thread_variant: ThreadVariant,
+    thread_filter: ThreadFilter,
+    selected_thread_id: &'static str,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -91,8 +97,11 @@ impl ReviewDesk {
             notif_scroll: UniformListScrollHandle::new(),
             chrome: ChromeVariant::A,
             shell_nav: ShellNav::PullRequests,
-            prototype_tab: PrototypeReviewTab::Overview,
-            metadata_open: true,
+            prototype_tab: PrototypeReviewTab::Conversation,
+            metadata_open: false,
+            thread_variant: ThreadVariant::A,
+            thread_filter: ThreadFilter::All,
+            selected_thread_id: default_selected_thread_id(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -269,13 +278,27 @@ impl ReviewDesk {
         });
     }
 
-    pub(crate) fn cycle_chrome(&mut self, next: bool, cx: &mut Context<Self>) {
-        self.chrome = if next {
-            self.chrome.next()
+    pub(crate) fn cycle_thread_variant(&mut self, next: bool, cx: &mut Context<Self>) {
+        self.thread_variant = if next {
+            self.thread_variant.next()
         } else {
-            self.chrome.prev()
+            self.thread_variant.prev()
         };
         cx.notify();
+    }
+
+    pub(crate) fn select_thread(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.selected_thread_id = id;
+        cx.notify();
+    }
+
+    pub(crate) fn set_thread_filter(&mut self, filter: ThreadFilter, cx: &mut Context<Self>) {
+        self.thread_filter = filter;
+        cx.notify();
+    }
+
+    pub(crate) fn thread_variant(&self) -> ThreadVariant {
+        self.thread_variant
     }
 
     pub(crate) fn set_shell_nav(&mut self, nav: ShellNav, cx: &mut Context<Self>) {
@@ -366,6 +389,9 @@ impl Render for ReviewDesk {
                 shell_nav: self.shell_nav,
                 review_tab: self.prototype_tab,
                 metadata_open: self.metadata_open,
+                thread_variant: self.thread_variant,
+                thread_filter: self.thread_filter,
+                selected_thread_id: self.selected_thread_id,
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),

@@ -1,24 +1,9 @@
-//! PROTOTYPE (throwaway): primary shell chrome for Review Desk.
+//! PROTOTYPE shell chrome helpers (locked pick from #58).
 //!
-//! Question: how should Inbox ↔ Pull requests nav, Review pane tabs
-//! (Overview / Files / Pipelines / Conversation), and a foldable Metadata
-//! panel (open by default) sit together, and which density wins against the
-//! earlier Dock Dense notes (`prototype/zed-shell-chrome` variant A)?
-//!
-//! Standing preference from HITL: Linear-style labeled primary sidebar
-//! (Inbox + Pull requests). Variants only change Metadata placement / density.
-//!
-//! HITL pick so far: A's Linear + right Metadata dock, plus C's full-screen
-//! Review when a PR is opened. Tab order: Overview, Pipelines, Conversation,
-//! Changes. Metadata opens by default on Overview only; other tabs collapse it.
-//!
-//! Three variants on the live app, cycled with the bottom bar (or `[` / `]`):
-//! - A (Picked): dense Linear sidebar, right Metadata dock, focus Review on open
-//! - B (Linear + Header Meta): roomier; Metadata folds under the tab bar
-//! - C (Linear + Drawer): Metadata as a bottom drawer (also focus Review on open)
-//!
-//! Run: `cargo run -p reviewdesk`
-//! Branch: `prototype/primary-shell-chrome` (never merge as-is)
+//! HitL pick: Linear sidebar + right Metadata dock + focus Review on open.
+//! Tab order: Overview, Pipelines, Conversation, Changes. Metadata opens by
+//! default on Overview only. Thread layout variants live in
+//! [`crate::threads_prototype`] — this module only holds chrome enums.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChromeVariant {

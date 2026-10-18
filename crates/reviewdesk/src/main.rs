@@ -7,6 +7,7 @@ mod paths;
 mod review_session;
 mod sync;
 mod theme;
+mod threads_prototype;
 mod ui;
 
 use std::sync::Arc;
