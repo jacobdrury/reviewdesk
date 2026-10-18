@@ -1,0 +1,16 @@
+[package]
+name = "reviewdesk-localstore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Turso-backed LocalStore for Review Desk"
+
+[dependencies]
+async-trait = { workspace = true }
+reviewdesk-core = { path = "../reviewdesk-core" }
+turso = { workspace = true }
+
+[dev-dependencies]
+reviewdesk-core = { path = "../reviewdesk-core" }
+tempfile = "3.25.0"
+tokio = { workspace = true }
