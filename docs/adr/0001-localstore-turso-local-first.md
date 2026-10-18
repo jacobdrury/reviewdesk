@@ -66,7 +66,7 @@ Local persistence does **not** relax virtualization rules. The Inbox still feeds
 
 - New workspace crate `reviewdesk-localstore` for open, migrate, and (as tickets land) query/upsert APIs.
 - Tests exercise LocalStore through its public async API with a temp database path.
-- Annotations remain in-memory until a later issue changes that (per product glossary).
+- ~~Annotations remain in-memory until a later issue changes that (per product glossary).~~ Superseded for day-to-day readiness by [ADR-0003](0003-pending-review-localstore-not-annotations.md): Pending review drafts persist in LocalStore.
 
 ## References
 
