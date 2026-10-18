@@ -11,7 +11,7 @@ use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px,
 };
-use reviewdesk_core::{MergeableState, ReviewDecision};
+use reviewdesk_core::{MergeMethod, MergeableState, PullRequestState, ReviewDecision};
 
 use crate::app::ReviewDesk;
 use crate::metadata_write::MetadataWrite;
@@ -113,6 +113,16 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
         .child(metadata_field(
             "Mergeability",
             read_only_text(mergeable_label(detail.mergeable)),
+            cx,
+        ))
+        .child(metadata_field(
+            "Merge",
+            merge_row(detail, caps.merge, pending, cx),
+            cx,
+        ))
+        .child(metadata_field(
+            "Auto-merge",
+            auto_merge_row(detail, caps.auto_merge, pending, cx),
             cx,
         ))
         .child(metadata_field(
@@ -226,6 +236,124 @@ fn mergeable_label(value: MergeableState) -> String {
     }
 }
 
+fn merge_can_attempt(detail: &reviewdesk_core::PullRequestDetail) -> bool {
+    detail.state == PullRequestState::Open
+        && !detail.is_draft
+        && detail.mergeable == MergeableState::Mergeable
+}
+
+fn merge_method_label(method: MergeMethod) -> &'static str {
+    match method {
+        MergeMethod::Squash => "Squash",
+        MergeMethod::Merge => "Merge",
+        MergeMethod::Rebase => "Rebase",
+    }
+}
+
+fn merge_row(
+    detail: &reviewdesk_core::PullRequestDetail,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    if !enabled {
+        return read_only_text("Not supported".into());
+    }
+    match detail.state {
+        PullRequestState::Merged => return read_only_text("Merged".into()),
+        PullRequestState::Closed => return read_only_text("Closed".into()),
+        PullRequestState::Open => {}
+    }
+    if detail.is_draft {
+        return read_only_text("Draft — mark ready to merge".into());
+    }
+    if detail.mergeable != MergeableState::Mergeable {
+        return read_only_text(format!(
+            "Not mergeable ({})",
+            mergeable_label(detail.mergeable)
+        ));
+    }
+    let can_merge = merge_can_attempt(detail) && !pending;
+    h_flex()
+        .gap_1()
+        .flex_wrap()
+        .children(
+            [MergeMethod::Squash, MergeMethod::Merge, MergeMethod::Rebase].map(|method| {
+                Button::new(format!("metadata-merge-{method:?}"))
+                    .ghost()
+                    .xsmall()
+                    .disabled(!can_merge)
+                    .label(merge_method_label(method))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch(Intent::MetadataWrite(MetadataWrite::Merge(method)), cx);
+                    }))
+                    .into_any_element()
+            }),
+        )
+        .into_any_element()
+}
+
+fn auto_merge_row(
+    detail: &reviewdesk_core::PullRequestDetail,
+    enabled: bool,
+    pending: bool,
+    cx: &mut Context<ReviewDesk>,
+) -> gpui_kit::AnyElement {
+    if !enabled {
+        return read_only_text("Not enabled for this repository".into());
+    }
+    if detail.state != PullRequestState::Open {
+        return read_only_text("Unavailable for closed pull requests".into());
+    }
+    if detail.auto_merge_enabled {
+        return h_flex()
+            .gap_2()
+            .items_center()
+            .child(div().text_sm().child("On"))
+            .child(
+                Button::new("metadata-disable-auto-merge")
+                    .ghost()
+                    .xsmall()
+                    .disabled(pending)
+                    .label("Disable")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(
+                            Intent::MetadataWrite(MetadataWrite::SetAutoMerge {
+                                enabled: false,
+                                method: MergeMethod::Squash,
+                            }),
+                            cx,
+                        );
+                    })),
+            )
+            .into_any_element();
+    }
+    h_flex()
+        .gap_1()
+        .flex_wrap()
+        .child(div().text_sm().child("Off"))
+        .children(
+            [MergeMethod::Squash, MergeMethod::Merge, MergeMethod::Rebase].map(|method| {
+                Button::new(format!("metadata-enable-auto-merge-{method:?}"))
+                    .ghost()
+                    .xsmall()
+                    .disabled(pending)
+                    .label(format!("Enable ({})", merge_method_label(method)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.dispatch(
+                            Intent::MetadataWrite(MetadataWrite::SetAutoMerge {
+                                enabled: true,
+                                method,
+                            }),
+                            cx,
+                        );
+                    }))
+                    .into_any_element()
+            }),
+        )
+        .into_any_element()
+}
+
 fn status_controls(
     is_draft: bool,
     enabled: bool,
@@ -252,7 +380,10 @@ fn status_controls(
                     "Convert to draft"
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.dispatch(Intent::MetadataWrite(MetadataWrite::SetDraft(target_draft)), cx);
+                    this.dispatch(
+                        Intent::MetadataWrite(MetadataWrite::SetDraft(target_draft)),
+                        cx,
+                    );
                 })),
         )
         .into_any_element()
@@ -453,11 +584,7 @@ pub(crate) fn render_metadata_strip(
 ) -> impl IntoElement {
     let (status, review_gate, mergeable) = match &view.detail {
         LoadState::Ready(detail) => (
-            if detail.is_draft {
-                "Draft"
-            } else {
-                "Ready"
-            },
+            if detail.is_draft { "Draft" } else { "Ready" },
             review_decision_label(detail.review_decision),
             mergeable_label(detail.mergeable),
         ),

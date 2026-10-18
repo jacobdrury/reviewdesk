@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::error::ProviderError;
 use crate::id::PullRequestId;
+use crate::metadata::MergeMethod;
 use crate::notification::{NotificationListOptions, NotificationPage, NotificationThreadId};
 use crate::patch::Patch;
 use crate::pipelines::{PipelinesSnapshot, RerunTarget};
@@ -151,4 +152,23 @@ pub trait Provider: Send + Sync {
         id: &PullRequestId,
         comment: TimelineConversationComment,
     ) -> Result<PullRequestThreads, ProviderError>;
+
+    async fn merge_pull_request(
+        &self,
+        id: &PullRequestId,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let _ = (id, method);
+        Err(ProviderError::other("merge not supported"))
+    }
+
+    async fn set_pull_request_auto_merge(
+        &self,
+        id: &PullRequestId,
+        enabled: bool,
+        method: MergeMethod,
+    ) -> Result<(), ProviderError> {
+        let _ = (id, enabled, method);
+        Err(ProviderError::other("auto-merge not supported"))
+    }
 }

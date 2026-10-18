@@ -8,8 +8,17 @@ use reviewdesk_localstore::TursoLocalStore;
 use tempfile::tempdir;
 
 fn sample_detail() -> PullRequestDetail {
-    let (assignees, head_ref, base_ref, review_decision, mergeable, codeowners_rules, write_capabilities) =
-        empty_metadata_fields();
+    let (
+        assignees,
+        head_ref,
+        base_ref,
+        review_decision,
+        mergeable,
+        state,
+        auto_merge_enabled,
+        codeowners_rules,
+        write_capabilities,
+    ) = empty_metadata_fields();
     PullRequestDetail {
         id: PullRequestId::new("octo/repo#42").expect("id"),
         title: "Fix the thing".into(),
@@ -37,6 +46,8 @@ fn sample_detail() -> PullRequestDetail {
         base_ref,
         review_decision,
         mergeable,
+        state,
+        auto_merge_enabled,
         codeowners_rules,
         write_capabilities,
     }
@@ -50,7 +61,7 @@ async fn open_on_temp_path_migrates_and_reports_schema_version() {
     let store = TursoLocalStore::open(&path).await.expect("open");
     let version = store.schema_version().await.expect("schema_version");
 
-    assert_eq!(version, 9);
+    assert_eq!(version, 10);
 }
 
 #[tokio::test]
@@ -60,11 +71,11 @@ async fn store_survives_close_and_reopen() {
 
     {
         let store = TursoLocalStore::open(&path).await.expect("open");
-        assert_eq!(store.schema_version().await.expect("version"), 9);
+        assert_eq!(store.schema_version().await.expect("version"), 10);
     }
 
     let store = TursoLocalStore::open(&path).await.expect("reopen");
-    assert_eq!(store.schema_version().await.expect("version"), 9);
+    assert_eq!(store.schema_version().await.expect("version"), 10);
 }
 
 #[tokio::test]
@@ -75,8 +86,8 @@ async fn migrate_is_idempotent_when_opening_twice() {
     let first = TursoLocalStore::open(&path).await.expect("first open");
     let second = TursoLocalStore::open(&path).await.expect("second open");
 
-    assert_eq!(first.schema_version().await.expect("v1"), 9);
-    assert_eq!(second.schema_version().await.expect("v2"), 9);
+    assert_eq!(first.schema_version().await.expect("v1"), 10);
+    assert_eq!(second.schema_version().await.expect("v2"), 10);
 }
 
 #[tokio::test]

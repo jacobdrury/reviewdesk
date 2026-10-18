@@ -24,7 +24,8 @@ pub use error::ProviderError;
 pub use id::PullRequestId;
 pub use local_store::{LocalStore, LocalStoreError};
 pub use metadata::{
-    Assignee, CodeownersRule, MergeableState, MetadataWriteCapabilities, ReviewDecision,
+    Assignee, CodeownersRule, MergeMethod, MergeableState, MetadataWriteCapabilities,
+    PullRequestState, ReviewDecision,
 };
 pub use notification::{
     NotificationListOptions, NotificationPage, NotificationQuery, NotificationReason,
@@ -36,7 +37,7 @@ pub use pipelines::{
     RerunAction, RerunTarget, aggregate_pipeline_state, compute_check_rollup,
 };
 pub use provider::Provider;
-pub use pull_request::{empty_metadata_fields, PullRequestDetail, Reviewer};
+pub use pull_request::{PullRequestDetail, Reviewer, empty_metadata_fields};
 pub use pull_request_list::{
     DraftFilter, PullRequestLabel, PullRequestListFilter, PullRequestListItem,
     PullRequestListOptions, PullRequestListQuery, PullRequestListSort, PullRequestListSortField,

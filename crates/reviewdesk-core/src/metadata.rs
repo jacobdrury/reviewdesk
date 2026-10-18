@@ -27,6 +27,23 @@ pub enum MergeableState {
     Unknown,
 }
 
+/// Provider pull request lifecycle (read-only in Metadata).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestState {
+    #[default]
+    Open,
+    Merged,
+    Closed,
+}
+
+/// Merge strategy for merge and auto-merge writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
 /// One CODEOWNERS rule with paths on this pull request that matched it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeownersRule {
@@ -43,4 +60,6 @@ pub struct MetadataWriteCapabilities {
     pub reviewers: bool,
     pub draft_ready: bool,
     pub base_ref: bool,
+    pub merge: bool,
+    pub auto_merge: bool,
 }

@@ -1881,8 +1881,17 @@ mod tests {
     }
 
     fn sample_detail(id: &str, body: &str) -> PullRequestDetail {
-        let (assignees, head_ref, base_ref, review_decision, mergeable, codeowners_rules, write_capabilities) =
-            reviewdesk_core::empty_metadata_fields();
+        let (
+            assignees,
+            head_ref,
+            base_ref,
+            review_decision,
+            mergeable,
+            state,
+            auto_merge_enabled,
+            codeowners_rules,
+            write_capabilities,
+        ) = reviewdesk_core::empty_metadata_fields();
         PullRequestDetail {
             id: pr_id(id),
             title: format!("Title {id}"),
@@ -1898,6 +1907,8 @@ mod tests {
             base_ref,
             review_decision,
             mergeable,
+            state,
+            auto_merge_enabled,
             codeowners_rules,
             write_capabilities,
         }

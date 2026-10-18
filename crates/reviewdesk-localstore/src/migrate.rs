@@ -161,6 +161,13 @@ create table pull_request_pipelines (
 );
 ",
     ),
+    (
+        10,
+        "
+alter table pull_request_details add column state text not null default 'open';
+alter table pull_request_details add column auto_merge_enabled integer not null default 0 check (auto_merge_enabled in (0, 1));
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
