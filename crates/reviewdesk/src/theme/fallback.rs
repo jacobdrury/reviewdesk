@@ -1,6 +1,6 @@
 use gpui_kit::component::ThemeConfig;
 
-use super::adapter::{adapt_zed_family, AdaptError};
+use super::adapter::{AdaptError, adapt_zed_family};
 
 /// Vendored Zed One theme family (`assets/themes/one/one.json`).
 pub const ONE_FAMILY_JSON: &str = include_str!("vendor/one.json");

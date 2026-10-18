@@ -2,18 +2,23 @@ mod app;
 mod auth;
 mod overview_body;
 mod patch_index;
+mod paths;
+mod sync;
 mod theme;
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::{component::TitleBar, px, size, AppContext as _, WindowBounds, WindowOptions};
+use gpui_kit::{AppContext as _, WindowBounds, WindowOptions, component::TitleBar, px, size};
 use reviewdesk_core::Provider;
 use reviewdesk_github::GitHubProvider;
+use reviewdesk_localstore::TursoLocalStore;
 use tokio::runtime::Runtime;
 
-use app::{appearance_from_system, ReviewDesk};
+use app::{ReviewDesk, appearance_from_system};
 use auth::resolve_credentials;
+use paths::{ensure_db_parent, local_store_db_path};
+use sync::AppLocalStore;
 use theme::{apply_sync_result, discover_macos};
 
 fn main() {
@@ -43,6 +48,29 @@ fn main() {
         }
     };
 
+    let db_path = match local_store_db_path() {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Failed to resolve local database path: {error}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(error) = ensure_db_parent(&db_path) {
+        eprintln!("Failed to create application data directory: {error}");
+        std::process::exit(1);
+    }
+
+    let store = match runtime.block_on(async { TursoLocalStore::open(&db_path).await }) {
+        Ok(store) => Arc::new(AppLocalStore::new(Arc::new(store))),
+        Err(error) => {
+            eprintln!(
+                "Failed to open local store at {}: {error}",
+                db_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
@@ -61,7 +89,7 @@ fn main() {
             };
 
             gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| ReviewDesk::new(provider, runtime, window, cx))
+                cx.new(|cx| ReviewDesk::new(provider, store.clone(), runtime, window, cx))
             })
             .expect("Failed to open Review Desk window");
 

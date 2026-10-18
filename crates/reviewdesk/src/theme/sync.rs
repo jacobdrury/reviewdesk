@@ -5,8 +5,8 @@ use gpui_kit::component::{Theme, ThemeConfig};
 use gpui_kit::{Anchor, App};
 use serde_json::Value;
 
-use super::adapter::{adapt_zed_family, AdaptError};
-use super::fallback::{fallback_one_dark, FALLBACK_THEME_NAME};
+use super::adapter::{AdaptError, adapt_zed_family};
+use super::fallback::{FALLBACK_THEME_NAME, fallback_one_dark};
 
 const DEFAULT_LIGHT_THEME: &str = "One Light";
 const DEFAULT_DARK_THEME: &str = "One Dark";
@@ -23,7 +23,9 @@ pub enum Appearance {
 pub enum ToastIntent {
     None,
     /// Named theme from settings could not be resolved.
-    MissingTheme { name: String },
+    MissingTheme {
+        name: String,
+    },
 }
 
 /// Injectable discovery materials (extension index → user → bundled).
@@ -140,10 +142,7 @@ pub fn resolve_active_theme_name(settings_text: &str, appearance: Appearance) ->
     }
 
     let obj = theme.as_object()?;
-    let mode = obj
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("system");
+    let mode = obj.get("mode").and_then(Value::as_str).unwrap_or("system");
     let use_dark = match mode {
         "light" => false,
         "dark" => true,
@@ -193,10 +192,7 @@ fn lookup_theme(name: &str, discovery: &DiscoveryInputs<'_>) -> Option<ThemeConf
     None
 }
 
-fn family_from_extension_index<'a>(
-    name: &str,
-    discovery: &DiscoveryInputs<'a>,
-) -> Option<&'a str> {
+fn family_from_extension_index<'a>(name: &str, discovery: &DiscoveryInputs<'a>) -> Option<&'a str> {
     let index_json = discovery.extension_index?;
     let value: Value = serde_json::from_str(index_json).ok()?;
     let entry = value.get("themes")?.get(name)?;
@@ -555,12 +551,7 @@ mod tests {
             assert_eq!(result.used_fallback, expect_fallback, "{label}");
             assert_eq!(result.toast, expect_toast, "{label}");
             assert_eq!(
-                result
-                    .config
-                    .colors
-                    .background
-                    .as_ref()
-                    .map(|c| c.as_ref()),
+                result.config.colors.background.as_ref().map(|c| c.as_ref()),
                 Some(expect_bg),
                 "{label}"
             );
@@ -598,8 +589,7 @@ mod tests {
             user_families: &[],
             bundled_families: &[ONE_FAMILY_JSON],
         };
-        let settings =
-            r#"{"theme":{"mode":"system","light":"One Light","dark":"One Dark"}}"#;
+        let settings = r#"{"theme":{"mode":"system","light":"One Light","dark":"One Dark"}}"#;
 
         let dark = sync_theme(inputs_with(settings, Appearance::Dark, discovery.clone()));
         assert!(!dark.used_fallback);

@@ -39,6 +39,10 @@ Two vertical scrollbars in one tab is intentional: each pane owns its vertical s
 
 Same shape as other single-pane lists: pinned “INBOX” header, then one `uniform_list` scroller below (bounded height under the header).
 
+## Local persistence and Inbox
+
+[LocalStore](../adr/0001-localstore-turso-local-first.md) makes Inbox and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Inbox row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Inbox reads from the store and refreshes when data changes.
+
 ## gpui-kit patterns
 
 ### TextView fit vs scrollable

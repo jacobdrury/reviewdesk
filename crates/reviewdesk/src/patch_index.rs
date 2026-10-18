@@ -1,7 +1,7 @@
 use std::ops::Range;
 
-use gpui_kit::component::diff::DiffFile;
 use gpui_kit::SharedString;
+use gpui_kit::component::diff::DiffFile;
 use reviewdesk_core::{Patch, ProviderError};
 
 /// Patch bytes plus per-file spans for lazy Diff materialization.
@@ -111,9 +111,7 @@ pub fn index_patch(patch: Patch) -> Result<PatchIndex, ProviderError> {
     }
 
     if entries.is_empty() {
-        return Err(ProviderError::other(
-            "expected a unified or Git diff",
-        ));
+        return Err(ProviderError::other("expected a unified or Git diff"));
     }
 
     Ok(PatchIndex { patch, entries })
@@ -159,19 +157,16 @@ fn split_git_paths(value: &str) -> Option<(String, String)> {
         return Some((old, new));
     }
     for (old_prefix, new_prefix) in GIT_PREFIXES {
-        if let Some((old, new)) = value
-            .match_indices(' ')
-            .find_map(|(ix, _)| {
-                let (left, right) = value.split_at(ix);
-                let right = right.strip_prefix(' ')?;
-                let path = left.strip_prefix(old_prefix)?;
-                if path.is_empty() {
-                    return None;
-                }
-                right.strip_prefix(new_prefix).filter(|p| *p == path)?;
-                Some((left.to_owned(), right.to_owned()))
-            })
-        {
+        if let Some((old, new)) = value.match_indices(' ').find_map(|(ix, _)| {
+            let (left, right) = value.split_at(ix);
+            let right = right.strip_prefix(' ')?;
+            let path = left.strip_prefix(old_prefix)?;
+            if path.is_empty() {
+                return None;
+            }
+            right.strip_prefix(new_prefix).filter(|p| *p == path)?;
+            Some((left.to_owned(), right.to_owned()))
+        }) {
             return Some((old, new));
         }
         if let Some(ix) = value.rfind(&format!(" {new_prefix}")) {

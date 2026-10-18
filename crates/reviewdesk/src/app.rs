@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar, WindowExt as _,
     button::{Button, ButtonVariants as _},
     diff::{Diff, DiffAnnotation, DiffFile, DiffLinePosition, DiffLineRange, DiffMode, DiffState},
     h_flex,
@@ -11,31 +13,35 @@ use gpui_kit::component::{
     scroll::Scrollbar,
     spinner::Spinner,
     tab::{Tab, TabBar},
-    text::{markdown_ast, MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView},
-    v_flex, ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, TitleBar,
-    WindowExt as _,
+    text::{MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView, markdown_ast},
+    v_flex,
 };
 use gpui_kit::{
-    div, percentage, px, uniform_list, App, AppContext as _, Context, ElementId, Entity,
-    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Subscription, Task, UniformListScrollHandle,
-    WeakEntity, Window, WindowAppearance,
+    App, AppContext as _, Context, ElementId, Entity, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Task, UniformListScrollHandle, WeakEntity, Window, WindowAppearance, div,
+    percentage, px, uniform_list,
 };
 use reviewdesk_core::{
-    InboxItem, InboxOptions, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    InboxItem, InboxOptions, InboxQuery, LocalStoreError, Patch, Provider, ProviderError,
+    PullRequestDetail, PullRequestId,
 };
 use tokio::runtime::Handle;
 
-use crate::overview_body::{
-    compose_overview_markdown, details_effective_open, open_details_ids, parse_body_segments,
-    parse_details_fence, BodySegment, DetailsBlock, DetailsFence,
-};
-use crate::patch_index::{index_patch, PatchIndex};
-use crate::theme::{
-    apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
-    Appearance, ToastIntent,
-};
 use crate::INBOX_REFRESH;
+use crate::overview_body::{
+    BodySegment, DetailsBlock, DetailsFence, compose_overview_markdown, details_effective_open,
+    open_details_ids, parse_body_segments, parse_details_fence,
+};
+use crate::patch_index::{PatchIndex, index_patch};
+use crate::sync::{
+    AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
+    refresh_pull_request_detail, sync_inbox_from_provider,
+};
+use crate::theme::{
+    Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
+    should_sync_on_activation,
+};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -68,6 +74,13 @@ struct Annotation {
     body: SharedString,
 }
 
+#[derive(Clone, Default)]
+struct InboxSyncState {
+    syncing: bool,
+    last_success: Option<DateTime<Utc>>,
+    error: Option<String>,
+}
+
 /// Cached Overview markdown for one PR + open disclosure set.
 ///
 /// Key does not include title/meta/body content. Always clear this field whenever
@@ -82,9 +95,11 @@ struct OverviewComposeCache {
 
 pub struct ReviewDesk {
     provider: Arc<dyn Provider>,
+    store: Arc<AppLocalStore>,
     _runtime: Arc<tokio::runtime::Runtime>,
     runtime: Handle,
     inbox: LoadState<Arc<[InboxItem]>>,
+    inbox_sync: InboxSyncState,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
@@ -101,7 +116,9 @@ pub struct ReviewDesk {
     details_open: HashMap<usize, bool>,
     overview_compose_cache: Option<OverviewComposeCache>,
     file_list_paths: Arc<[SharedString]>,
-    _inbox_task: Task<()>,
+    _inbox_reload_task: Task<()>,
+    _inbox_sync_task: Task<()>,
+    inbox_sync_generation: u64,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
     _refresh_timer: Task<()>,
@@ -109,9 +126,14 @@ pub struct ReviewDesk {
     skip_next_activation_sync: bool,
 }
 
+fn map_store_error(error: LocalStoreError) -> ProviderError {
+    ProviderError::other(error.to_string())
+}
+
 impl ReviewDesk {
     pub fn new(
         provider: Arc<dyn Provider>,
+        store: Arc<AppLocalStore>,
         runtime: Arc<tokio::runtime::Runtime>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -120,9 +142,11 @@ impl ReviewDesk {
         let diff = cx.new(|cx| DiffState::new([], cx).with_mode(DiffMode::Split));
         let mut this = Self {
             provider,
+            store,
             runtime: runtime.handle().clone(),
             _runtime: runtime,
-            inbox: LoadState::Idle,
+            inbox: LoadState::Loading,
+            inbox_sync: InboxSyncState::default(),
             selected_id: None,
             review_tab: ReviewTab::Overview,
             detail: LoadState::Idle,
@@ -139,7 +163,9 @@ impl ReviewDesk {
             details_open: HashMap::new(),
             overview_compose_cache: None,
             file_list_paths: Arc::from([]),
-            _inbox_task: Task::ready(()),
+            _inbox_reload_task: Task::ready(()),
+            _inbox_sync_task: Task::ready(()),
+            inbox_sync_generation: 0,
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
@@ -157,9 +183,101 @@ impl ReviewDesk {
             }
             this.sync_theme(window, cx);
         }));
-        this.refresh_inbox(cx);
+        this.reload_inbox_from_store(cx);
+        this.sync_inbox_from_provider(cx);
         this.start_inbox_timer(cx);
         this
+    }
+
+    fn sync_status_label(&self) -> SharedString {
+        if self.inbox_sync.syncing {
+            return "Syncing Inbox…".into();
+        }
+        if let Some(error) = &self.inbox_sync.error {
+            return format!("Sync failed: {error}").into();
+        }
+        if let Some(at) = self.inbox_sync.last_success {
+            return format!("Inbox synced {}", format_sync_time(at)).into();
+        }
+        "Inbox not synced yet".into()
+    }
+
+    fn reload_inbox_from_store(&mut self, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let previous = self.selected_id.clone();
+
+        self._inbox_reload_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move { store.query_inbox(&InboxQuery::default()).await })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(items) => {
+                        if let Some(selected) = &previous {
+                            if !items.iter().any(|item| &item.id == selected) {
+                                this.clear_selection(cx);
+                            }
+                        }
+                        this.inbox = LoadState::Ready(Arc::from(items));
+                    }
+                    Err(error) => {
+                        this.inbox = LoadState::Error(map_store_error(error));
+                    }
+                }
+                cx.notify();
+            });
+        });
+    }
+
+    fn sync_inbox_from_provider(&mut self, cx: &mut Context<Self>) {
+        self.inbox_sync_generation += 1;
+        let generation = self.inbox_sync_generation;
+        self.inbox_sync.syncing = true;
+        self.inbox_sync.error = None;
+        cx.notify();
+
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let options = InboxOptions::default();
+
+        self._inbox_sync_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    sync_inbox_from_provider(provider.as_ref(), &store, &options).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                if this.inbox_sync_generation != generation {
+                    return;
+                }
+                this.inbox_sync.syncing = false;
+                match result {
+                    Ok(()) => {
+                        this.inbox_sync.last_success = Some(Utc::now());
+                        this.inbox_sync.error = None;
+                    }
+                    Err(error) => {
+                        this.inbox_sync.error = Some(error.to_string());
+                    }
+                }
+                this.reload_inbox_from_store(cx);
+                cx.notify();
+            });
+        });
+    }
+
+    fn inbox_placeholder_message(&self) -> &'static str {
+        if self.inbox_sync.syncing {
+            "Syncing pull requests…"
+        } else {
+            "No pull requests waiting for your review."
+        }
     }
 
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -173,51 +291,23 @@ impl ReviewDesk {
     }
 
     fn start_inbox_timer(&mut self, cx: &mut Context<Self>) {
-        self._refresh_timer = cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(INBOX_REFRESH).await;
-            if this
-                .update(cx, |this, cx| {
-                    this.refresh_inbox(cx);
-                })
-                .is_err()
-            {
-                break;
+        self._refresh_timer = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(INBOX_REFRESH).await;
+                if this
+                    .update(cx, |this, cx| {
+                        this.refresh_inbox(cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
             }
         });
     }
 
     fn refresh_inbox(&mut self, cx: &mut Context<Self>) {
-        self.inbox = LoadState::Loading;
-        cx.notify();
-
-        let provider = self.provider.clone();
-        let runtime = self.runtime.clone();
-        let options = InboxOptions::default();
-        let previous = self.selected_id.clone();
-
-        self._inbox_task = cx.spawn(async move |this, cx| {
-            let result = runtime
-                .spawn(async move { provider.list_inbox(&options).await })
-                .await
-                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
-
-            let _ = this.update(cx, |this, cx| {
-                match result {
-                    Ok(items) => {
-                        if let Some(selected) = &previous {
-                            if !items.iter().any(|item| &item.id == selected) {
-                                this.clear_selection(cx);
-                            }
-                        }
-                        this.inbox = LoadState::Ready(Arc::from(items));
-                    }
-                    Err(error) => {
-                        this.inbox = LoadState::Error(error);
-                    }
-                }
-                cx.notify();
-            });
-        });
+        self.sync_inbox_from_provider(cx);
     }
 
     fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -240,8 +330,8 @@ impl ReviewDesk {
         }
         self.selected_id = Some(id.clone());
         self.review_tab = ReviewTab::Overview;
-        self.detail = LoadState::Loading;
-        self.patch_index = LoadState::Loading;
+        self.detail = LoadState::Idle;
+        self.patch_index = LoadState::Idle;
         self.file_cache.clear();
         self.file_errors.clear();
         self.selected_file = None;
@@ -338,17 +428,67 @@ impl ReviewDesk {
 
     fn load_detail(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
+        let store = self.store.clone();
         let runtime = self.runtime.clone();
         let request_id = id.clone();
+
         self._detail_task = cx.spawn(async move |this, cx| {
             let fetch_id = request_id.clone();
+            let cache_id = fetch_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_pull_request_detail(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            let had_cache = matches!(&cached, Ok(Some(_)));
+
+            if let Ok(Some(detail)) = cached {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.details_open.clear();
+                    this.overview_compose_cache = None;
+                    this.overview_segments = parse_body_segments(&detail.body);
+                    this.detail = LoadState::Ready(detail);
+                    cx.notify();
+                });
+            } else {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.detail = LoadState::Loading;
+                    cx.notify();
+                });
+            }
+
             let result = runtime
-                .spawn(async move { provider.fetch_pull_request(&fetch_id).await })
+                .spawn(async move {
+                    if had_cache {
+                        refresh_pull_request_detail(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_detail_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
+                })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
             let _ = this.update(cx, |this, cx| {
                 if this.selected_id.as_ref() != Some(&request_id) {
+                    return;
+                }
+                if had_cache {
+                    if let Ok(detail) = result {
+                        this.details_open.clear();
+                        this.overview_compose_cache = None;
+                        this.overview_segments = parse_body_segments(&detail.body);
+                        this.detail = LoadState::Ready(detail);
+                        cx.notify();
+                    }
                     return;
                 }
                 this.details_open.clear();
@@ -370,12 +510,49 @@ impl ReviewDesk {
 
     fn load_patch(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
+        let store = self.store.clone();
         let runtime = self.runtime.clone();
         let request_id = id.clone();
+
         self._patch_task = cx.spawn(async move |this, cx| {
             let fetch_id = request_id.clone();
+            let cache_id = fetch_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_patch(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+
+            let had_cache = matches!(&cached, Ok(Some(_)));
+
+            if let Ok(Some(patch)) = cached {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.patch_index = apply_indexed_patch(this, patch, cx);
+                    cx.notify();
+                });
+            } else {
+                let _ = this.update(cx, |this, cx| {
+                    if this.selected_id.as_ref() != Some(&request_id) {
+                        return;
+                    }
+                    this.patch_index = LoadState::Loading;
+                    cx.notify();
+                });
+            }
+
             let result = runtime
-                .spawn(async move { provider.fetch_patch(&fetch_id).await })
+                .spawn(async move {
+                    if had_cache {
+                        refresh_patch(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_patch_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
+                })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
@@ -383,25 +560,17 @@ impl ReviewDesk {
                 if this.selected_id.as_ref() != Some(&request_id) {
                     return;
                 }
+                if had_cache {
+                    if let Ok(patch) = result {
+                        this.file_cache.clear();
+                        this.file_errors.clear();
+                        this.patch_index = apply_indexed_patch(this, patch, cx);
+                        cx.notify();
+                    }
+                    return;
+                }
                 this.patch_index = match result {
-                    Ok(patch) => match index_patch(patch) {
-                        Ok(index) => {
-                            this.file_list_paths = index
-                                .paths()
-                                .cloned()
-                                .collect::<Vec<_>>()
-                                .into();
-                            if let Some(path) = index.first_path() {
-                                this.selected_file = Some(path.clone());
-                                this.materialize_file(path, cx);
-                            }
-                            LoadState::Ready(index)
-                        }
-                        Err(error) => {
-                            this.file_list_paths = Arc::from([]);
-                            LoadState::Error(error)
-                        }
-                    },
+                    Ok(patch) => apply_indexed_patch(this, patch, cx),
                     Err(error) => {
                         this.file_list_paths = Arc::from([]);
                         LoadState::Error(error)
@@ -542,6 +711,20 @@ impl ReviewDesk {
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_inbox(cx))),
                     ),
             )
+            .child(
+                div()
+                    .px_3()
+                    .py(px(2.))
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(self.sync_status_label()),
+                    ),
+            )
             .child(match &self.inbox {
                 LoadState::Idle | LoadState::Loading => v_flex()
                     .flex_1()
@@ -595,7 +778,7 @@ impl ReviewDesk {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .text_center()
-                            .child("No pull requests waiting for your review."),
+                            .child(self.inbox_placeholder_message()),
                     )
                     .into_any_element(),
                 LoadState::Ready(items) => {
@@ -699,15 +882,10 @@ impl ReviewDesk {
                     .child(Tab::new().label("Overview"))
                     .child(Tab::new().label("Files")),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .child(match self.review_tab {
-                        ReviewTab::Overview => self.render_overview(cx).into_any_element(),
-                        ReviewTab::Files => self.render_files(cx).into_any_element(),
-                    }),
-            )
+            .child(div().flex_1().min_h_0().child(match self.review_tab {
+                ReviewTab::Overview => self.render_overview(cx).into_any_element(),
+                ReviewTab::Files => self.render_files(cx).into_any_element(),
+            }))
             .into_any_element()
     }
 
@@ -715,17 +893,13 @@ impl ReviewDesk {
         let entity = cx.entity().downgrade();
         if let Some(markdown) = self.overview_markdown_cache_hit() {
             let owner = cx.entity().downgrade();
-            return div()
-                .size_full()
-                .min_h_0()
-                .p_4()
-                .child(
-                    TextView::markdown("pr-overview", markdown)
-                        .scrollable(true)
-                        .text_sm()
-                        .size_full()
-                        .plugin(DetailsTogglePlugin { owner }),
-                );
+            return div().size_full().min_h_0().p_4().child(
+                TextView::markdown("pr-overview", markdown)
+                    .scrollable(true)
+                    .text_sm()
+                    .size_full()
+                    .plugin(DetailsTogglePlugin { owner }),
+            );
         }
         match &self.detail {
             LoadState::Idle | LoadState::Loading => v_flex()
@@ -778,17 +952,13 @@ impl ReviewDesk {
                 let detail = detail.clone();
                 let markdown = self.cached_overview_markdown(&detail);
                 let owner = cx.entity().downgrade();
-                div()
-                    .size_full()
-                    .min_h_0()
-                    .p_4()
-                    .child(
-                        TextView::markdown("pr-overview", markdown)
-                            .scrollable(true)
-                            .text_sm()
-                            .size_full()
-                            .plugin(DetailsTogglePlugin { owner }),
-                    )
+                div().size_full().min_h_0().p_4().child(
+                    TextView::markdown("pr-overview", markdown)
+                        .scrollable(true)
+                        .text_sm()
+                        .size_full()
+                        .plugin(DetailsTogglePlugin { owner }),
+                )
             }
         }
     }
@@ -981,12 +1151,8 @@ impl ReviewDesk {
                     .child({
                         let retry_path = selected_file.clone();
                         resizable_panel().child(
-                            v_flex()
-                                .size_full()
-                                .min_h_0()
-                                .min_w_0()
-                                .p_2()
-                                .children(match selected_file_error {
+                            v_flex().size_full().min_h_0().min_w_0().p_2().children(
+                                match selected_file_error {
                                     Some(error) => {
                                         let path = retry_path.clone();
                                         vec![
@@ -1012,45 +1178,49 @@ impl ReviewDesk {
                                                             let Some(path) = path.clone() else {
                                                                 return;
                                                             };
-                                                            let _ = entity.update(cx, |this, cx| {
-                                                                this.retry_file(path, cx);
-                                                            });
+                                                            let _ =
+                                                                entity.update(cx, |this, cx| {
+                                                                    this.retry_file(path, cx);
+                                                                });
                                                         }),
                                                 )
                                                 .into_any_element(),
                                         ]
                                     }
-                                    None => vec![Diff::new(&self.diff)
-                                        .size_full()
-                                        .soft_wrap(true)
-                                        .annotations(annotations)
-                                        .render_annotation(move |annotation, _, cx| {
-                                            let body = comments
-                                                .iter()
-                                                .find(|(id, _)| id == annotation.id())
-                                                .map(|(_, body)| body.clone())
-                                                .unwrap_or_default();
-                                            v_flex()
-                                                .w_full()
-                                                .gap_1()
-                                                .p_2()
-                                                .rounded_md()
-                                                .bg(cx.theme().secondary)
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child("Annotation"),
-                                                )
-                                                .child(div().text_sm().child(body))
-                                        })
-                                        .on_add_annotation(move |range, _, _cx| {
-                                            let _ = add_entity.update(_cx, |this, cx| {
-                                                this.add_annotation(range, cx);
-                                            });
-                                        })
-                                        .into_any_element()],
-                                }),
+                                    None => vec![
+                                        Diff::new(&self.diff)
+                                            .size_full()
+                                            .soft_wrap(true)
+                                            .annotations(annotations)
+                                            .render_annotation(move |annotation, _, cx| {
+                                                let body = comments
+                                                    .iter()
+                                                    .find(|(id, _)| id == annotation.id())
+                                                    .map(|(_, body)| body.clone())
+                                                    .unwrap_or_default();
+                                                v_flex()
+                                                    .w_full()
+                                                    .gap_1()
+                                                    .p_2()
+                                                    .rounded_md()
+                                                    .bg(cx.theme().secondary)
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child("Annotation"),
+                                                    )
+                                                    .child(div().text_sm().child(body))
+                                            })
+                                            .on_add_annotation(move |range, _, _cx| {
+                                                let _ = add_entity.update(_cx, |this, cx| {
+                                                    this.add_annotation(range, cx);
+                                                });
+                                            })
+                                            .into_any_element(),
+                                    ],
+                                },
+                            ),
                         )
                     }),
             )
@@ -1071,15 +1241,15 @@ impl MarkdownPlugin for DetailsTogglePlugin {
         "reviewdesk-details"
     }
 
-    fn parse(&self, node: &markdown_ast::Node, _: &MarkdownParseContext<'_>) -> Option<MarkdownNode> {
+    fn parse(
+        &self,
+        node: &markdown_ast::Node,
+        _: &MarkdownParseContext<'_>,
+    ) -> Option<MarkdownNode> {
         let markdown_ast::Node::Code(code) = node else {
             return None;
         };
-        let fence = parse_details_fence(
-            code.lang.as_deref(),
-            code.meta.as_deref(),
-            &code.value,
-        )?;
+        let fence = parse_details_fence(code.lang.as_deref(), code.meta.as_deref(), &code.value)?;
         Some(
             MarkdownNode::new("reviewdesk-details", fence.clone())
                 .text(fence.summary.clone())
@@ -1126,16 +1296,50 @@ impl MarkdownPlugin for DetailsTogglePlugin {
     }
 }
 
+fn apply_indexed_patch(
+    this: &mut ReviewDesk,
+    patch: Patch,
+    cx: &mut Context<ReviewDesk>,
+) -> LoadState<PatchIndex> {
+    match index_patch(patch) {
+        Ok(index) => {
+            this.file_list_paths = index.paths().cloned().collect::<Vec<_>>().into();
+            if let Some(path) = index.first_path() {
+                this.selected_file = Some(path.clone());
+                this.materialize_file(path, cx);
+            }
+            LoadState::Ready(index)
+        }
+        Err(error) => {
+            this.file_list_paths = Arc::from([]);
+            LoadState::Error(error)
+        }
+    }
+}
+
+fn format_sync_time(at: DateTime<Utc>) -> String {
+    at.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
 impl Render for ReviewDesk {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .child(
                 TitleBar::new().child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .child("Review Desk"),
+                    h_flex()
+                        .w_full()
+                        .justify_between()
+                        .items_center()
+                        .pr_2()
+                        .child(div().text_sm().font_medium().child("Review Desk"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .truncate()
+                                .child(self.sync_status_label()),
+                        ),
                 ),
             )
             .child(

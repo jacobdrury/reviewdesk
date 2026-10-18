@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::error_map::from_status;
 use crate::id::parse_pull_request_id;
 use crate::map::{
-    map_inbox_item, map_pull_request_detail, GraphQlResponse, PullRequestData, SearchData,
+    GraphQlResponse, PullRequestData, SearchData, map_inbox_item, map_pull_request_detail,
 };
 use crate::query::inbox_search_query;
 

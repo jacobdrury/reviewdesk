@@ -76,8 +76,7 @@ fn adapt_zed_theme_value(theme: &Value) -> Result<ThemeConfig, AdaptError> {
         "highlight": highlight,
     });
 
-    serde_json::from_value(kit_theme)
-        .map_err(|error| AdaptError::InvalidTheme(error.to_string()))
+    serde_json::from_value(kit_theme).map_err(|error| AdaptError::InvalidTheme(error.to_string()))
 }
 
 fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
@@ -104,7 +103,12 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
         &mut colors,
         "status_bar.background",
     );
-    copy_string(style, "tab_bar.background", &mut colors, "tab_bar.background");
+    copy_string(
+        style,
+        "tab_bar.background",
+        &mut colors,
+        "tab_bar.background",
+    );
     copy_string(
         style,
         "title_bar.background",
@@ -114,14 +118,7 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
 
     // Partial chrome.
     copy_string(style, "text", &mut colors, "foreground");
-    if let Some(muted) = first_string(
-        style,
-        &[
-            "text.muted",
-            "text.disabled",
-            "text.placeholder",
-        ],
-    ) {
+    if let Some(muted) = first_string(style, &["text.muted", "text.disabled", "text.placeholder"]) {
         colors.insert("muted.foreground".into(), Value::String(muted));
     }
     copy_string(style, "text.accent", &mut colors, "accent.foreground");
@@ -157,16 +154,14 @@ fn map_chrome_colors(style: &Map<String, Value>) -> Map<String, Value> {
     // opaque near-panel `element.selected` washes become invisible; prefer a
     // translucent selected fill, else accent (chromatic), else selected.
     if let Some(active) = list_active_color(style) {
-        colors.insert("list.active.background".into(), Value::String(active.clone()));
+        colors.insert(
+            "list.active.background".into(),
+            Value::String(active.clone()),
+        );
         // ListItem falls back to accent when list.active_highlight is off.
         insert_if_absent(&mut colors, "accent.background", &active);
     }
-    copy_string(
-        style,
-        "element.hover",
-        &mut colors,
-        "list.hover.background",
-    );
+    copy_string(style, "element.hover", &mut colors, "list.hover.background");
 
     // Status dual-write into chrome info/success/warning/danger.
     // Diff hunks tint with `theme.success|danger.opacity(0.12)`, so write solid
@@ -193,7 +188,10 @@ fn map_highlight(style: &Map<String, Value>) -> Map<String, Value> {
     for (zed_key, kit_key) in [
         ("editor.background", "editor.background"),
         ("editor.foreground", "editor.foreground"),
-        ("editor.active_line.background", "editor.active_line.background"),
+        (
+            "editor.active_line.background",
+            "editor.active_line.background",
+        ),
         ("editor.line_number", "editor.line_number"),
         ("editor.active_line_number", "editor.active_line_number"),
         ("editor.invisible", "editor.invisible"),
@@ -276,12 +274,7 @@ fn map_syntax(syntax: &Map<String, Value>) -> Map<String, Value> {
     out
 }
 
-fn copy_string(
-    style: &Map<String, Value>,
-    from: &str,
-    into: &mut Map<String, Value>,
-    to: &str,
-) {
+fn copy_string(style: &Map<String, Value>, from: &str, into: &mut Map<String, Value>, to: &str) {
     if let Some(value) = style.get(from).and_then(Value::as_str) {
         into.insert(to.into(), Value::String(value.to_string()));
     }
@@ -351,11 +344,14 @@ pub(crate) fn raw_zed_loads_as_kit_theme_set(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::fallback::{fallback_one_dark, ONE_FAMILY_JSON, FALLBACK_THEME_NAME};
+    use crate::theme::fallback::{FALLBACK_THEME_NAME, ONE_FAMILY_JSON, fallback_one_dark};
     use gpui_kit::component::ThemeMode;
     use serde_json::json;
 
-    fn color(colors: &gpui_kit::component::ThemeConfigColors, get: impl FnOnce(&gpui_kit::component::ThemeConfigColors) -> &Option<gpui_kit::SharedString>) -> Option<String> {
+    fn color(
+        colors: &gpui_kit::component::ThemeConfigColors,
+        get: impl FnOnce(&gpui_kit::component::ThemeConfigColors) -> &Option<gpui_kit::SharedString>,
+    ) -> Option<String> {
         get(colors).as_ref().map(|value| value.to_string())
     }
 
@@ -370,7 +366,11 @@ mod tests {
         assert_eq!(config.mode, ThemeMode::Dark);
 
         let cases = [
-            ("background", color(&config.colors, |c| &c.background), "#3b414dff"),
+            (
+                "background",
+                color(&config.colors, |c| &c.background),
+                "#3b414dff",
+            ),
             ("border", color(&config.colors, |c| &c.border), "#464b57ff"),
             (
                 "drop_target",
@@ -387,7 +387,11 @@ mod tests {
                 color(&config.colors, |c| &c.status_bar),
                 "#3b414dff",
             ),
-            ("tab_bar", color(&config.colors, |c| &c.tab_bar), "#2f343eff"),
+            (
+                "tab_bar",
+                color(&config.colors, |c| &c.tab_bar),
+                "#2f343eff",
+            ),
             (
                 "title_bar",
                 color(&config.colors, |c| &c.title_bar),
@@ -403,7 +407,11 @@ mod tests {
     fn adapts_partial_chrome_and_status_dual_write() {
         let config = fallback_one_dark().unwrap();
         let cases = [
-            ("foreground", color(&config.colors, |c| &c.foreground), "#dce0e5ff"),
+            (
+                "foreground",
+                color(&config.colors, |c| &c.foreground),
+                "#dce0e5ff",
+            ),
             (
                 "muted_foreground",
                 color(&config.colors, |c| &c.muted_foreground),
@@ -414,9 +422,17 @@ mod tests {
                 color(&config.colors, |c| &c.accent_foreground),
                 "#74ade8ff",
             ),
-            ("sidebar", color(&config.colors, |c| &c.sidebar), "#2f343eff"),
+            (
+                "sidebar",
+                color(&config.colors, |c| &c.sidebar),
+                "#2f343eff",
+            ),
             ("list", color(&config.colors, |c| &c.list), "#2f343eff"),
-            ("popover", color(&config.colors, |c| &c.popover), "#2f343eff"),
+            (
+                "popover",
+                color(&config.colors, |c| &c.popover),
+                "#2f343eff",
+            ),
             (
                 "secondary",
                 color(&config.colors, |c| &c.secondary),
@@ -450,7 +466,11 @@ mod tests {
                 "#d07277ff",
             ),
             ("info", color(&config.colors, |c| &c.info), "#74ade8ff"),
-            ("warning", color(&config.colors, |c| &c.warning), "#dec184ff"),
+            (
+                "warning",
+                color(&config.colors, |c| &c.warning),
+                "#dec184ff",
+            ),
         ];
         for (name, got, want) in cases {
             assert_eq!(got.as_deref(), Some(want), "{name}");
@@ -538,7 +558,10 @@ mod tests {
             }
         }"##;
         let config = adapt_zed_theme(theme).unwrap();
-        assert_eq!(color(&config.colors, |c| &c.background).as_deref(), Some("#111111ff"));
+        assert_eq!(
+            color(&config.colors, |c| &c.background).as_deref(),
+            Some("#111111ff")
+        );
         assert!(config.colors.border.is_none());
         assert!(config.colors.foreground.is_none());
         assert!(config.colors.success.is_none());
@@ -581,14 +604,18 @@ mod tests {
             comment.get("font_style").is_none_or(Value::is_null),
             "oblique must be dropped"
         );
-        assert_eq!(highlight["syntax"]["keyword"]["font_style"], json!("italic"));
+        assert_eq!(
+            highlight["syntax"]["keyword"]["font_style"],
+            json!("italic")
+        );
     }
 
     #[test]
     fn raw_zed_family_is_not_usable_kit_theme_set() {
         // Serde may accept the family wrapper, but without rewrite mode stays light
         // and highlight/chrome from Zed `style` are absent.
-        let raw = raw_zed_loads_as_kit_theme_set(ONE_FAMILY_JSON).expect("parses as ThemeSet shell");
+        let raw =
+            raw_zed_loads_as_kit_theme_set(ONE_FAMILY_JSON).expect("parses as ThemeSet shell");
         let one_dark = raw
             .themes
             .iter()
@@ -606,14 +633,9 @@ mod tests {
 
     #[test]
     fn appearance_maps_to_mode_table() {
-        let cases = [
-            ("dark", ThemeMode::Dark),
-            ("light", ThemeMode::Light),
-        ];
+        let cases = [("dark", ThemeMode::Dark), ("light", ThemeMode::Light)];
         for (appearance, mode) in cases {
-            let theme = format!(
-                r#"{{"name":"T","appearance":"{appearance}","style":{{}}}}"#
-            );
+            let theme = format!(r#"{{"name":"T","appearance":"{appearance}","style":{{}}}}"#);
             let config = adapt_zed_theme(&theme).unwrap();
             assert_eq!(config.mode, mode, "appearance={appearance}");
         }
