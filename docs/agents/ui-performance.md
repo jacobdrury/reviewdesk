@@ -8,6 +8,10 @@ Read this before choosing a scroll or disclosure layout. Coding-standards judgem
 
 Unbounded content must not lay out or paint the whole document on every scroll frame. Prefer one virtualized scroll surface for a pane. Tradeoffs that break that rule need engineer approval on the ticket or PR.
 
+## Local persistence and Inbox
+
+[LocalStore](../adr/0001-localstore-turso-local-first.md) makes Inbox and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Inbox row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Inbox reads from the store and refreshes when data changes.
+
 ## gpui-kit patterns
 
 ### TextView fit vs scrollable

@@ -1,5 +1,6 @@
 //! Turso-backed [`LocalStore`](reviewdesk_core::LocalStore) for Review Desk.
 
+mod detail_patch;
 mod error;
 mod inbox;
 mod migrate;

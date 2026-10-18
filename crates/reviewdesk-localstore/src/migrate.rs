@@ -19,6 +19,26 @@ CREATE TABLE IF NOT EXISTS reviewdesk_inbox_items (
     (
         2,
         "
+CREATE TABLE IF NOT EXISTS pull_request_details (
+    id TEXT NOT NULL PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    author_login TEXT NOT NULL,
+    author_avatar_url TEXT,
+    is_draft INTEGER NOT NULL,
+    labels_json TEXT NOT NULL,
+    web_url TEXT NOT NULL,
+    reviewers_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS patches (
+    pull_request_id TEXT NOT NULL PRIMARY KEY,
+    patch_text TEXT NOT NULL
+);
+",
+    ),
+    (
+        3,
+        "
 DROP TABLE IF EXISTS reviewdesk_inbox_item_labels;
 DROP TABLE IF EXISTS reviewdesk_inbox_items;
 CREATE TABLE reviewdesk_inbox_items (
@@ -58,7 +78,7 @@ pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
 }
 
 pub async fn run(conn: &Connection) -> Result<(), LocalStoreError> {
-    let mut applied = applied_version(conn).await?;
+    let applied = applied_version(conn).await?;
     let latest = MIGRATIONS.last().map(|(v, _)| *v).unwrap_or(0);
 
     if applied > latest {
@@ -67,13 +87,14 @@ pub async fn run(conn: &Connection) -> Result<(), LocalStoreError> {
         )));
     }
 
+    let mut current = applied;
     for &(version, sql) in MIGRATIONS {
-        if version <= applied {
+        if version <= current {
             continue;
         }
-        if version != applied + 1 {
+        if version != current + 1 {
             return Err(LocalStoreError::migration(format!(
-                "missing migration step after version {applied}"
+                "missing migration step after version {current}"
             )));
         }
 
@@ -84,7 +105,7 @@ pub async fn run(conn: &Connection) -> Result<(), LocalStoreError> {
         )
         .await
         .map_err(map_migration)?;
-        applied = version;
+        current = version;
     }
 
     Ok(())
