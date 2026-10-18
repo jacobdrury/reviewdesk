@@ -122,10 +122,7 @@ struct SideNavItemProps<'a> {
     entity: WeakEntity<ReviewDesk>,
 }
 
-fn side_nav_item(
-    props: SideNavItemProps<'_>,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
+fn side_nav_item(props: SideNavItemProps<'_>, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     let SideNavItemProps {
         id,
         icon,
@@ -159,7 +156,12 @@ fn side_nav_item(
                         this.dispatch(Intent::SetRepoScope { repo: None }, cx);
                     }
                     NavTarget::Repo(repo) => {
-                        this.dispatch(Intent::SetRepoScope { repo: Some(repo.clone()) }, cx);
+                        this.dispatch(
+                            Intent::SetRepoScope {
+                                repo: Some(repo.clone()),
+                            },
+                            cx,
+                        );
                     }
                 });
             }

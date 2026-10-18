@@ -311,6 +311,34 @@ mod tests {
         async fn set_scoped_repository(&self, _repo: Option<&str>) -> Result<(), LocalStoreError> {
             Ok(())
         }
+
+        async fn sync_notifications(
+            &self,
+            _threads: &[reviewdesk_core::NotificationThread],
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn query_notifications(
+            &self,
+            _query: &reviewdesk_core::NotificationQuery,
+        ) -> Result<Vec<reviewdesk_core::NotificationThread>, LocalStoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn set_notification_read(
+            &self,
+            _id: &reviewdesk_core::NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn remove_notification(
+            &self,
+            _id: &reviewdesk_core::NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
     }
 
     struct StubProvider {
@@ -339,6 +367,32 @@ mod tests {
             _id: &PullRequestId,
         ) -> Result<PullRequestDetail, ProviderError> {
             Err(ProviderError::other("not used"))
+        }
+
+        async fn list_notifications(
+            &self,
+            _options: &reviewdesk_core::NotificationListOptions,
+        ) -> Result<reviewdesk_core::NotificationPage, ProviderError> {
+            Ok(reviewdesk_core::NotificationPage {
+                threads: Vec::new(),
+                poll_interval: None,
+                last_modified: None,
+                not_modified: false,
+            })
+        }
+
+        async fn mark_notification_read(
+            &self,
+            _id: &reviewdesk_core::NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn mark_notification_done(
+            &self,
+            _id: &reviewdesk_core::NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            Ok(())
         }
     }
 
