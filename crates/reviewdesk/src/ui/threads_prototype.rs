@@ -22,10 +22,13 @@ pub(crate) fn render_conversation(
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
+    // Linear contrast: dimmer chrome canvas → lifted feed surface → thread cards one
+    // step above that. Nested replies stay borderless (indent + rail only).
     let threads = conversation_threads(hide_resolved);
     v_flex()
         .size_full()
         .min_h_0()
+        .bg(cx.theme().secondary.opacity(0.22))
         .child(render_conversation_header(hide_resolved, entity.clone(), cx))
         .child(
             v_flex()
@@ -276,7 +279,8 @@ fn render_linear_thread(
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().secondary.opacity(0.4))
+        // Surface-1 lift on the feed surface (Linear depth = surface ladder + hairline).
+        .bg(cx.theme().secondary.opacity(0.72))
         .when(resolved, |el| {
             el.child(
                 h_flex()
@@ -314,14 +318,23 @@ fn render_linear_thread(
             el.child(
                 v_flex()
                     .w_full()
-                    .pl(px(12.))
-                    .gap_2()
-                    .border_l_2()
+                    .pl(px(14.))
+                    .gap_3()
+                    .pt_1()
+                    .border_l_1()
                     .border_color(cx.theme().border)
-                    .ml(px(10.))
+                    .ml(px(11.))
                     .children(replies.iter().map(|comment| {
-                        render_reply_card(comment, thread, show_resolve_controls, entity.clone(), cx)
-                            .into_any_element()
+                        // Linear: nested replies share the parent surface — indent + rail only.
+                        render_comment_row(
+                            comment,
+                            thread,
+                            false,
+                            show_resolve_controls,
+                            entity.clone(),
+                            cx,
+                        )
+                        .into_any_element()
                     })),
             )
         })
@@ -329,10 +342,11 @@ fn render_linear_thread(
             el.child(
                 h_flex()
                     .w_full()
-                    .pl(px(12.))
-                    .ml(px(10.))
+                    .pl(px(14.))
+                    .ml(px(11.))
+                    .pt_1()
                     .gap_2()
-                    .border_l_2()
+                    .border_l_1()
                     .border_color(cx.theme().border)
                     .child(avatar_chip("you", cx))
                     .child(
@@ -347,7 +361,7 @@ fn render_linear_thread(
                                     .rounded_md()
                                     .border_1()
                                     .border_color(cx.theme().border)
-                                    .bg(cx.theme().background)
+                                    .bg(cx.theme().background.opacity(0.55))
                                     .child(
                                         div()
                                             .text_sm()
@@ -373,30 +387,6 @@ fn render_linear_thread(
                     ),
             )
         })
-}
-
-fn render_reply_card(
-    comment: &StubComment,
-    thread: &StubThread,
-    show_resolve_controls: bool,
-    entity: WeakEntity<ReviewDesk>,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    v_flex()
-        .w_full()
-        .p_2()
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().background)
-        .child(render_comment_row(
-            comment,
-            thread,
-            false,
-            show_resolve_controls,
-            entity,
-            cx,
-        ))
 }
 
 fn render_comment_row(
@@ -543,12 +533,13 @@ fn render_anchor_header(
 }
 
 fn render_code_context(lines: &'static [CodeLine], cx: &App) -> impl IntoElement {
+    // Inset surface inside the thread card (Linear: nested surfaces, not nested borders).
     v_flex()
         .w_full()
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().background)
+        .bg(cx.theme().background.opacity(0.65))
         .overflow_x_hidden()
         .children(lines.iter().map(|line| {
             let bg = if line.highlighted {

@@ -18,6 +18,10 @@
 //! - Inline comments on description → Diff-anchored Review comments / Suggestions
 //!   with the anchored code snippet shown in Conversation
 //!
+//! Visual contrast (Linear surface ladder): dimmer canvas → lifted Conversation
+//! feed → Thread cards one step above with hairline. Nested replies share the
+//! parent surface (indent + left rail only — no box-in-a-box).
+//!
 //! Domain from #54: Review comment / Thread / Suggestion / Pending review.
 //! Annotation is out of product language. Iterate in place — no A/B/C switcher.
 //!
