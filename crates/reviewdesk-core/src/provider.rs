@@ -29,14 +29,8 @@ pub trait Provider: Send + Sync {
     ) -> Result<NotificationPage, ProviderError>;
 
     /// Clears unread on a notification thread (Mark read).
-    async fn mark_notification_read(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), ProviderError>;
+    async fn mark_notification_read(&self, id: &NotificationThreadId) -> Result<(), ProviderError>;
 
     /// Removes a notification thread from the Inbox (Done).
-    async fn mark_notification_done(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), ProviderError>;
+    async fn mark_notification_done(&self, id: &NotificationThreadId) -> Result<(), ProviderError>;
 }

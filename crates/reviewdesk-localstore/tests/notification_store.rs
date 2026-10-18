@@ -109,7 +109,10 @@ async fn set_notification_read_removes_from_default_unread_list() {
         true,
         Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
     );
-    store.sync_notifications(&[row.clone()]).await.expect("sync");
+    store
+        .sync_notifications(&[row.clone()])
+        .await
+        .expect("sync");
 
     store
         .set_notification_read(&row.id)
@@ -141,7 +144,10 @@ async fn remove_notification_deletes_row() {
         true,
         Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
     );
-    store.sync_notifications(&[row.clone()]).await.expect("sync");
+    store
+        .sync_notifications(&[row.clone()])
+        .await
+        .expect("sync");
 
     store.remove_notification(&row.id).await.expect("remove");
 

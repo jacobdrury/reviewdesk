@@ -2,8 +2,8 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use reviewdesk_core::{
-    LocalStore, LocalStoreError, NotificationQuery, NotificationThread, NotificationThreadId, Patch,
-    PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListQuery,
+    LocalStore, LocalStoreError, NotificationQuery, NotificationThread, NotificationThreadId,
+    Patch, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListQuery,
 };
 use turso::{Builder, Connection, Database};
 
@@ -103,10 +103,7 @@ impl LocalStore for TursoLocalStore {
         crate::notification::set_notification_read(&self.conn, id).await
     }
 
-    async fn remove_notification(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), LocalStoreError> {
+    async fn remove_notification(&self, id: &NotificationThreadId) -> Result<(), LocalStoreError> {
         crate::notification::remove_notification(&self.conn, id).await
     }
 }

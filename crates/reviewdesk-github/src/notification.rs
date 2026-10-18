@@ -122,7 +122,10 @@ mod tests {
     fn maps_pull_request_subject_on_allowlist() {
         let payloads: Vec<NotificationThreadPayload> =
             serde_json::from_str(NOTIFICATIONS_FIXTURE).unwrap();
-        let mapped: Vec<_> = payloads.iter().filter_map(map_notification_thread).collect();
+        let mapped: Vec<_> = payloads
+            .iter()
+            .filter_map(map_notification_thread)
+            .collect();
 
         assert_eq!(mapped.len(), 1);
         let thread = &mapped[0];
@@ -138,27 +141,31 @@ mod tests {
     fn drops_non_allowlisted_reason() {
         let payloads: Vec<NotificationThreadPayload> =
             serde_json::from_str(NOTIFICATIONS_FIXTURE).unwrap();
-        assert!(!payloads.iter().filter_map(map_notification_thread).any(
-            |thread| thread.id.as_str() == "1002"
-        ));
+        assert!(
+            !payloads
+                .iter()
+                .filter_map(map_notification_thread)
+                .any(|thread| thread.id.as_str() == "1002")
+        );
     }
 
     #[test]
     fn drops_non_pull_request_subject() {
         let payloads: Vec<NotificationThreadPayload> =
             serde_json::from_str(NOTIFICATIONS_FIXTURE).unwrap();
-        assert!(!payloads.iter().filter_map(map_notification_thread).any(
-            |thread| thread.id.as_str() == "1003"
-        ));
+        assert!(
+            !payloads
+                .iter()
+                .filter_map(map_notification_thread)
+                .any(|thread| thread.id.as_str() == "1003")
+        );
     }
 
     #[test]
     fn subject_url_without_pulls_is_rejected() {
         assert!(
-            pull_request_id_from_subject_url(
-                "https://api.github.com/repos/acme/widgets/issues/14"
-            )
-            .is_none()
+            pull_request_id_from_subject_url("https://api.github.com/repos/acme/widgets/issues/14")
+                .is_none()
         );
     }
 }

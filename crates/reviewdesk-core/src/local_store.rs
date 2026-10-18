@@ -90,14 +90,9 @@ pub trait LocalStore: Send + Sync {
     ) -> Result<Vec<NotificationThread>, LocalStoreError>;
 
     /// Clears the unread flag on a notification thread after Provider write-through.
-    async fn set_notification_read(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), LocalStoreError>;
+    async fn set_notification_read(&self, id: &NotificationThreadId)
+    -> Result<(), LocalStoreError>;
 
     /// Removes a notification thread after a Done Provider write-through.
-    async fn remove_notification(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), LocalStoreError>;
+    async fn remove_notification(&self, id: &NotificationThreadId) -> Result<(), LocalStoreError>;
 }

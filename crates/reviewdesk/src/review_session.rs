@@ -19,6 +19,10 @@ use reviewdesk_core::{
 /// Fallback Inbox poll cadence when the Provider sends no `X-Poll-Interval`.
 pub const DEFAULT_INBOX_POLL: Duration = Duration::from_secs(60);
 
+/// Operator copy when Inbox sync hits classic PAT / scope failures.
+pub const INBOX_AUTH_FIX_COPY: &str =
+    "Inbox needs a classic PAT with `notifications` or `repo`. See docs/auth-github.md.";
+
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
     details_effective_open, open_details_ids, parse_body_segments,
@@ -154,6 +158,32 @@ pub struct PullRequestsSyncView {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InboxSyncView {
+    pub syncing: bool,
+    pub last_success: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+impl InboxSyncView {
+    pub fn status_label(&self) -> String {
+        if self.syncing {
+            return "Syncing inbox…".into();
+        }
+        if let Some(error) = &self.error {
+            return format!("Inbox sync failed: {error}");
+        }
+        if let Some(at) = self.last_success {
+            return format!("Inbox synced {}", format_sync_time(at));
+        }
+        "Inbox not synced yet".into()
+    }
+
+    pub fn empty_placeholder(&self) -> &'static str {
+        "You're caught up — no unread notifications."
+    }
+}
+
 impl PullRequestsSyncView {
     pub fn status_label(&self) -> String {
         if self.syncing {
@@ -187,6 +217,10 @@ pub struct AnnotationView {
 /// Paint projection. No LocalStore / Provider access from here.
 #[derive(Clone)]
 pub struct SessionView {
+    pub sidebar_tab: SidebarTab,
+    pub inbox: LoadState<Arc<[NotificationThread]>>,
+    pub inbox_sync: InboxSyncView,
+    pub inbox_auth_error: Option<String>,
     pub pull_requests: LoadState<Arc<[PullRequestListItem]>>,
     pub pull_requests_sync: PullRequestsSyncView,
     pub selected_id: Option<PullRequestId>,
@@ -219,6 +253,12 @@ struct Annotation {
 
 /// Sole external seam for window session policy.
 pub struct ReviewSession {
+    sidebar_tab: SidebarTab,
+    inbox: LoadState<Arc<[NotificationThread]>>,
+    inbox_sync: InboxSyncView,
+    inbox_auth_error: Option<String>,
+    inbox_sync_generation: u64,
+    inbox_last_modified: Option<String>,
     pull_requests: LoadState<Arc<[PullRequestListItem]>>,
     pull_requests_sync: PullRequestsSyncView,
     pull_requests_sync_generation: u64,
@@ -243,6 +283,12 @@ pub struct ReviewSession {
 impl ReviewSession {
     pub fn new() -> Self {
         Self {
+            sidebar_tab: SidebarTab::Inbox,
+            inbox: LoadState::Loading,
+            inbox_sync: InboxSyncView::default(),
+            inbox_auth_error: None,
+            inbox_sync_generation: 0,
+            inbox_last_modified: None,
             pull_requests: LoadState::Loading,
             pull_requests_sync: PullRequestsSyncView::default(),
             pull_requests_sync_generation: 0,
@@ -268,7 +314,14 @@ impl ReviewSession {
     pub fn apply(&mut self, intent: Intent) -> Vec<Effect> {
         match intent {
             Intent::Boot => self.boot(),
+            Intent::SelectSidebarTab(tab) => {
+                self.sidebar_tab = tab;
+                Vec::new()
+            }
             Intent::RefreshPullRequests => self.begin_pull_requests_sync(),
+            Intent::RefreshInbox => self.begin_inbox_sync(),
+            Intent::SelectNotification(id) => self.select_notification(id),
+            Intent::NotificationDone(id) => vec![Effect::MarkNotificationDone { id }],
             Intent::SelectPullRequest(id) => self.select_pull_request(id),
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
@@ -309,6 +362,19 @@ impl ReviewSession {
             }
             Intent::PullRequestListSyncFinished { generation, result } => {
                 self.on_pull_requests_sync_finished(generation, result)
+            }
+            Intent::InboxQueryFinished { result } => {
+                self.on_inbox_query_finished(result);
+                Vec::new()
+            }
+            Intent::InboxSyncFinished { generation, result } => {
+                self.on_inbox_sync_finished(generation, result)
+            }
+            Intent::NotificationReadFinished { id, result } => {
+                self.on_notification_read_finished(id, result)
+            }
+            Intent::NotificationDoneFinished { id, result } => {
+                self.on_notification_done_finished(id, result)
             }
             Intent::DetailLocalFinished { id, result } => {
                 self.on_detail_local(id, result);
@@ -356,6 +422,10 @@ impl ReviewSession {
         };
 
         SessionView {
+            sidebar_tab: self.sidebar_tab,
+            inbox: self.inbox.clone(),
+            inbox_sync: self.inbox_sync.clone(),
+            inbox_auth_error: self.inbox_auth_error.clone(),
             pull_requests: self.pull_requests.clone(),
             pull_requests_sync: self.pull_requests_sync.clone(),
             selected_id: self.selected_id.clone(),
@@ -379,10 +449,117 @@ impl ReviewSession {
 
     fn boot(&mut self) -> Vec<Effect> {
         self.pull_requests = LoadState::Loading;
-        let mut effects = self.begin_pull_requests_sync();
-        effects.insert(0, Effect::QueryPullRequests);
+        self.inbox = LoadState::Loading;
+        self.sidebar_tab = SidebarTab::Inbox;
+        let mut effects = vec![Effect::QueryPullRequests, Effect::QueryInbox];
+        effects.extend(self.begin_pull_requests_sync());
         effects.push(Effect::ArmPullRequestsRefreshTimer);
+        effects.extend(self.begin_inbox_sync());
         effects
+    }
+
+    fn begin_inbox_sync(&mut self) -> Vec<Effect> {
+        self.inbox_sync_generation += 1;
+        let generation = self.inbox_sync_generation;
+        self.inbox_sync.syncing = true;
+        self.inbox_sync.error = None;
+        vec![Effect::SyncInbox {
+            generation,
+            if_modified_since: self.inbox_last_modified.clone(),
+        }]
+    }
+
+    fn on_inbox_query_finished(&mut self, result: Result<Vec<NotificationThread>, ProviderError>) {
+        match result {
+            Ok(threads) => {
+                self.inbox = LoadState::Ready(Arc::from(threads));
+            }
+            Err(error) => {
+                self.inbox = LoadState::Error(error);
+            }
+        }
+    }
+
+    fn on_inbox_sync_finished(
+        &mut self,
+        generation: u64,
+        result: Result<InboxSyncOutcome, ProviderError>,
+    ) -> Vec<Effect> {
+        if self.inbox_sync_generation != generation {
+            return Vec::new();
+        }
+        self.inbox_sync.syncing = false;
+        match result {
+            Ok(outcome) => {
+                self.inbox_sync.last_success = Some(Utc::now());
+                self.inbox_sync.error = None;
+                self.inbox_auth_error = None;
+                if let Some(last_modified) = outcome.last_modified {
+                    self.inbox_last_modified = Some(last_modified);
+                }
+                let interval = outcome.poll_interval.unwrap_or(DEFAULT_INBOX_POLL);
+                vec![Effect::QueryInbox, Effect::ArmInboxPollTimer { interval }]
+            }
+            Err(ProviderError::Auth) => {
+                self.inbox_auth_error = Some(INBOX_AUTH_FIX_COPY.to_string());
+                vec![Effect::QueryInbox]
+            }
+            Err(error) => {
+                self.inbox_sync.error = Some(error.to_string());
+                vec![Effect::QueryInbox]
+            }
+        }
+    }
+
+    fn on_notification_read_finished(
+        &mut self,
+        _id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    ) -> Vec<Effect> {
+        if let Err(error) = result {
+            self.inbox_sync.error = Some(error.to_string());
+        }
+        vec![Effect::QueryInbox]
+    }
+
+    fn on_notification_done_finished(
+        &mut self,
+        _id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    ) -> Vec<Effect> {
+        if let Err(error) = result {
+            self.inbox_sync.error = Some(error.to_string());
+        }
+        vec![Effect::QueryInbox]
+    }
+
+    fn select_notification(&mut self, id: NotificationThreadId) -> Vec<Effect> {
+        let Some(thread) = self.find_notification(&id) else {
+            return Vec::new();
+        };
+        let pr_id = thread.pull_request_id.clone();
+        let review_tab = review_tab_for_reason(thread.reason);
+        let mut effects = Vec::new();
+        if thread.unread {
+            effects.push(Effect::MarkNotificationRead { id: id.clone() });
+        }
+        if self.selected_id.as_ref() == Some(&pr_id) {
+            self.review_tab = review_tab;
+            return effects;
+        }
+        self.selected_id = Some(pr_id.clone());
+        self.review_tab = review_tab;
+        self.reset_subordinate_state();
+        effects.push(Effect::FetchDetail { id: pr_id.clone() });
+        effects.push(Effect::FetchPatch { id: pr_id });
+        effects
+    }
+
+    fn find_notification(&self, id: &NotificationThreadId) -> Option<NotificationThread> {
+        let LoadState::Ready(threads) = &self.inbox else {
+            return None;
+        };
+        threads.iter().find(|t| &t.id == id).cloned()
     }
 
     fn begin_pull_requests_sync(&mut self) -> Vec<Effect> {
@@ -772,6 +949,19 @@ fn format_sync_time(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
+/// Initial Review pane tab when opening a pull request from an Inbox row.
+pub fn review_tab_for_reason(reason: NotificationReason) -> ReviewTab {
+    match reason {
+        NotificationReason::ReviewRequested
+        | NotificationReason::Mention
+        | NotificationReason::TeamMention
+        | NotificationReason::Comment
+        | NotificationReason::Author
+        | NotificationReason::CiActivity
+        | NotificationReason::StateChange => ReviewTab::Overview,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -814,6 +1004,18 @@ mod tests {
         }
     }
 
+    fn sample_notification(id: &str, pr: &str, reason: NotificationReason) -> NotificationThread {
+        NotificationThread {
+            id: NotificationThreadId::new(id).expect("id"),
+            pull_request_id: pr_id(pr),
+            title: format!("Notify {id}"),
+            repo_label: "acme/widgets".into(),
+            reason,
+            unread: true,
+            updated_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        }
+    }
+
     #[test]
     fn boot_emits_query_sync_and_timer() {
         let mut session = ReviewSession::new();
@@ -822,12 +1024,79 @@ mod tests {
             effects,
             vec![
                 Effect::QueryPullRequests,
+                Effect::QueryInbox,
                 Effect::SyncPullRequests { generation: 1 },
                 Effect::ArmPullRequestsRefreshTimer,
+                Effect::SyncInbox {
+                    generation: 1,
+                    if_modified_since: None,
+                },
             ]
         );
         assert!(matches!(session.view().pull_requests, LoadState::Loading));
         assert!(session.view().pull_requests_sync.syncing);
+        assert!(matches!(session.view().inbox, LoadState::Loading));
+        assert!(session.view().inbox_sync.syncing);
+        assert_eq!(session.view().sidebar_tab, SidebarTab::Inbox);
+    }
+
+    #[test]
+    fn select_unread_notification_marks_read_and_opens_pull_request() {
+        let mut session = ReviewSession::new();
+        let thread = sample_notification("n-1", "pr-1", NotificationReason::ReviewRequested);
+        let _ = session.apply(Intent::InboxQueryFinished {
+            result: Ok(vec![thread]),
+        });
+        let effects = session.apply(Intent::SelectNotification(
+            NotificationThreadId::new("n-1").expect("id"),
+        ));
+        assert!(effects.contains(&Effect::MarkNotificationRead {
+            id: NotificationThreadId::new("n-1").expect("id"),
+        }));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::FetchDetail { .. }))
+        );
+        assert_eq!(session.view().selected_id, Some(pr_id("pr-1")));
+        assert_eq!(session.view().review_tab, ReviewTab::Overview);
+    }
+
+    #[test]
+    fn inbox_auth_failure_sets_fix_copy_and_keeps_local_query() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::Boot);
+        let _ = session.apply(Intent::InboxQueryFinished {
+            result: Ok(vec![sample_notification(
+                "n-1",
+                "pr-1",
+                NotificationReason::Comment,
+            )]),
+        });
+        let effects = session.apply(Intent::InboxSyncFinished {
+            generation: 1,
+            result: Err(ProviderError::Auth),
+        });
+        assert_eq!(effects, vec![Effect::QueryInbox]);
+        assert_eq!(
+            session.view().inbox_auth_error.as_deref(),
+            Some(INBOX_AUTH_FIX_COPY)
+        );
+        assert!(matches!(session.view().inbox, LoadState::Ready(_)));
+    }
+
+    #[test]
+    fn transient_inbox_sync_failure_surfaces_non_blocking_error() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::Boot);
+        let _ = session.apply(Intent::InboxSyncFinished {
+            generation: 1,
+            result: Err(ProviderError::other("network blip")),
+        });
+        assert_eq!(
+            session.view().inbox_sync.error.as_deref(),
+            Some("network blip")
+        );
     }
 
     #[test]

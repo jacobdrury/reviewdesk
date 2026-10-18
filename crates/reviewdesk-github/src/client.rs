@@ -259,7 +259,10 @@ impl Provider for GitHubProvider {
 
         let payloads: Vec<NotificationThreadPayload> = serde_json::from_str(&body)
             .map_err(|e| ProviderError::other(format!("notifications decode: {e}")))?;
-        let threads = payloads.iter().filter_map(map_notification_thread).collect();
+        let threads = payloads
+            .iter()
+            .filter_map(map_notification_thread)
+            .collect();
 
         Ok(NotificationPage {
             threads,
@@ -269,10 +272,7 @@ impl Provider for GitHubProvider {
         })
     }
 
-    async fn mark_notification_read(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), ProviderError> {
+    async fn mark_notification_read(&self, id: &NotificationThreadId) -> Result<(), ProviderError> {
         let url = format!("{API_BASE}/notifications/threads/{}", id.as_str());
         let response = self
             .client
@@ -285,10 +285,7 @@ impl Provider for GitHubProvider {
         ensure_success(response).await
     }
 
-    async fn mark_notification_done(
-        &self,
-        id: &NotificationThreadId,
-    ) -> Result<(), ProviderError> {
+    async fn mark_notification_done(&self, id: &NotificationThreadId) -> Result<(), ProviderError> {
         let url = format!("{API_BASE}/notifications/threads/{}", id.as_str());
         let response = self
             .client
