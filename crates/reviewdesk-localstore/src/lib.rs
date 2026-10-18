@@ -3,6 +3,7 @@
 mod detail_patch;
 mod error;
 mod migrate;
+mod pipelines;
 mod pull_request_list;
 mod store;
 

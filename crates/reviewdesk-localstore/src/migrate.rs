@@ -96,6 +96,15 @@ create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_lis
 create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
 ",
     ),
+    (
+        5,
+        "
+create table pull_request_pipelines (
+    pull_request_id text not null primary key,
+    snapshot_json text not null
+);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

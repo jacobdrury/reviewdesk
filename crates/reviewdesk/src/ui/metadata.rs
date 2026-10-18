@@ -15,6 +15,7 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView};
+use crate::ui::check_rollup::render_compact_check_rollup;
 
 /// Full Metadata dock shown on the right when the dock is `Open`.
 pub(crate) fn render_metadata_panel(
@@ -124,6 +125,7 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
             div().text_sm().child(labels).into_any_element(),
             cx,
         ))
+        .child(render_compact_check_rollup(view, cx))
 }
 
 fn metadata_field(
@@ -203,12 +205,7 @@ pub(crate) fn render_metadata_strip(
                         .child("METADATA"),
                 )
                 .child(div().text_xs().child(status))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Merge status pending"),
-                ),
+                .child(render_compact_check_rollup(view, cx)),
         )
         .child(
             Button::new("metadata-strip-expand")

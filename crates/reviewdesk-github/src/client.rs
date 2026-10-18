@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListOptions,
+    Credentials, Patch, PipelinesSnapshot, Provider, ProviderError, PullRequestDetail,
+    PullRequestId, PullRequestListItem, PullRequestListOptions, RerunTarget,
 };
 use serde_json::json;
 
@@ -12,6 +12,7 @@ use crate::map::{
     GraphQlResponse, PullRequestData, SearchData, map_pull_request_detail,
     map_pull_request_list_item,
 };
+use crate::pipelines_map::{PipelinesData, map_pipelines};
 use crate::query::pull_request_search_query;
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
@@ -37,6 +38,48 @@ query PullRequestSearch($q: String!) {
         labels(first: 20) { nodes { name color } }
         reviewDecision
         viewerLatestReview { state }
+      }
+    }
+  }
+}
+"#;
+
+const PULL_REQUEST_PIPELINES_QUERY: &str = r#"
+query PullRequestPipelines($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      statusCheckRollup {
+        contexts(first: 100) {
+          nodes {
+            __typename
+            ... on CheckRun {
+              databaseId
+              name
+              status
+              conclusion
+              startedAt
+              completedAt
+              isRequired(pullRequestNumber: $number)
+              checkSuite {
+                id
+                app { name }
+                workflowRun {
+                  databaseId
+                  runNumber
+                  createdAt
+                  workflow { name }
+                }
+              }
+            }
+            ... on StatusContext {
+              id
+              context
+              state
+              createdAt
+              isRequired(pullRequestNumber: $number)
+            }
+          }
+        }
       }
     }
   }
@@ -209,5 +252,58 @@ impl Provider for GitHubProvider {
             .and_then(|r| r.pull_request)
             .ok_or(ProviderError::NotFound)?;
         map_pull_request_detail(&node)
+    }
+
+    async fn fetch_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<PipelinesSnapshot, ProviderError> {
+        let (owner, name, number) = parse_pull_request_id(id)?;
+        let data: PipelinesData = self
+            .graphql(
+                PULL_REQUEST_PIPELINES_QUERY,
+                json!({
+                    "owner": owner,
+                    "name": name,
+                    "number": number as i64,
+                }),
+            )
+            .await?;
+        map_pipelines(data, number)
+    }
+
+    async fn rerun_check(
+        &self,
+        id: &PullRequestId,
+        target: &RerunTarget,
+    ) -> Result<(), ProviderError> {
+        let (owner, repo, _number) = parse_pull_request_id(id)?;
+        let url = match target {
+            RerunTarget::WorkflowRun { run_id } => {
+                format!("{API_BASE}/repos/{owner}/{repo}/actions/runs/{run_id}/rerun")
+            }
+            RerunTarget::WorkflowJob { job_id } => {
+                format!("{API_BASE}/repos/{owner}/{repo}/actions/jobs/{job_id}/rerun")
+            }
+        };
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+
+        if status.is_success() {
+            return Ok(());
+        }
+        Err(from_status(status.as_u16(), &body))
     }
 }

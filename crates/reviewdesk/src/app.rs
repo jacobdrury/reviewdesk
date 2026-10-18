@@ -20,8 +20,9 @@ use tokio::runtime::Handle;
 use crate::PULL_REQUESTS_REFRESH;
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
-    AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
-    refresh_pull_request_detail, sync_pull_requests_from_provider,
+    AppLocalStore, load_detail_via_store, load_patch_via_store, load_pipelines_via_store,
+    refresh_patch, refresh_pipelines, refresh_pull_request_detail, rerun_check_via_store,
+    sync_pull_requests_from_provider,
 };
 use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
@@ -54,10 +55,13 @@ pub struct ReviewDesk {
     diff: Entity<DiffState>,
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
+    pipelines_scroll: UniformListScrollHandle,
     _pull_requests_reload_task: Task<()>,
     _pull_requests_sync_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
+    _pipelines_task: Task<()>,
+    _rerun_task: Task<()>,
     _refresh_timer: Task<()>,
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
@@ -83,10 +87,13 @@ impl ReviewDesk {
             diff,
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
+            pipelines_scroll: UniformListScrollHandle::new(),
             _pull_requests_reload_task: Task::ready(()),
             _pull_requests_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
+            _pipelines_task: Task::ready(()),
+            _rerun_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
             _window_activation: None,
             skip_next_activation_sync: false,
@@ -123,6 +130,8 @@ impl ReviewDesk {
                 }
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
+                Effect::FetchPipelines { id } => self.run_fetch_pipelines(id, cx),
+                Effect::RerunPipeline { id, target } => self.run_rerun_pipeline(id, target, cx),
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
             }
         }
@@ -316,6 +325,88 @@ impl ReviewDesk {
             });
         });
     }
+
+    fn run_fetch_pipelines(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._pipelines_task = cx.spawn(async move |this, cx| {
+            let cache_id = request_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_pipelines(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+            let local_result = cached.map_err(map_store_error);
+            let had_cache = matches!(&local_result, Ok(Some(_)));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::PipelinesLocalFinished {
+                        id: request_id.clone(),
+                        result: local_result,
+                    },
+                    cx,
+                );
+            });
+
+            let fetch_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    if had_cache {
+                        refresh_pipelines(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_pipelines_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::PipelinesNetworkFinished {
+                        id: request_id,
+                        had_cache,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_rerun_pipeline(
+        &mut self,
+        id: PullRequestId,
+        target: reviewdesk_core::RerunTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let finish_id = id.clone();
+        self._rerun_task = cx.spawn(async move |this, cx| {
+            let result = runtime
+                .spawn(async move {
+                    rerun_check_via_store(provider.as_ref(), &store, &id, &target).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::RerunPipelineFinished {
+                        id: finish_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
 }
 
 impl Render for ReviewDesk {
@@ -348,8 +439,15 @@ impl Render for ReviewDesk {
                     .flex_1()
                     .min_h_0()
                     .child(if view.selected_id.is_some() {
-                        render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx)
-                            .into_any_element()
+                        render_review_pane(
+                            &view,
+                            &self.diff,
+                            &self.files_scroll,
+                            &self.pipelines_scroll,
+                            entity,
+                            cx,
+                        )
+                        .into_any_element()
                     } else {
                         render_pull_requests(&view, &self.pull_requests_scroll, entity, cx)
                             .into_any_element()

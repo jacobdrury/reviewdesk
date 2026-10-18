@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::id::PullRequestId;
 use crate::patch::Patch;
+use crate::pipelines::PipelinesSnapshot;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
 
@@ -75,4 +76,15 @@ pub trait LocalStore: Send + Sync {
 
     /// Returns cached patch text, or `None` on cache miss.
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError>;
+
+    async fn put_pipelines(
+        &self,
+        id: &PullRequestId,
+        snapshot: &PipelinesSnapshot,
+    ) -> Result<(), LocalStoreError>;
+
+    async fn get_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PipelinesSnapshot>, LocalStoreError>;
 }

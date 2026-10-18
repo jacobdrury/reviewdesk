@@ -11,7 +11,8 @@ use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
 use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
 use reviewdesk_core::{
-    Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+    Patch, PipelinesSnapshot, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+    RerunAction, RerunTarget,
 };
 
 use crate::overview_body::{
@@ -28,6 +29,10 @@ pub enum Intent {
     SelectPullRequest(PullRequestId),
     BackToPullRequests,
     SetReviewTab(ReviewTab),
+    ActivatePipelines,
+    RerunPipeline {
+        pipeline_id: String,
+    },
     ToggleMetadataDock,
     FoldMetadata,
     HideMetadata,
@@ -66,15 +71,41 @@ pub enum Intent {
         had_cache: bool,
         result: Result<Patch, ProviderError>,
     },
+    PipelinesLocalFinished {
+        id: PullRequestId,
+        result: Result<Option<PipelinesSnapshot>, ProviderError>,
+    },
+    PipelinesNetworkFinished {
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PipelinesSnapshot, ProviderError>,
+    },
+    RerunPipelineFinished {
+        id: PullRequestId,
+        result: Result<PipelinesSnapshot, ProviderError>,
+    },
 }
 
 /// Work the shell must perform against LocalStore / Provider / timers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     QueryPullRequests,
-    SyncPullRequests { generation: u64 },
-    FetchDetail { id: PullRequestId },
-    FetchPatch { id: PullRequestId },
+    SyncPullRequests {
+        generation: u64,
+    },
+    FetchDetail {
+        id: PullRequestId,
+    },
+    FetchPatch {
+        id: PullRequestId,
+    },
+    FetchPipelines {
+        id: PullRequestId,
+    },
+    RerunPipeline {
+        id: PullRequestId,
+        target: RerunTarget,
+    },
     ArmPullRequestsRefreshTimer,
 }
 
@@ -165,6 +196,8 @@ pub struct SessionView {
     pub review_tab: ReviewTab,
     pub metadata_dock: MetadataDock,
     pub detail: LoadState<PullRequestDetail>,
+    pub pipelines: LoadState<PipelinesSnapshot>,
+    pub pipelines_rerun_busy: bool,
     pub overview_markdown: Option<SharedString>,
     pub patch_index: LoadState<()>,
     pub file_paths: Arc<[SharedString]>,
@@ -199,6 +232,8 @@ pub struct ReviewSession {
     review_tab: ReviewTab,
     metadata_dock: MetadataDock,
     detail: LoadState<PullRequestDetail>,
+    pipelines: LoadState<PipelinesSnapshot>,
+    pipelines_rerun_busy: bool,
     patch_index: LoadState<PatchIndex>,
     file_cache: HashMap<SharedString, DiffFile>,
     file_errors: HashMap<SharedString, ProviderError>,
@@ -224,6 +259,8 @@ impl ReviewSession {
             review_tab: ReviewTab::Overview,
             metadata_dock: MetadataDock::Open,
             detail: LoadState::Idle,
+            pipelines: LoadState::Idle,
+            pipelines_rerun_busy: false,
             patch_index: LoadState::Idle,
             file_cache: HashMap::new(),
             file_errors: HashMap::new(),
@@ -254,6 +291,12 @@ impl ReviewSession {
                 self.metadata_dock = self.metadata_dock.for_tab(tab);
                 Vec::new()
             }
+            Intent::ActivatePipelines => {
+                self.review_tab = ReviewTab::Pipelines;
+                self.metadata_dock = self.metadata_dock.for_tab(ReviewTab::Pipelines);
+                Vec::new()
+            }
+            Intent::RerunPipeline { pipeline_id } => self.begin_rerun_pipeline(pipeline_id),
             Intent::ToggleMetadataDock => {
                 self.metadata_dock = match self.metadata_dock {
                     MetadataDock::Open => MetadataDock::Hidden,
@@ -329,6 +372,22 @@ impl ReviewSession {
                 self.on_patch_network(id, had_cache, result);
                 Vec::new()
             }
+            Intent::PipelinesLocalFinished { id, result } => {
+                self.on_pipelines_local(id, result);
+                Vec::new()
+            }
+            Intent::PipelinesNetworkFinished {
+                id,
+                had_cache,
+                result,
+            } => {
+                self.on_pipelines_network(id, had_cache, result);
+                Vec::new()
+            }
+            Intent::RerunPipelineFinished { id, result } => {
+                self.on_rerun_pipeline_finished(id, result);
+                Vec::new()
+            }
         }
     }
 
@@ -357,6 +416,8 @@ impl ReviewSession {
             review_tab: self.review_tab,
             metadata_dock: self.metadata_dock,
             detail: self.detail.clone(),
+            pipelines: self.pipelines.clone(),
+            pipelines_rerun_busy: self.pipelines_rerun_busy,
             overview_markdown,
             patch_index,
             file_paths: self.file_list_paths.clone(),
@@ -439,7 +500,8 @@ impl ReviewSession {
         self.reset_subordinate_state();
         vec![
             Effect::FetchDetail { id: id.clone() },
-            Effect::FetchPatch { id },
+            Effect::FetchPatch { id: id.clone() },
+            Effect::FetchPipelines { id },
         ]
     }
 
@@ -450,6 +512,8 @@ impl ReviewSession {
 
     fn reset_subordinate_state(&mut self) {
         self.detail = LoadState::Idle;
+        self.pipelines = LoadState::Idle;
+        self.pipelines_rerun_busy = false;
         self.patch_index = LoadState::Idle;
         self.file_cache.clear();
         self.file_errors.clear();
@@ -581,6 +645,91 @@ impl ReviewSession {
                 self.selected_diff_file = None;
                 self.patch_index = LoadState::Error(error);
                 self.bump_diff_revision();
+            }
+        }
+    }
+
+    fn on_pipelines_local(
+        &mut self,
+        id: PullRequestId,
+        result: Result<Option<PipelinesSnapshot>, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        match result {
+            Ok(Some(snapshot)) => {
+                self.pipelines = LoadState::Ready(snapshot);
+            }
+            Ok(None) => {
+                self.pipelines = LoadState::Loading;
+            }
+            Err(_) => {
+                self.pipelines = LoadState::Loading;
+            }
+        }
+    }
+
+    fn on_pipelines_network(
+        &mut self,
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PipelinesSnapshot, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        if had_cache {
+            if let Ok(snapshot) = result {
+                self.pipelines = LoadState::Ready(snapshot);
+            }
+            return;
+        }
+        match result {
+            Ok(snapshot) => {
+                self.pipelines = LoadState::Ready(snapshot);
+            }
+            Err(error) => {
+                self.pipelines = LoadState::Error(error);
+            }
+        }
+    }
+
+    fn begin_rerun_pipeline(&mut self, pipeline_id: String) -> Vec<Effect> {
+        let Some(pr_id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(snapshot) = &self.pipelines else {
+            return Vec::new();
+        };
+        let Some(pipeline) = snapshot.pipelines.iter().find(|p| p.id == pipeline_id) else {
+            return Vec::new();
+        };
+        let RerunAction::Allowed(target) = &pipeline.rerun else {
+            return Vec::new();
+        };
+        self.pipelines_rerun_busy = true;
+        vec![Effect::RerunPipeline {
+            id: pr_id,
+            target: target.clone(),
+        }]
+    }
+
+    fn on_rerun_pipeline_finished(
+        &mut self,
+        id: PullRequestId,
+        result: Result<PipelinesSnapshot, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        self.pipelines_rerun_busy = false;
+        match result {
+            Ok(snapshot) => {
+                self.pipelines = LoadState::Ready(snapshot);
+            }
+            Err(error) => {
+                self.pipelines = LoadState::Error(error);
             }
         }
     }
@@ -852,6 +1001,7 @@ mod tests {
             vec![
                 Effect::FetchDetail { id: pr_id("pr-2") },
                 Effect::FetchPatch { id: pr_id("pr-2") },
+                Effect::FetchPipelines { id: pr_id("pr-2") },
             ]
         );
         let view = session.view();

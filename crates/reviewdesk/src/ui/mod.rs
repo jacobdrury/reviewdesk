@@ -1,8 +1,10 @@
 //! Private paint modules. Not a behavioral seam — they read [`SessionView`] only.
 
+mod check_rollup;
 mod files;
 mod metadata;
 mod overview;
+mod pipelines_tab;
 mod pull_requests;
 mod review_pane;
 

@@ -2,8 +2,8 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use reviewdesk_core::{
-    LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId, PullRequestListItem,
-    PullRequestListQuery,
+    LocalStore, LocalStoreError, Patch, PipelinesSnapshot, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListQuery,
 };
 use turso::{Builder, Connection, Database};
 
@@ -80,5 +80,20 @@ impl LocalStore for TursoLocalStore {
 
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
         detail_patch::get_patch(&self.conn, id).await
+    }
+
+    async fn put_pipelines(
+        &self,
+        id: &PullRequestId,
+        snapshot: &PipelinesSnapshot,
+    ) -> Result<(), LocalStoreError> {
+        crate::pipelines::put_pipelines(&self.conn, id, snapshot).await
+    }
+
+    async fn get_pipelines(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PipelinesSnapshot>, LocalStoreError> {
+        crate::pipelines::get_pipelines(&self.conn, id).await
     }
 }

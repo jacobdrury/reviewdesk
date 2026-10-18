@@ -23,4 +23,5 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+reviewdesk-localstore = { path = "../reviewdesk-localstore" }
 tempfile = "3.25.0"
