@@ -16,6 +16,7 @@
 //!   immediately; Diff-anchored drafts sit on Pending review per #54)
 //! - Unsent / Drafts → Pending review drafts (visible with Draft badge)
 //! - Inline comments on description → Diff-anchored Review comments / Suggestions
+//!   with the anchored code snippet shown in Conversation
 //!
 //! Domain from #54: Review comment / Thread / Suggestion / Pending review.
 //! Annotation is out of product language. Iterate in place — no A/B/C switcher.
@@ -28,6 +29,14 @@ pub enum ThreadStatus {
     Open,
     Resolved,
     Outdated,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodeLine {
+    pub number: u32,
+    pub text: &'static str,
+    /// Anchored / called-out line (highlighted in the snippet).
+    pub highlighted: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +56,8 @@ pub struct StubThread {
     /// Diff anchor; `None` = timeline-only Conversation comment (Linear top-level).
     pub path: Option<&'static str>,
     pub line_label: Option<&'static str>,
+    /// Anchored Patch lines shown above Diff-anchored comments in Conversation.
+    pub code_context: Option<&'static [CodeLine]>,
     pub status: ThreadStatus,
     pub comments: &'static [StubComment],
 }
@@ -57,6 +68,7 @@ pub const STUB_THREADS: &[StubThread] = &[
         id: "t-timeline",
         path: None,
         line_label: None,
+        code_context: None,
         status: ThreadStatus::Open,
         comments: &[StubComment {
             author: "carol",
@@ -70,12 +82,54 @@ pub const STUB_THREADS: &[StubThread] = &[
     StubThread {
         id: "t1",
         path: Some("crates/reviewdesk/src/chrome_prototype.rs"),
-        line_label: Some("L42–L48"),
+        line_label: Some("L16–L21"),
+        code_context: Some(&[
+            CodeLine {
+                number: 14,
+                text: "",
+                highlighted: false,
+            },
+            CodeLine {
+                number: 15,
+                text: "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]",
+                highlighted: false,
+            },
+            CodeLine {
+                number: 16,
+                text: "pub enum ShellNav {",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 17,
+                text: "    Inbox,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 18,
+                text: "    #[default]",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 19,
+                text: "    PullRequests,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 20,
+                text: "}",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 21,
+                text: "",
+                highlighted: false,
+            },
+        ]),
         status: ThreadStatus::Open,
         comments: &[
             StubComment {
                 author: "alice",
-                body: "Can we keep Dock Dense padding on the sidebar list?",
+                body: "Can we keep Dock Dense padding on the sidebar list? Calling out `ShellNav` — Inbox vs Pull requests density should match the Linear Issues row height.",
                 relative_time: "1h",
                 pending: false,
                 suggestion: None,
@@ -94,12 +148,44 @@ pub const STUB_THREADS: &[StubThread] = &[
     StubThread {
         id: "t2",
         path: Some("crates/reviewdesk/src/ui/shell_prototype.rs"),
-        line_label: Some("L120"),
+        line_label: Some("L115–L118"),
+        code_context: Some(&[
+            CodeLine {
+                number: 114,
+                text: "                    .child(",
+                highlighted: false,
+            },
+            CodeLine {
+                number: 115,
+                text: "                        div()",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 116,
+                text: "                            .text_xs()",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 117,
+                text: "                            .text_color(cx.theme().muted_foreground)",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 118,
+                text: "                            .child(\"prototype · Linear comments\"),",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 119,
+                text: "                    ),",
+                highlighted: false,
+            },
+        ]),
         status: ThreadStatus::Open,
         comments: &[
             StubComment {
                 author: "bob",
-                body: "Metadata should stay open by default only on Overview.",
+                body: "Metadata should stay open by default only on Overview — this title chrome is fine as muted.",
                 relative_time: "40m",
                 pending: false,
                 suggestion: None,
@@ -118,15 +204,52 @@ pub const STUB_THREADS: &[StubThread] = &[
     StubThread {
         id: "t3",
         path: Some("crates/reviewdesk/src/app.rs"),
-        line_label: Some("L88–L92"),
+        line_label: Some("L95–L100"),
+        code_context: Some(&[
+            CodeLine {
+                number: 94,
+                text: "            notif_scroll: UniformListScrollHandle::new(),",
+                highlighted: false,
+            },
+            CodeLine {
+                number: 95,
+                text: "            chrome: ChromeVariant::A,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 96,
+                text: "            shell_nav: ShellNav::PullRequests,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 97,
+                text: "            prototype_tab: PrototypeReviewTab::Conversation,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 98,
+                text: "            metadata_open: false,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 99,
+                text: "            hide_resolved_threads: false,",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 100,
+                text: "            reply_thread_id: Some(default_reply_thread_id()),",
+                highlighted: true,
+            },
+        ]),
         status: ThreadStatus::Open,
         comments: &[StubComment {
             author: "you",
-            body: "Rename the Annotation label while we are here.",
+            body: "Boot straight into Conversation for this prototype — Suggestion below swaps the Annotation-era wording if we still had it here.",
             relative_time: "Draft",
             pending: true,
             suggestion: Some(
-                "window.set_window_title(\"Review Desk\");\n// Pending review drafts, not Annotations",
+                "            prototype_tab: PrototypeReviewTab::Conversation,\n            // Pending review drafts, not Annotations",
             ),
             showcase_resolve: false,
         }],
@@ -135,6 +258,7 @@ pub const STUB_THREADS: &[StubThread] = &[
         id: "t4",
         path: Some("docs/agents/domain.md"),
         line_label: Some("file"),
+        code_context: None,
         status: ThreadStatus::Resolved,
         comments: &[
             StubComment {
@@ -159,6 +283,28 @@ pub const STUB_THREADS: &[StubThread] = &[
         id: "t5",
         path: Some("crates/reviewdesk/src/paths.rs"),
         line_label: Some("L12 · outdated"),
+        code_context: Some(&[
+            CodeLine {
+                number: 10,
+                text: "pub fn local_store_db_path() -> Result<PathBuf, …> {",
+                highlighted: false,
+            },
+            CodeLine {
+                number: 11,
+                text: "    // outdated: helper moved — Thread still replyable",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 12,
+                text: "    Ok(app_data_dir()?.join(\"reviewdesk.db\"))",
+                highlighted: true,
+            },
+            CodeLine {
+                number: 13,
+                text: "}",
+                highlighted: false,
+            },
+        ]),
         status: ThreadStatus::Outdated,
         comments: &[StubComment {
             author: "dave",

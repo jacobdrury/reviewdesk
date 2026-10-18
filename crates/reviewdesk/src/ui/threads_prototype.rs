@@ -12,7 +12,8 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::threads_prototype::{
-    PENDING_DRAFT_COUNT, StubComment, StubThread, ThreadStatus, conversation_threads, thread_by_id,
+    CodeLine, PENDING_DRAFT_COUNT, StubComment, StubThread, ThreadStatus, conversation_threads,
+    thread_by_id,
 };
 
 pub(crate) fn render_conversation(
@@ -171,23 +172,25 @@ fn render_conversation_header(
 
 fn render_pending_drafts_chip(cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     h_flex()
-        .gap_1()
+        .gap_2()
         .items_center()
         .px_2()
-        .py(px(2.))
+        .py(px(4.))
         .rounded_md()
-        .bg(cx.theme().warning.opacity(0.15))
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.45))
         .child(
             div()
                 .text_xs()
                 .font_medium()
-                .text_color(cx.theme().warning)
+                .text_color(cx.theme().foreground)
                 .child(format!(
                     "Pending review · {PENDING_DRAFT_COUNT} drafts"
                 )),
         )
-        .child(ghost_btn("pr-submit", "Submit…"))
-        .child(ghost_btn("pr-discard", "Discard"))
+        .child(cta_btn("pr-submit", "Submit…", cx))
+        .child(text_action_btn("pr-discard", "Discard", cx.theme().muted_foreground))
 }
 
 fn render_leave_a_comment_composer(cx: &mut Context<ReviewDesk>) -> impl IntoElement {
@@ -243,13 +246,7 @@ fn render_leave_a_comment_composer(cx: &mut Context<ReviewDesk>) -> impl IntoEle
                                                 .child("⌘ Enter to comment"),
                                         ),
                                 )
-                                .child(
-                                    Button::new("post-comment")
-                                        .primary()
-                                        .small()
-                                        .label("Comment")
-                                        .on_click(|_, _, _| {}),
-                                ),
+                                .child(cta_btn("post-comment", "Comment", cx)),
                         ),
                 ),
         )
@@ -366,16 +363,11 @@ fn render_linear_thread(
                                             .text_color(cx.theme().muted_foreground)
                                             .child("⌘ Enter"),
                                     )
-                                    .child(
-                                        Button::new(SharedString::from(format!(
-                                            "reply-send-{}",
-                                            thread.id
-                                        )))
-                                        .primary()
-                                        .xsmall()
-                                        .label("Reply")
-                                        .on_click(|_, _, _| {}),
-                                    ),
+                                    .child(cta_btn(
+                                        format!("reply-send-{}", thread.id),
+                                        "Reply",
+                                        cx,
+                                    )),
                             ),
                     ),
             )
@@ -421,23 +413,13 @@ fn render_comment_row(
                                 div()
                                     .px_1()
                                     .rounded_sm()
-                                    .bg(cx.theme().warning.opacity(0.2))
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().secondary)
                                     .text_xs()
-                                    .text_color(cx.theme().warning)
+                                    .font_medium()
+                                    .text_color(cx.theme().foreground)
                                     .child("Draft"),
-                            )
-                        })
-                        .when(is_root && thread.path.is_some(), |el| {
-                            el.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().link)
-                                    .truncate()
-                                    .child(format!(
-                                        "{} · {}",
-                                        thread.path.unwrap_or(""),
-                                        thread.line_label.unwrap_or("")
-                                    )),
                             )
                         })
                         .when(matches!(thread.status, ThreadStatus::Outdated) && is_root, |el| {
@@ -454,6 +436,16 @@ fn render_comment_row(
                     show_resolve_controls && is_root,
                 )),
         )
+        .when(is_root && thread.path.is_some(), |el| {
+            el.child(
+                div().pl(px(28.)).child(render_anchor_header(
+                    thread.path.unwrap_or(""),
+                    thread.line_label.unwrap_or(""),
+                    thread.code_context,
+                    cx,
+                )),
+            )
+        })
         .child(
             div()
                 .pl(px(28.))
@@ -503,6 +495,74 @@ fn render_comment_actions_row(id: &str, show_resolve: bool) -> impl IntoElement 
         .child(ghost_btn(format!("more-{id}"), "···"))
 }
 
+fn render_anchor_header(
+    path: &str,
+    line_label: &str,
+    code_context: Option<&'static [CodeLine]>,
+    cx: &App,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .gap_1()
+        .mb_1()
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().link)
+                .child(format!("{path} · {line_label}")),
+        )
+        .when_some(code_context, |el, lines| {
+            el.child(render_code_context(lines, cx))
+        })
+}
+
+fn render_code_context(lines: &'static [CodeLine], cx: &App) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.35))
+        .overflow_x_hidden()
+        .children(lines.iter().map(|line| {
+            let bg = if line.highlighted {
+                cx.theme().accent.opacity(0.18)
+            } else {
+                gpui_kit::hsla(0., 0., 0., 0.)
+            };
+            h_flex()
+                .w_full()
+                .gap_2()
+                .px_2()
+                .py(px(1.))
+                .bg(bg)
+                .child(
+                    div()
+                        .w(px(36.))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(line.number.to_string()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(if line.highlighted {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(if line.text.is_empty() {
+                            " ".to_string()
+                        } else {
+                            line.text.to_string()
+                        }),
+                )
+        }))
+}
+
 fn suggestion_block(text: &str, cx: &App) -> impl IntoElement {
     v_flex()
         .w_full()
@@ -512,11 +572,12 @@ fn suggestion_block(text: &str, cx: &App) -> impl IntoElement {
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
-        .bg(cx.theme().accent.opacity(0.08))
+        .bg(cx.theme().secondary.opacity(0.45))
         .child(
             div()
                 .text_xs()
                 .font_medium()
+                .text_color(cx.theme().foreground)
                 .child("Suggestion · compose/display only"),
         )
         .child(
@@ -554,5 +615,28 @@ fn ghost_btn(id: impl Into<SharedString>, label: &str) -> Button {
         .ghost()
         .xsmall()
         .label(label)
+        .on_click(|_, _, _| {})
+}
+
+/// High-contrast CTA — avoids `.primary()`, which reads as light-on-light in Zed themes.
+fn cta_btn(id: impl Into<SharedString>, label: &str, cx: &App) -> impl IntoElement {
+    Button::new(id.into())
+        .small()
+        .label(label)
+        .bg(cx.theme().foreground)
+        .text_color(cx.theme().background)
+        .on_click(|_, _, _| {})
+}
+
+fn text_action_btn(
+    id: impl Into<SharedString>,
+    label: &str,
+    color: gpui_kit::Hsla,
+) -> impl IntoElement {
+    Button::new(id.into())
+        .ghost()
+        .xsmall()
+        .label(label)
+        .text_color(color)
         .on_click(|_, _, _| {})
 }
