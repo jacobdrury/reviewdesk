@@ -127,7 +127,7 @@ impl ReviewDesk {
     fn run_effects(&mut self, effects: Vec<Effect>, cx: &mut Context<Self>) {
         for effect in effects {
             match effect {
-                Effect::QueryInbox => self.run_query_inbox(cx),
+                Effect::QueryInbox { generation } => self.run_query_inbox(generation, cx),
                 Effect::SyncInbox { generation } => self.run_sync_inbox(generation, cx),
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
@@ -165,7 +165,7 @@ impl ReviewDesk {
         cx.notify();
     }
 
-    fn run_query_inbox(&mut self, cx: &mut Context<Self>) {
+    fn run_query_inbox(&mut self, generation: u64, cx: &mut Context<Self>) {
         let store = self.store.clone();
         let runtime = self.runtime.clone();
         self._inbox_reload_task = cx.spawn(async move |this, cx| {
@@ -175,7 +175,10 @@ impl ReviewDesk {
                 .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
             let result = result.map_err(map_store_error);
             let _ = this.update(cx, |this, cx| {
-                this.dispatch(Intent::InboxQueryFinished { result }, cx);
+                this.dispatch(
+                    Intent::InboxQueryFinished { generation, result },
+                    cx,
+                );
             });
         });
     }

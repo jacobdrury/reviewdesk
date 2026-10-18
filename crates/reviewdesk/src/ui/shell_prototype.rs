@@ -20,8 +20,8 @@ use gpui_kit::{
 
 use crate::app::ReviewDesk;
 use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
-use crate::review_session::{LoadState, ReviewTab, SessionView};
-use crate::ui::{render_files, render_inbox, render_overview};
+use crate::review_session::{Intent, LoadState, ReviewTab, SessionView};
+use crate::ui::{render_files, render_overview};
 
 #[derive(Clone, Copy)]
 struct StubNotification {
@@ -347,16 +347,198 @@ fn render_list_pane(
     match proto.shell_nav {
         ShellNav::Inbox => render_notifications(proto, cx).into_any_element(),
         ShellNav::PullRequests => {
-            // Existing Inbox list paint stands in for Pull requests rows (real data).
-            render_inbox(
-                &proto.view,
-                &proto.inbox_scroll,
-                proto.entity.clone(),
-                cx,
-            )
-            .into_any_element()
+            render_pull_requests(proto, cx).into_any_element()
         }
     }
+}
+
+fn render_pull_requests(
+    proto: &PrototypeChrome,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let chrome = proto.chrome;
+    let header = if chrome.uppercase_labels() {
+        "PULL REQUESTS"
+    } else {
+        "Pull requests"
+    };
+    let header_py = if chrome.dense() { px(4.) } else { px(8.) };
+    let row_py = if chrome.dense() { px(4.) } else { px(8.) };
+    let entity = proto.entity.clone();
+    let scroll = proto.inbox_scroll.clone();
+
+    v_flex()
+        .size_full()
+        .min_h_0()
+        .when(!chrome.tone_split(), |el| {
+            el.border_r_1().border_color(cx.theme().border)
+        })
+        .when(chrome.tone_split(), |el| el.bg(cx.theme().sidebar))
+        .child(
+            h_flex()
+                .w_full()
+                .px_3()
+                .py(header_py)
+                .justify_between()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(header),
+                )
+                .child(
+                    h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(match &proto.view.inbox {
+                                    LoadState::Ready(items) => items.len().to_string(),
+                                    _ => String::new(),
+                                }),
+                        )
+                        .child(
+                            Button::new("prs-refresh")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::RefreshCw)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Intent::RefreshInbox, cx);
+                                })),
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .px_3()
+                .py(px(2.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .truncate()
+                        .child(proto.view.inbox_sync.status_label()),
+                ),
+        )
+        .child(match &proto.view.inbox {
+            LoadState::Idle | LoadState::Loading => v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Loading pull requests…"),
+                )
+                .into_any_element(),
+            LoadState::Error(error) => v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .justify_center()
+                .gap_2()
+                .px_4()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_center()
+                        .text_color(cx.theme().danger)
+                        .child(error.to_string()),
+                )
+                .child(
+                    Button::new("prs-retry")
+                        .outline()
+                        .small()
+                        .label("Retry")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Intent::RefreshInbox, cx);
+                        })),
+                )
+                .into_any_element(),
+            LoadState::Ready(items) if items.is_empty() => v_flex()
+                .flex_1()
+                .min_h_0()
+                .items_center()
+                .justify_center()
+                .px_4()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .text_center()
+                        .child("No pull requests waiting for your review."),
+                )
+                .into_any_element(),
+            LoadState::Ready(items) => {
+                let items = items.clone();
+                let selected = proto.view.selected_id.clone();
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(
+                        uniform_list("proto-pr-list", items.len(), move |range, _, cx| {
+                            range
+                                .map(|ix| {
+                                    let item = &items[ix];
+                                    let id = item.id.clone();
+                                    let selected = selected.as_ref() == Some(&item.id);
+                                    let owner = entity.clone();
+                                    ListItem::new(SharedString::from(item.id.as_str()))
+                                        .selected(selected)
+                                        .px_3()
+                                        .py(row_py)
+                                        .child(
+                                            v_flex()
+                                                .w_full()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_medium()
+                                                        .truncate()
+                                                        .child(item.title.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .truncate()
+                                                        .child(format!(
+                                                            "{} · {}",
+                                                            item.repo_label, item.author_login
+                                                        )),
+                                                ),
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            let id = id.clone();
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.dispatch(
+                                                    Intent::SelectPullRequest(id),
+                                                    cx,
+                                                );
+                                            });
+                                        })
+                                        .into_any_element()
+                                })
+                                .collect()
+                        })
+                        .size_full()
+                        .track_scroll(&scroll),
+                    )
+                    .child(Scrollbar::vertical(&scroll))
+                    .into_any_element()
+            }
+        })
 }
 
 fn render_notifications(
@@ -400,7 +582,20 @@ fn render_notifications(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("stub"),
+                        .child("stub · not GitHub yet"),
+                ),
+        )
+        .child(
+            div()
+                .px_3()
+                .py(px(4.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Real review requests live under Pull requests."),
                 ),
         )
         .child(

@@ -38,6 +38,7 @@ pub enum Intent {
     RetryDetail,
     RetryPatch,
     InboxQueryFinished {
+        generation: u64,
         result: Result<Vec<InboxItem>, ProviderError>,
     },
     InboxSyncFinished {
@@ -67,7 +68,7 @@ pub enum Intent {
 /// Work the shell must perform against LocalStore / Provider / timers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    QueryInbox,
+    QueryInbox { generation: u64 },
     SyncInbox { generation: u64 },
     FetchDetail { id: PullRequestId },
     FetchPatch { id: PullRequestId },
@@ -163,6 +164,7 @@ pub struct ReviewSession {
     inbox: LoadState<Arc<[InboxItem]>>,
     inbox_sync: InboxSyncView,
     inbox_sync_generation: u64,
+    inbox_query_generation: u64,
     selected_id: Option<PullRequestId>,
     review_tab: ReviewTab,
     detail: LoadState<PullRequestDetail>,
@@ -187,6 +189,7 @@ impl ReviewSession {
             inbox: LoadState::Loading,
             inbox_sync: InboxSyncView::default(),
             inbox_sync_generation: 0,
+            inbox_query_generation: 0,
             selected_id: None,
             review_tab: ReviewTab::Overview,
             detail: LoadState::Idle,
@@ -256,8 +259,8 @@ impl ReviewSession {
             }
             Intent::RetryDetail => self.retry_detail(),
             Intent::RetryPatch => self.retry_patch(),
-            Intent::InboxQueryFinished { result } => {
-                self.on_inbox_query_finished(result);
+            Intent::InboxQueryFinished { generation, result } => {
+                self.on_inbox_query_finished(generation, result);
                 Vec::new()
             }
             Intent::InboxSyncFinished { generation, result } => {
@@ -333,9 +336,16 @@ impl ReviewSession {
     fn boot(&mut self) -> Vec<Effect> {
         self.inbox = LoadState::Loading;
         let mut effects = self.begin_inbox_sync();
-        effects.insert(0, Effect::QueryInbox);
+        effects.insert(0, self.begin_inbox_query());
         effects.push(Effect::ArmInboxRefreshTimer);
         effects
+    }
+
+    fn begin_inbox_query(&mut self) -> Effect {
+        self.inbox_query_generation += 1;
+        Effect::QueryInbox {
+            generation: self.inbox_query_generation,
+        }
     }
 
     fn begin_inbox_sync(&mut self) -> Vec<Effect> {
@@ -346,7 +356,14 @@ impl ReviewSession {
         vec![Effect::SyncInbox { generation }]
     }
 
-    fn on_inbox_query_finished(&mut self, result: Result<Vec<InboxItem>, ProviderError>) {
+    fn on_inbox_query_finished(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<InboxItem>, ProviderError>,
+    ) {
+        if generation != self.inbox_query_generation {
+            return;
+        }
         match result {
             Ok(items) => {
                 if let Some(selected) = &self.selected_id
@@ -380,7 +397,7 @@ impl ReviewSession {
                 self.inbox_sync.error = Some(error.to_string());
             }
         }
-        vec![Effect::QueryInbox]
+        vec![self.begin_inbox_query()]
     }
 
     fn select_pull_request(&mut self, id: PullRequestId) -> Vec<Effect> {
@@ -771,7 +788,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![
-                Effect::QueryInbox,
+                Effect::QueryInbox { generation: 1 },
                 Effect::SyncInbox { generation: 1 },
                 Effect::ArmInboxRefreshTimer,
             ]
@@ -785,6 +802,7 @@ mod tests {
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::Boot);
         let _ = session.apply(Intent::InboxQueryFinished {
+            generation: 1,
             result: Ok(vec![sample_item("pr-1"), sample_item("pr-2")]),
         });
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
@@ -826,12 +844,37 @@ mod tests {
             result: Ok(Some(sample_detail("pr-1", "body"))),
         });
         let _ = session.apply(Intent::InboxQueryFinished {
+            generation: 0,
             result: Ok(vec![sample_item("pr-other")]),
         });
         let view = session.view();
         assert!(view.selected_id.is_none());
         assert!(matches!(view.detail, LoadState::Idle));
         assert!(matches!(view.patch_index, LoadState::Idle));
+    }
+
+    #[test]
+    fn stale_inbox_query_finish_is_ignored() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::Boot);
+        // Boot emitted query generation 1; sync finish bumps query to 2.
+        let _ = session.apply(Intent::InboxSyncFinished {
+            generation: 1,
+            result: Ok(()),
+        });
+        let _ = session.apply(Intent::InboxQueryFinished {
+            generation: 2,
+            result: Ok(vec![sample_item("pr-fresh")]),
+        });
+        let _ = session.apply(Intent::InboxQueryFinished {
+            generation: 1,
+            result: Ok(Vec::new()),
+        });
+        let LoadState::Ready(items) = session.view().inbox else {
+            panic!("expected ready inbox");
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, pr_id("pr-fresh"));
     }
 
     #[test]
@@ -853,7 +896,7 @@ mod tests {
             generation: 2,
             result: Ok(()),
         });
-        assert_eq!(fresh, vec![Effect::QueryInbox]);
+        assert_eq!(fresh, vec![Effect::QueryInbox { generation: 1 }]);
         assert!(!session.view().inbox_sync.syncing);
         assert!(session.view().inbox_sync.last_success.is_some());
     }
