@@ -44,7 +44,6 @@ pub struct OverviewMarkdownInput<'a> {
     pub title: &'a str,
     pub author: &'a str,
     pub is_draft: bool,
-    pub web_url: &'a str,
     pub labels: &'a str,
     pub reviewers: &'a str,
     pub body: &'a str,
@@ -53,6 +52,8 @@ pub struct OverviewMarkdownInput<'a> {
 }
 
 /// Build the full Overview markdown, including title/meta and details fences.
+///
+/// Provider URL lives in the Metadata panel (short form), not Overview.
 pub fn compose_overview_markdown(input: OverviewMarkdownInput<'_>) -> String {
     let mut out = String::new();
     out.push_str("# ");
@@ -61,8 +62,6 @@ pub fn compose_overview_markdown(input: OverviewMarkdownInput<'_>) -> String {
     out.push_str(input.author.trim());
     out.push_str(" · ");
     out.push_str(if input.is_draft { "Draft" } else { "Ready" });
-    out.push_str(" · ");
-    out.push_str(input.web_url.trim());
     out.push_str("\n\n");
     out.push_str("Labels: ");
     out.push_str(input.labels);

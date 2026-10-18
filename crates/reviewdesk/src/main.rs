@@ -1,5 +1,6 @@
 mod app;
 mod auth;
+mod chrome_prototype;
 mod overview_body;
 mod patch_index;
 mod paths;
