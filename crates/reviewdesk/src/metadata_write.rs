@@ -96,8 +96,10 @@ mod tests {
 
     use async_trait::async_trait;
     use reviewdesk_core::{
-        LocalStore, LocalStoreError, MetadataWriteCapabilities, Patch, PullRequestLabel,
-        PullRequestListItem, ReviewDecision,
+        LocalStore, LocalStoreError, MetadataWriteCapabilities, NotificationListOptions,
+        NotificationPage, NotificationQuery, NotificationThread, NotificationThreadId, Patch,
+        PullRequestLabel, PullRequestListItem, PullRequestThreads, ReviewDecision,
+        ReviewSubmitEvent,
     };
     use tempfile::tempdir;
 
@@ -157,6 +159,49 @@ mod tests {
         async fn get_patch(&self, _id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
             Ok(None)
         }
+
+        async fn sync_notifications(
+            &self,
+            _threads: &[NotificationThread],
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn query_notifications(
+            &self,
+            _query: &NotificationQuery,
+        ) -> Result<Vec<NotificationThread>, LocalStoreError> {
+            Ok(Vec::new())
+        }
+
+        async fn set_notification_read(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn remove_notification(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn put_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+            _threads: &PullRequestThreads,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn get_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
+            Ok(None)
+        }
     }
 
     struct StubProvider {
@@ -202,6 +247,58 @@ mod tests {
                 return Err(ProviderError::other("write failed"));
             }
             Ok(())
+        }
+
+        async fn list_notifications(
+            &self,
+            _options: &NotificationListOptions,
+        ) -> Result<NotificationPage, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn mark_notification_read(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn mark_notification_done(
+            &self,
+            _id: &NotificationThreadId,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+
+        async fn fetch_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn add_pending_diff_review_comment(
+            &self,
+            _id: &PullRequestId,
+            _comment: reviewdesk_core::PendingDiffReviewComment,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn submit_pending_review(
+            &self,
+            _id: &PullRequestId,
+            _event: ReviewSubmitEvent,
+            _summary_body: Option<String>,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
+        }
+
+        async fn discard_pending_review(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("unused"))
         }
     }
 

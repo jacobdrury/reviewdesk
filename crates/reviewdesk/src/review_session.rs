@@ -6,15 +6,25 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
-use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
+use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode, DiffSide};
 use reviewdesk_core::{
-    Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+    DiffAnchor, DiffLineSide, NotificationReason, NotificationThread, NotificationThreadId, Patch,
+    ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestThreads,
+    ReviewSubmitEvent, ThreadStatus,
 };
 
 use crate::metadata_write::MetadataWrite;
+
+/// Fallback Inbox poll cadence when the Provider sends no `X-Poll-Interval`.
+pub const DEFAULT_INBOX_POLL: Duration = Duration::from_secs(60);
+
+/// Operator copy when Inbox sync hits classic PAT / scope failures.
+pub const INBOX_AUTH_FIX_COPY: &str =
+    "Inbox needs a classic PAT with `notifications` or `repo`. See docs/auth-github.md.";
 
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
@@ -26,7 +36,11 @@ use crate::patch_index::{PatchIndex, index_patch};
 #[derive(Debug)]
 pub enum Intent {
     Boot,
+    SelectSidebarTab(SidebarTab),
     RefreshPullRequests,
+    RefreshInbox,
+    SelectNotification(NotificationThreadId),
+    NotificationDone(NotificationThreadId),
     SelectPullRequest(PullRequestId),
     BackToPullRequests,
     SetReviewTab(ReviewTab),
@@ -40,7 +54,12 @@ pub enum Intent {
     SelectFile(SharedString),
     RetryFile(SharedString),
     ToggleDiffMode,
-    AddAnnotation(DiffLineRange),
+    AddDiffReviewComment(DiffLineRange),
+    SubmitPendingReview {
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    },
+    DiscardPendingReview,
     RetryDetail,
     RetryPatch,
     PullRequestListQueryFinished {
@@ -48,6 +67,21 @@ pub enum Intent {
     },
     PullRequestListSyncFinished {
         generation: u64,
+        result: Result<(), ProviderError>,
+    },
+    InboxQueryFinished {
+        result: Result<Vec<NotificationThread>, ProviderError>,
+    },
+    InboxSyncFinished {
+        generation: u64,
+        result: Result<InboxSyncOutcome, ProviderError>,
+    },
+    NotificationReadFinished {
+        id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    },
+    NotificationDoneFinished {
+        id: NotificationThreadId,
         result: Result<(), ProviderError>,
     },
     DetailLocalFinished {
@@ -73,20 +107,87 @@ pub enum Intent {
         id: PullRequestId,
         result: Result<PullRequestDetail, ProviderError>,
     },
+    ThreadsLocalFinished {
+        id: PullRequestId,
+        result: Result<Option<PullRequestThreads>, ProviderError>,
+    },
+    ThreadsNetworkFinished {
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PullRequestThreads, ProviderError>,
+    },
+    ThreadsWriteFinished {
+        id: PullRequestId,
+        result: Result<PullRequestThreads, ProviderError>,
+    },
 }
 
 /// Work the shell must perform against LocalStore / Provider / timers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     QueryPullRequests,
-    SyncPullRequests { generation: u64 },
-    FetchDetail { id: PullRequestId },
-    FetchPatch { id: PullRequestId },
+    SyncPullRequests {
+        generation: u64,
+    },
+    QueryInbox,
+    SyncInbox {
+        generation: u64,
+        if_modified_since: Option<String>,
+    },
+    ArmInboxPollTimer {
+        interval: Duration,
+    },
+    MarkNotificationRead {
+        id: NotificationThreadId,
+    },
+    MarkNotificationDone {
+        id: NotificationThreadId,
+    },
+    FetchDetail {
+        id: PullRequestId,
+    },
+    FetchPatch {
+        id: PullRequestId,
+    },
+    FetchThreads {
+        id: PullRequestId,
+    },
+    RefreshThreads {
+        id: PullRequestId,
+    },
+    SaveDiffReviewComment {
+        id: PullRequestId,
+        anchor: DiffAnchor,
+        body: String,
+    },
+    SubmitPendingReviewWrite {
+        id: PullRequestId,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    },
+    DiscardPendingReviewWrite {
+        id: PullRequestId,
+    },
     ArmPullRequestsRefreshTimer,
     RunMetadataWrite {
         id: PullRequestId,
         write: MetadataWrite,
     },
+}
+
+/// Which list the sidebar has selected for the left pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarTab {
+    Inbox,
+    PullRequests,
+}
+
+/// Outcome of one Inbox poll, surfaced back into the kernel as an [`Intent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InboxSyncOutcome {
+    pub poll_interval: Option<Duration>,
+    pub last_modified: Option<String>,
+    pub not_modified: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +238,32 @@ pub struct PullRequestsSyncView {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InboxSyncView {
+    pub syncing: bool,
+    pub last_success: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+impl InboxSyncView {
+    pub fn status_label(&self) -> String {
+        if self.syncing {
+            return "Syncing inbox…".into();
+        }
+        if let Some(error) = &self.error {
+            return format!("Inbox sync failed: {error}");
+        }
+        if let Some(at) = self.last_success {
+            return format!("Inbox synced {}", format_sync_time(at));
+        }
+        "Inbox not synced yet".into()
+    }
+
+    pub fn empty_placeholder(&self) -> &'static str {
+        "You're caught up — no unread notifications."
+    }
+}
+
 impl PullRequestsSyncView {
     pub fn status_label(&self) -> String {
         if self.syncing {
@@ -161,15 +288,29 @@ impl PullRequestsSyncView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnnotationView {
+pub struct ReviewCommentView {
     pub id: String,
-    pub range: DiffLineRange,
+    pub author_login: SharedString,
     pub body: SharedString,
+    pub is_pending: bool,
+    pub suggestion: Option<SharedString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadView {
+    pub id: String,
+    pub anchor: Option<DiffAnchor>,
+    pub status: ThreadStatus,
+    pub comments: Arc<[ReviewCommentView]>,
 }
 
 /// Paint projection. No LocalStore / Provider access from here.
 #[derive(Clone)]
 pub struct SessionView {
+    pub sidebar_tab: SidebarTab,
+    pub inbox: LoadState<Arc<[NotificationThread]>>,
+    pub inbox_sync: InboxSyncView,
+    pub inbox_auth_error: Option<String>,
     pub pull_requests: LoadState<Arc<[PullRequestListItem]>>,
     pub pull_requests_sync: PullRequestsSyncView,
     pub selected_id: Option<PullRequestId>,
@@ -185,7 +326,10 @@ pub struct SessionView {
     pub diff_mode: DiffMode,
     /// Bumps when Diff surface inputs change (mode, selected file, materialization).
     pub diff_revision: u64,
-    pub annotations: Vec<AnnotationView>,
+    /// Shared Thread set for Conversation (#80) and Diff surfaces.
+    pub shared_threads: Arc<[ThreadView]>,
+    pub has_pending_review: bool,
+    pub threads_syncing: bool,
     pub metadata_write_pending: bool,
     pub metadata_write_error: Option<String>,
 }
@@ -197,14 +341,14 @@ struct OverviewComposeCache {
     markdown: SharedString,
 }
 
-struct Annotation {
-    id: String,
-    range: DiffLineRange,
-    body: SharedString,
-}
-
 /// Sole external seam for window session policy.
 pub struct ReviewSession {
+    sidebar_tab: SidebarTab,
+    inbox: LoadState<Arc<[NotificationThread]>>,
+    inbox_sync: InboxSyncView,
+    inbox_auth_error: Option<String>,
+    inbox_sync_generation: u64,
+    inbox_last_modified: Option<String>,
     pull_requests: LoadState<Arc<[PullRequestListItem]>>,
     pull_requests_sync: PullRequestsSyncView,
     pull_requests_sync_generation: u64,
@@ -219,8 +363,8 @@ pub struct ReviewSession {
     selected_diff_file: Option<DiffFile>,
     diff_mode: DiffMode,
     diff_revision: u64,
-    annotations: HashMap<String, Vec<Annotation>>,
-    annotation_seq: usize,
+    threads: LoadState<PullRequestThreads>,
+    threads_syncing: bool,
     overview_segments: Vec<BodySegment>,
     details_open: HashMap<usize, bool>,
     overview_compose_cache: Option<OverviewComposeCache>,
@@ -232,6 +376,12 @@ pub struct ReviewSession {
 impl ReviewSession {
     pub fn new() -> Self {
         Self {
+            sidebar_tab: SidebarTab::Inbox,
+            inbox: LoadState::Loading,
+            inbox_sync: InboxSyncView::default(),
+            inbox_auth_error: None,
+            inbox_sync_generation: 0,
+            inbox_last_modified: None,
             pull_requests: LoadState::Loading,
             pull_requests_sync: PullRequestsSyncView::default(),
             pull_requests_sync_generation: 0,
@@ -246,8 +396,8 @@ impl ReviewSession {
             selected_diff_file: None,
             diff_mode: DiffMode::Split,
             diff_revision: 0,
-            annotations: HashMap::new(),
-            annotation_seq: 0,
+            threads: LoadState::Idle,
+            threads_syncing: false,
             overview_segments: Vec::new(),
             details_open: HashMap::new(),
             overview_compose_cache: None,
@@ -260,7 +410,14 @@ impl ReviewSession {
     pub fn apply(&mut self, intent: Intent) -> Vec<Effect> {
         match intent {
             Intent::Boot => self.boot(),
+            Intent::SelectSidebarTab(tab) => {
+                self.sidebar_tab = tab;
+                Vec::new()
+            }
             Intent::RefreshPullRequests => self.begin_pull_requests_sync(),
+            Intent::RefreshInbox => self.begin_inbox_sync(),
+            Intent::SelectNotification(id) => self.select_notification(id),
+            Intent::NotificationDone(id) => vec![Effect::MarkNotificationDone { id }],
             Intent::SelectPullRequest(id) => self.select_pull_request(id),
             Intent::BackToPullRequests => {
                 self.clear_selection();
@@ -309,10 +466,12 @@ impl ReviewSession {
                 self.bump_diff_revision();
                 Vec::new()
             }
-            Intent::AddAnnotation(range) => {
-                self.add_annotation(range);
-                Vec::new()
-            }
+            Intent::AddDiffReviewComment(range) => self.begin_add_diff_review_comment(range),
+            Intent::SubmitPendingReview {
+                event,
+                summary_body,
+            } => self.begin_submit_pending_review(event, summary_body),
+            Intent::DiscardPendingReview => self.begin_discard_pending_review(),
             Intent::RetryDetail => self.retry_detail(),
             Intent::RetryPatch => self.retry_patch(),
             Intent::PullRequestListQueryFinished { result } => {
@@ -321,6 +480,19 @@ impl ReviewSession {
             }
             Intent::PullRequestListSyncFinished { generation, result } => {
                 self.on_pull_requests_sync_finished(generation, result)
+            }
+            Intent::InboxQueryFinished { result } => {
+                self.on_inbox_query_finished(result);
+                Vec::new()
+            }
+            Intent::InboxSyncFinished { generation, result } => {
+                self.on_inbox_sync_finished(generation, result)
+            }
+            Intent::NotificationReadFinished { id, result } => {
+                self.on_notification_read_finished(id, result)
+            }
+            Intent::NotificationDoneFinished { id, result } => {
+                self.on_notification_done_finished(id, result)
             }
             Intent::DetailLocalFinished { id, result } => {
                 self.on_detail_local(id, result);
@@ -351,6 +523,22 @@ impl ReviewSession {
                 self.on_metadata_write_finished(id, result);
                 Vec::new()
             }
+            Intent::ThreadsLocalFinished { id, result } => {
+                self.on_threads_local(id, result);
+                Vec::new()
+            }
+            Intent::ThreadsNetworkFinished {
+                id,
+                had_cache,
+                result,
+            } => {
+                self.on_threads_network(id, had_cache, result);
+                Vec::new()
+            }
+            Intent::ThreadsWriteFinished { id, result } => {
+                self.on_threads_write_finished(id, result);
+                Vec::new()
+            }
         }
     }
 
@@ -364,7 +552,7 @@ impl ReviewSession {
             .selected_file
             .as_ref()
             .and_then(|path| self.file_errors.get(path).cloned());
-        let annotations = self.current_annotations();
+        let (shared_threads, has_pending_review) = self.thread_projection();
         let patch_index = match &self.patch_index {
             LoadState::Idle => LoadState::Idle,
             LoadState::Loading => LoadState::Loading,
@@ -373,6 +561,10 @@ impl ReviewSession {
         };
 
         SessionView {
+            sidebar_tab: self.sidebar_tab,
+            inbox: self.inbox.clone(),
+            inbox_sync: self.inbox_sync.clone(),
+            inbox_auth_error: self.inbox_auth_error.clone(),
             pull_requests: self.pull_requests.clone(),
             pull_requests_sync: self.pull_requests_sync.clone(),
             selected_id: self.selected_id.clone(),
@@ -387,7 +579,9 @@ impl ReviewSession {
             selected_file_error,
             diff_mode: self.diff_mode,
             diff_revision: self.diff_revision,
-            annotations,
+            shared_threads,
+            has_pending_review,
+            threads_syncing: self.threads_syncing,
             metadata_write_pending: self.metadata_write_pending,
             metadata_write_error: self.metadata_write_error.clone(),
         }
@@ -426,10 +620,117 @@ impl ReviewSession {
 
     fn boot(&mut self) -> Vec<Effect> {
         self.pull_requests = LoadState::Loading;
-        let mut effects = self.begin_pull_requests_sync();
-        effects.insert(0, Effect::QueryPullRequests);
+        self.inbox = LoadState::Loading;
+        self.sidebar_tab = SidebarTab::Inbox;
+        let mut effects = vec![Effect::QueryPullRequests, Effect::QueryInbox];
+        effects.extend(self.begin_pull_requests_sync());
         effects.push(Effect::ArmPullRequestsRefreshTimer);
+        effects.extend(self.begin_inbox_sync());
         effects
+    }
+
+    fn begin_inbox_sync(&mut self) -> Vec<Effect> {
+        self.inbox_sync_generation += 1;
+        let generation = self.inbox_sync_generation;
+        self.inbox_sync.syncing = true;
+        self.inbox_sync.error = None;
+        vec![Effect::SyncInbox {
+            generation,
+            if_modified_since: self.inbox_last_modified.clone(),
+        }]
+    }
+
+    fn on_inbox_query_finished(&mut self, result: Result<Vec<NotificationThread>, ProviderError>) {
+        match result {
+            Ok(threads) => {
+                self.inbox = LoadState::Ready(Arc::from(threads));
+            }
+            Err(error) => {
+                self.inbox = LoadState::Error(error);
+            }
+        }
+    }
+
+    fn on_inbox_sync_finished(
+        &mut self,
+        generation: u64,
+        result: Result<InboxSyncOutcome, ProviderError>,
+    ) -> Vec<Effect> {
+        if self.inbox_sync_generation != generation {
+            return Vec::new();
+        }
+        self.inbox_sync.syncing = false;
+        match result {
+            Ok(outcome) => {
+                self.inbox_sync.last_success = Some(Utc::now());
+                self.inbox_sync.error = None;
+                self.inbox_auth_error = None;
+                if let Some(last_modified) = outcome.last_modified {
+                    self.inbox_last_modified = Some(last_modified);
+                }
+                let interval = outcome.poll_interval.unwrap_or(DEFAULT_INBOX_POLL);
+                vec![Effect::QueryInbox, Effect::ArmInboxPollTimer { interval }]
+            }
+            Err(ProviderError::Auth) => {
+                self.inbox_auth_error = Some(INBOX_AUTH_FIX_COPY.to_string());
+                vec![Effect::QueryInbox]
+            }
+            Err(error) => {
+                self.inbox_sync.error = Some(error.to_string());
+                vec![Effect::QueryInbox]
+            }
+        }
+    }
+
+    fn on_notification_read_finished(
+        &mut self,
+        _id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    ) -> Vec<Effect> {
+        if let Err(error) = result {
+            self.inbox_sync.error = Some(error.to_string());
+        }
+        vec![Effect::QueryInbox]
+    }
+
+    fn on_notification_done_finished(
+        &mut self,
+        _id: NotificationThreadId,
+        result: Result<(), ProviderError>,
+    ) -> Vec<Effect> {
+        if let Err(error) = result {
+            self.inbox_sync.error = Some(error.to_string());
+        }
+        vec![Effect::QueryInbox]
+    }
+
+    fn select_notification(&mut self, id: NotificationThreadId) -> Vec<Effect> {
+        let Some(thread) = self.find_notification(&id) else {
+            return Vec::new();
+        };
+        let pr_id = thread.pull_request_id.clone();
+        let review_tab = review_tab_for_reason(thread.reason);
+        let mut effects = Vec::new();
+        if thread.unread {
+            effects.push(Effect::MarkNotificationRead { id: id.clone() });
+        }
+        if self.selected_id.as_ref() == Some(&pr_id) {
+            self.review_tab = review_tab;
+            return effects;
+        }
+        self.selected_id = Some(pr_id.clone());
+        self.review_tab = review_tab;
+        self.reset_subordinate_state();
+        effects.push(Effect::FetchDetail { id: pr_id.clone() });
+        effects.push(Effect::FetchPatch { id: pr_id });
+        effects
+    }
+
+    fn find_notification(&self, id: &NotificationThreadId) -> Option<NotificationThread> {
+        let LoadState::Ready(threads) = &self.inbox else {
+            return None;
+        };
+        threads.iter().find(|t| &t.id == id).cloned()
     }
 
     fn begin_pull_requests_sync(&mut self) -> Vec<Effect> {
@@ -490,7 +791,8 @@ impl ReviewSession {
         self.reset_subordinate_state();
         vec![
             Effect::FetchDetail { id: id.clone() },
-            Effect::FetchPatch { id },
+            Effect::FetchPatch { id: id.clone() },
+            Effect::FetchThreads { id },
         ]
     }
 
@@ -510,6 +812,8 @@ impl ReviewSession {
         self.details_open.clear();
         self.overview_compose_cache = None;
         self.file_list_paths = Arc::from([]);
+        self.threads = LoadState::Idle;
+        self.threads_syncing = false;
         self.bump_diff_revision();
     }
 
@@ -702,45 +1006,150 @@ impl ReviewSession {
         }
     }
 
-    fn add_annotation(&mut self, range: DiffLineRange) {
-        let Some(pr_id) = self.selected_id.as_ref().map(|id| id.as_str().to_string()) else {
-            return;
-        };
-        let (start, end) = (
-            range.start().min(range.end()),
-            range.start().max(range.end()),
-        );
-        let lines = if start == end {
-            format!("line {end}")
-        } else {
-            format!("lines {start}-{end}")
-        };
-        self.annotation_seq += 1;
-        let id = format!("annotation-{}", self.annotation_seq);
-        self.annotations.entry(pr_id).or_default().push(Annotation {
-            id,
-            range,
-            body: format!("Annotation on {lines}.").into(),
-        });
-    }
-
-    fn current_annotations(&self) -> Vec<AnnotationView> {
-        let Some(pr_id) = self.selected_id.as_ref() else {
+    fn begin_add_diff_review_comment(&mut self, range: DiffLineRange) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
             return Vec::new();
         };
-        self.annotations
-            .get(pr_id.as_str())
-            .map(|items| {
-                items
+        let body = default_review_comment_body(&range);
+        let anchor = diff_anchor_from_range(&range);
+        self.threads_syncing = true;
+        vec![Effect::SaveDiffReviewComment { id, anchor, body }]
+    }
+
+    fn begin_submit_pending_review(
+        &mut self,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    ) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        if !self.has_pending_review() {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::SubmitPendingReviewWrite {
+            id,
+            event,
+            summary_body,
+        }]
+    }
+
+    fn begin_discard_pending_review(&mut self) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        if !self.has_pending_review() {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::DiscardPendingReviewWrite { id }]
+    }
+
+    fn has_pending_review(&self) -> bool {
+        matches!(
+            &self.threads,
+            LoadState::Ready(snapshot) if snapshot.pending_review.is_some()
+        )
+    }
+
+    fn apply_threads_snapshot(&mut self, snapshot: PullRequestThreads) {
+        self.threads = LoadState::Ready(snapshot);
+        self.threads_syncing = false;
+    }
+
+    fn on_threads_local(
+        &mut self,
+        id: PullRequestId,
+        result: Result<Option<PullRequestThreads>, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        match result {
+            Ok(Some(snapshot)) => self.apply_threads_snapshot(snapshot),
+            Ok(None) => {
+                self.threads = LoadState::Loading;
+            }
+            Err(error) => {
+                self.threads = LoadState::Error(error);
+                self.threads_syncing = false;
+            }
+        }
+    }
+
+    fn on_threads_network(
+        &mut self,
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PullRequestThreads, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        if had_cache {
+            if let Ok(snapshot) = result {
+                self.apply_threads_snapshot(snapshot);
+            }
+            return;
+        }
+        match result {
+            Ok(snapshot) => self.apply_threads_snapshot(snapshot),
+            Err(error) => {
+                self.threads = LoadState::Error(error);
+                self.threads_syncing = false;
+            }
+        }
+    }
+
+    fn on_threads_write_finished(
+        &mut self,
+        id: PullRequestId,
+        result: Result<PullRequestThreads, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        self.threads_syncing = false;
+        match result {
+            Ok(snapshot) => self.apply_threads_snapshot(snapshot),
+            Err(error) => {
+                if !matches!(&self.threads, LoadState::Ready(_)) {
+                    self.threads = LoadState::Error(error);
+                }
+            }
+        }
+    }
+
+    fn thread_projection(&self) -> (Arc<[ThreadView]>, bool) {
+        let LoadState::Ready(snapshot) = &self.threads else {
+            return (Arc::from([]), false);
+        };
+        let has_pending = snapshot.pending_review.is_some();
+        let views = snapshot
+            .threads
+            .iter()
+            .map(|thread| ThreadView {
+                id: thread.id.as_str().to_string(),
+                anchor: thread.anchor.clone(),
+                status: thread.status,
+                comments: thread
+                    .comments
                     .iter()
-                    .map(|a| AnnotationView {
-                        id: a.id.clone(),
-                        range: a.range.clone(),
-                        body: a.body.clone(),
+                    .map(|comment| ReviewCommentView {
+                        id: comment.id.as_str().to_string(),
+                        author_login: SharedString::from(comment.author_login.as_str()),
+                        body: SharedString::from(comment.body.as_str()),
+                        is_pending: comment.is_pending,
+                        suggestion: comment
+                            .suggestion
+                            .as_ref()
+                            .map(|text| SharedString::from(text.as_str())),
                     })
-                    .collect()
+                    .collect::<Arc<_>>(),
             })
-            .unwrap_or_default()
+            .collect::<Arc<_>>();
+        (views, has_pending)
     }
 
     fn details_is_open(&self, block: &DetailsBlock) -> bool {
@@ -821,11 +1230,49 @@ fn format_sync_time(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
+fn diff_anchor_from_range(range: &DiffLineRange) -> DiffAnchor {
+    let start = range.start().min(range.end());
+    let end = range.start().max(range.end());
+    let side = match range.end_side() {
+        DiffSide::Original => DiffLineSide::Left,
+        DiffSide::Modified => DiffLineSide::Right,
+    };
+    DiffAnchor {
+        path: range.path().to_string(),
+        side,
+        start_line: start as u32,
+        end_line: end as u32,
+    }
+}
+
+fn default_review_comment_body(range: &DiffLineRange) -> String {
+    let start = range.start().min(range.end());
+    let end = range.start().max(range.end());
+    let lines = if start == end {
+        format!("line {end}")
+    } else {
+        format!("lines {start}-{end}")
+    };
+    format!("Review comment on {lines}.")
+}
+
+/// Initial Review pane tab when opening a pull request from an Inbox row.
+pub fn review_tab_for_reason(reason: NotificationReason) -> ReviewTab {
+    match reason {
+        NotificationReason::Mention | NotificationReason::TeamMention | NotificationReason::Comment => {
+            ReviewTab::Conversation
+        }
+        NotificationReason::CiActivity => ReviewTab::Pipelines,
+        NotificationReason::ReviewRequested
+        | NotificationReason::Author
+        | NotificationReason::StateChange => ReviewTab::Overview,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use gpui_kit::component::diff::DiffSide;
     use reviewdesk_core::ReviewState;
 
     const MULTI_FILE: &str = "diff --git a/new b/new\nnew file mode 100644\n--- /dev/null\n+++ b/new\n@@ -0,0 +1 @@\n+added\ndiff --git a/old b/old\ndeleted file mode 100644\n--- a/old\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\n";
@@ -872,6 +1319,18 @@ mod tests {
         }
     }
 
+    fn sample_notification(id: &str, pr: &str, reason: NotificationReason) -> NotificationThread {
+        NotificationThread {
+            id: NotificationThreadId::new(id).expect("id"),
+            pull_request_id: pr_id(pr),
+            title: format!("Notify {id}"),
+            repo_label: "acme/widgets".into(),
+            reason,
+            unread: true,
+            updated_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+        }
+    }
+
     #[test]
     fn boot_emits_query_sync_and_timer() {
         let mut session = ReviewSession::new();
@@ -880,12 +1339,92 @@ mod tests {
             effects,
             vec![
                 Effect::QueryPullRequests,
+                Effect::QueryInbox,
                 Effect::SyncPullRequests { generation: 1 },
                 Effect::ArmPullRequestsRefreshTimer,
+                Effect::SyncInbox {
+                    generation: 1,
+                    if_modified_since: None,
+                },
             ]
         );
         assert!(matches!(session.view().pull_requests, LoadState::Loading));
         assert!(session.view().pull_requests_sync.syncing);
+        assert!(matches!(session.view().inbox, LoadState::Loading));
+        assert!(session.view().inbox_sync.syncing);
+        assert_eq!(session.view().sidebar_tab, SidebarTab::Inbox);
+    }
+
+    #[test]
+    fn mention_notification_opens_conversation_tab() {
+        let mut session = ReviewSession::new();
+        let thread = sample_notification("n-2", "pr-2", NotificationReason::Mention);
+        let _ = session.apply(Intent::InboxQueryFinished {
+            result: Ok(vec![thread]),
+        });
+        let _ = session.apply(Intent::SelectNotification(
+            NotificationThreadId::new("n-2").expect("id"),
+        ));
+        assert_eq!(session.view().review_tab, ReviewTab::Conversation);
+    }
+
+    #[test]
+    fn select_unread_notification_marks_read_and_opens_pull_request() {
+        let mut session = ReviewSession::new();
+        let thread = sample_notification("n-1", "pr-1", NotificationReason::ReviewRequested);
+        let _ = session.apply(Intent::InboxQueryFinished {
+            result: Ok(vec![thread]),
+        });
+        let effects = session.apply(Intent::SelectNotification(
+            NotificationThreadId::new("n-1").expect("id"),
+        ));
+        assert!(effects.contains(&Effect::MarkNotificationRead {
+            id: NotificationThreadId::new("n-1").expect("id"),
+        }));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::FetchDetail { .. }))
+        );
+        assert_eq!(session.view().selected_id, Some(pr_id("pr-1")));
+        assert_eq!(session.view().review_tab, ReviewTab::Overview);
+    }
+
+    #[test]
+    fn inbox_auth_failure_sets_fix_copy_and_keeps_local_query() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::Boot);
+        let _ = session.apply(Intent::InboxQueryFinished {
+            result: Ok(vec![sample_notification(
+                "n-1",
+                "pr-1",
+                NotificationReason::Comment,
+            )]),
+        });
+        let effects = session.apply(Intent::InboxSyncFinished {
+            generation: 1,
+            result: Err(ProviderError::Auth),
+        });
+        assert_eq!(effects, vec![Effect::QueryInbox]);
+        assert_eq!(
+            session.view().inbox_auth_error.as_deref(),
+            Some(INBOX_AUTH_FIX_COPY)
+        );
+        assert!(matches!(session.view().inbox, LoadState::Ready(_)));
+    }
+
+    #[test]
+    fn transient_inbox_sync_failure_surfaces_non_blocking_error() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::Boot);
+        let _ = session.apply(Intent::InboxSyncFinished {
+            generation: 1,
+            result: Err(ProviderError::other("network blip")),
+        });
+        assert_eq!(
+            session.view().inbox_sync.error.as_deref(),
+            Some("network blip")
+        );
     }
 
     #[test]
@@ -913,6 +1452,7 @@ mod tests {
             vec![
                 Effect::FetchDetail { id: pr_id("pr-2") },
                 Effect::FetchPatch { id: pr_id("pr-2") },
+                Effect::FetchThreads { id: pr_id("pr-2") },
             ]
         );
         let view = session.view();
@@ -1116,21 +1656,72 @@ mod tests {
     }
 
     #[test]
-    fn annotations_are_session_scoped_per_pull_request() {
+    fn diff_review_comments_attach_to_shared_thread_set() {
+        use reviewdesk_core::{
+            PendingReview, ReviewComment, ReviewCommentId, Thread, ThreadId, ThreadStatus,
+        };
+
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
-        let range = DiffLineRange::new("new", DiffSide::Modified, 1, 1);
-        let _ = session.apply(Intent::AddAnnotation(range));
-        assert_eq!(session.view().annotations.len(), 1);
-        assert!(
-            session.view().annotations[0]
-                .body
-                .as_str()
-                .contains("line 1")
-        );
+        let snapshot = PullRequestThreads {
+            pending_review: Some(PendingReview {
+                pull_request_id: pr_id("pr-1"),
+                provider_review_id: Some("pending-1".into()),
+                summary_body: None,
+            }),
+            threads: vec![Thread {
+                id: ThreadId::new("t-1"),
+                anchor: Some(DiffAnchor {
+                    path: "new".into(),
+                    side: DiffLineSide::Right,
+                    start_line: 1,
+                    end_line: 1,
+                }),
+                status: ThreadStatus::Open,
+                comments: vec![ReviewComment {
+                    id: ReviewCommentId::new("c-1"),
+                    author_login: "you".into(),
+                    body: "Review comment on line 1.".into(),
+                    is_pending: true,
+                    suggestion: None,
+                }],
+            }],
+        };
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(snapshot),
+        });
+        let view = session.view();
+        assert!(view.has_pending_review);
+        assert_eq!(view.shared_threads.len(), 1);
+        assert!(view.shared_threads[0].comments[0].is_pending);
 
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-2")));
-        assert!(session.view().annotations.is_empty());
+        assert!(!session.view().has_pending_review);
+        assert!(session.view().shared_threads.is_empty());
+    }
+
+    #[test]
+    fn toggling_diff_mode_does_not_clear_pending_review_drafts() {
+        use reviewdesk_core::{PendingReview, PullRequestThreads};
+
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(PullRequestThreads {
+                threads: Vec::new(),
+                pending_review: Some(PendingReview {
+                    pull_request_id: pr_id("pr-1"),
+                    provider_review_id: None,
+                    summary_body: None,
+                }),
+            }),
+        });
+        assert!(session.view().has_pending_review);
+
+        let _ = session.apply(Intent::ToggleDiffMode);
+        assert!(session.view().has_pending_review);
     }
 
     fn selected_session(id: &str) -> ReviewSession {

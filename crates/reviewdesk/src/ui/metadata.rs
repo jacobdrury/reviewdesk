@@ -85,8 +85,6 @@ fn metadata_body(view: &SessionView, cx: &mut Context<ReviewDesk>) -> impl IntoE
     let pending = view.metadata_write_pending;
     let write_error = view.metadata_write_error.clone();
 
-    let reviewers = format_logins(detail.reviewers.iter().map(|r| r.login.as_str()));
-    let labels = format_logins(detail.labels.iter().map(|l| l.name.as_str()));
     let assignees = format_logins(detail.assignees.iter().map(|a| a.login.as_str()));
     let mut panel = v_flex()
         .p_4()

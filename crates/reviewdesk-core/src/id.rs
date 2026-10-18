@@ -1,11 +1,13 @@
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Opaque pull-request identity across Providers.
 ///
 /// The string form is Provider-owned. Core does not interpret it.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PullRequestId(String);
 
 #[derive(Debug, Error, PartialEq, Eq)]

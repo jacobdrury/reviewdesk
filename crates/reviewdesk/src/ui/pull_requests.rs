@@ -23,8 +23,6 @@ pub(crate) fn render_pull_requests(
     v_flex()
         .size_full()
         .min_h_0()
-        .border_r_1()
-        .border_color(cx.theme().border)
         .child(
             gpui_kit::component::h_flex()
                 .w_full()

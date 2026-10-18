@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
-    diff::{Diff, DiffAnnotation, DiffLinePosition, DiffMode, DiffState},
+    diff::{Diff, DiffAnnotation, DiffLinePosition, DiffMode, DiffSide, DiffState},
     h_flex,
     list::ListItem,
     resizable::{h_resizable, resizable_panel},
@@ -15,9 +15,10 @@ use gpui_kit::{
     Context, ElementId, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
     UniformListScrollHandle, WeakEntity, div, px, uniform_list,
 };
+use reviewdesk_core::{DiffLineSide, ReviewSubmitEvent};
 
 use crate::app::ReviewDesk;
-use crate::review_session::{Intent, LoadState, SessionView};
+use crate::review_session::{Intent, LoadState, SessionView, ThreadView};
 
 pub(crate) fn render_files(
     view: &SessionView,
@@ -85,32 +86,19 @@ pub(crate) fn render_files(
         _ => "Toggle",
     };
 
-    let annotations = view
-        .annotations
+    let diff_threads = diff_threads_for_file(view.shared_threads.as_ref(), selected_file.as_deref());
+    let annotations = diff_threads
         .iter()
-        .map(|annotation| {
-            DiffAnnotation::line(
-                ElementId::from(SharedString::from(annotation.id.clone())),
-                DiffLinePosition::new(
-                    annotation.range.path().clone(),
-                    annotation.range.end_side(),
-                    annotation.range.end(),
-                ),
-            )
-        })
+        .filter_map(|thread| diff_annotation_for_thread(thread))
         .collect::<Vec<_>>();
-    let comments = Rc::new(
-        view.annotations
+    let thread_cards = Rc::new(
+        diff_threads
             .iter()
-            .map(|a| {
-                (
-                    ElementId::from(SharedString::from(a.id.clone())),
-                    a.body.clone(),
-                )
-            })
+            .filter_map(|thread| thread_card_entry(thread))
             .collect::<Vec<_>>(),
     );
     let add_entity = entity.clone();
+    let pending_entity = entity.clone();
 
     div()
         .size_full()
@@ -203,89 +191,277 @@ pub(crate) fn render_files(
                                             .track_scroll(files_scroll),
                                         )
                                         .child(Scrollbar::vertical(files_scroll))
-                                }),
+                                })
                         ),
                 )
                 .child({
                     let retry_path = selected_file.clone();
+                    let mut diff_column = v_flex().size_full().min_h_0().min_w_0();
+                    if view.has_pending_review {
+                        diff_column = diff_column.child(pending_review_bar(
+                            pending_entity.clone(),
+                            cx,
+                        ));
+                    }
                     resizable_panel().child(
-                        v_flex().size_full().min_h_0().min_w_0().p_2().children(
-                            match selected_file_error {
-                                Some(error) => {
-                                    let path = retry_path.clone();
-                                    vec![
-                                        v_flex()
-                                            .size_full()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap_3()
-                                            .px_4()
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .text_center()
-                                                    .text_color(cx.theme().danger)
-                                                    .child(error.to_string()),
-                                            )
-                                            .child(
-                                                Button::new("file-retry")
-                                                    .outline()
-                                                    .small()
-                                                    .label("Retry")
-                                                    .on_click(move |_, _, cx| {
-                                                        let Some(path) = path.clone() else {
-                                                            return;
+                        diff_column.child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .p_2()
+                                    .children(match selected_file_error {
+                                        Some(error) => {
+                                            let path = retry_path.clone();
+                                            vec![
+                                                v_flex()
+                                                    .size_full()
+                                                    .items_center()
+                                                    .justify_center()
+                                                    .gap_3()
+                                                    .px_4()
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .text_center()
+                                                            .text_color(cx.theme().danger)
+                                                            .child(error.to_string()),
+                                                    )
+                                                    .child(
+                                                        Button::new("file-retry")
+                                                            .outline()
+                                                            .small()
+                                                            .label("Retry")
+                                                            .on_click(move |_, _, cx| {
+                                                                let Some(path) = path.clone() else {
+                                                                    return;
+                                                                };
+                                                                let _ = entity.update(cx, |this, cx| {
+                                                                    this.dispatch(
+                                                                        Intent::RetryFile(path),
+                                                                        cx,
+                                                                    );
+                                                                });
+                                                            }),
+                                                    )
+                                                    .into_any_element(),
+                                            ]
+                                        }
+                                        None => vec![
+                                            Diff::new(diff)
+                                                .size_full()
+                                                .soft_wrap(true)
+                                                .annotations(annotations)
+                                                .render_annotation({
+                                                    let cards = thread_cards.clone();
+                                                    move |annotation, _, cx| {
+                                                        let Some(card) = cards
+                                                            .iter()
+                                                            .find(|(id, _)| id == annotation.id())
+                                                        else {
+                                                            return div().into_any_element();
                                                         };
-                                                        let _ = entity.update(cx, |this, cx| {
-                                                            this.dispatch(
-                                                                Intent::RetryFile(path),
-                                                                cx,
-                                                            );
-                                                        });
-                                                    }),
-                                            )
-                                            .into_any_element(),
-                                    ]
-                                }
-                                None => vec![
-                                    Diff::new(diff)
-                                        .size_full()
-                                        .soft_wrap(true)
-                                        .annotations(annotations)
-                                        .render_annotation(move |annotation, _, cx| {
-                                            let body = comments
-                                                .iter()
-                                                .find(|(id, _)| id == annotation.id())
-                                                .map(|(_, body)| body.clone())
-                                                .unwrap_or_default();
-                                            v_flex()
-                                                .w_full()
-                                                .gap_1()
-                                                .p_2()
-                                                .rounded_md()
-                                                .bg(cx.theme().secondary)
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child("Annotation"),
-                                                )
-                                                .child(div().text_sm().child(body))
-                                        })
-                                        .on_add_annotation(move |range, _, _cx| {
-                                            let _ = add_entity.update(_cx, |this, cx| {
-                                                this.dispatch(
-                                                    Intent::AddAnnotation(range.clone()),
-                                                    cx,
-                                                );
-                                            });
-                                        })
-                                        .into_any_element(),
-                                ],
-                            },
-                        ),
+                                                        v_flex()
+                                                            .w_full()
+                                                            .gap_1()
+                                                            .p_2()
+                                                            .rounded_md()
+                                                            .bg(cx.theme().secondary)
+                                                            .child(
+                                                                div()
+                                                                    .text_xs()
+                                                                    .text_color(
+                                                                        cx.theme().muted_foreground,
+                                                                    )
+                                                                    .child(card.1.header.clone()),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .text_sm()
+                                                                    .child(card.1.body.clone()),
+                                                            )
+                                                            .children(card.1.suggestion.as_ref().map(
+                                                                |suggestion| {
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(
+                                                                            cx.theme()
+                                                                                .muted_foreground,
+                                                                        )
+                                                                        .child(format!(
+                                                                            "Suggestion: {suggestion}"
+                                                                        ))
+                                                                },
+                                                            ))
+                                                            .into_any_element()
+                                                    }
+                                                })
+                                                .on_add_annotation(move |range, _, _cx| {
+                                                    let _ = add_entity.update(_cx, |this, cx| {
+                                                        this.dispatch(
+                                                            Intent::AddDiffReviewComment(
+                                                                range.clone(),
+                                                            ),
+                                                            cx,
+                                                        );
+                                                    });
+                                                })
+                                                .into_any_element(),
+                                        ],
+                                    }),
+                            ),
                     )
                 }),
         )
         .into_any_element()
+}
+
+fn pending_review_bar(
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    h_flex()
+        .w_full()
+        .px_3()
+        .py_2()
+        .gap_2()
+        .items_center()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary)
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().muted_foreground)
+                .child("Pending review"),
+        )
+        .child(
+            Button::new("pending-submit-comment")
+                .outline()
+                .xsmall()
+                .label("Submit comment")
+                .on_click({
+                    let owner = entity.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.dispatch(
+                                Intent::SubmitPendingReview {
+                                    event: ReviewSubmitEvent::Comment,
+                                    summary_body: None,
+                                },
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .child(
+            Button::new("pending-approve")
+                .outline()
+                .xsmall()
+                .label("Approve")
+                .on_click({
+                    let owner = entity.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.dispatch(
+                                Intent::SubmitPendingReview {
+                                    event: ReviewSubmitEvent::Approve,
+                                    summary_body: None,
+                                },
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .child(
+            Button::new("pending-request-changes")
+                .outline()
+                .xsmall()
+                .label("Request changes")
+                .on_click({
+                    let owner = entity.clone();
+                    move |_, _, cx| {
+                        let _ = owner.update(cx, |this, cx| {
+                            this.dispatch(
+                                Intent::SubmitPendingReview {
+                                    event: ReviewSubmitEvent::RequestChanges,
+                                    summary_body: None,
+                                },
+                                cx,
+                            );
+                        });
+                    }
+                }),
+        )
+        .child(
+            Button::new("pending-discard")
+                .ghost()
+                .xsmall()
+                .label("Discard")
+                .on_click(move |_, _, cx| {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.dispatch(Intent::DiscardPendingReview, cx);
+                    });
+                }),
+        )
+}
+
+fn diff_threads_for_file(threads: &[ThreadView], selected_file: Option<&str>) -> Vec<ThreadView> {
+    let Some(path) = selected_file else {
+        return Vec::new();
+    };
+    threads
+        .iter()
+        .filter(|thread| {
+            thread
+                .anchor
+                .as_ref()
+                .is_some_and(|anchor| anchor.path == path)
+        })
+        .cloned()
+        .collect()
+}
+
+fn diff_annotation_for_thread(thread: &ThreadView) -> Option<DiffAnnotation> {
+    let anchor = thread.anchor.as_ref()?;
+    let side = match anchor.side {
+        DiffLineSide::Left => DiffSide::Original,
+        DiffLineSide::Right => DiffSide::Modified,
+    };
+    Some(DiffAnnotation::line(
+        ElementId::from(SharedString::from(thread.id.clone())),
+        DiffLinePosition::new(
+            SharedString::from(anchor.path.as_str()),
+            side,
+            anchor.end_line as usize,
+        ),
+    ))
+}
+
+struct ThreadCardData {
+    header: SharedString,
+    body: SharedString,
+    suggestion: Option<SharedString>,
+}
+
+fn thread_card_entry(thread: &ThreadView) -> Option<(ElementId, ThreadCardData)> {
+    let comment = thread.comments.first()?;
+    let mut header = if comment.is_pending {
+        "Draft · Review comment".to_string()
+    } else {
+        "Review comment".to_string()
+    };
+    if comment.suggestion.is_some() {
+        header.push_str(" · Suggestion");
+    }
+    Some((
+        ElementId::from(SharedString::from(thread.id.clone())),
+        ThreadCardData {
+            header: SharedString::from(header),
+            body: comment.body.clone(),
+            suggestion: comment.suggestion.clone(),
+        },
+    ))
 }
