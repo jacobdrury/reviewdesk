@@ -1,8 +1,6 @@
 //! Compact Check rollup control for Metadata and folded strip.
 
-use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     Context, InteractiveElement as _, IntoElement, ParentElement as _,
     StatefulInteractiveElement as _, Styled as _, div, px,

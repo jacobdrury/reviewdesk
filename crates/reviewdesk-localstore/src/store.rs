@@ -2,8 +2,9 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use reviewdesk_core::{
-    LocalStore, LocalStoreError, Patch, PipelinesSnapshot, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListQuery,
+    LocalStore, LocalStoreError, NotificationQuery, NotificationThread, NotificationThreadId,
+    Patch, PipelinesSnapshot, PullRequestDetail, PullRequestId, PullRequestListItem,
+    PullRequestListQuery,
 };
 use turso::{Builder, Connection, Database};
 
@@ -80,6 +81,31 @@ impl LocalStore for TursoLocalStore {
 
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
         detail_patch::get_patch(&self.conn, id).await
+    }
+
+    async fn sync_notifications(
+        &self,
+        threads: &[NotificationThread],
+    ) -> Result<(), LocalStoreError> {
+        crate::notification::sync_notifications(&self.conn, threads).await
+    }
+
+    async fn query_notifications(
+        &self,
+        query: &NotificationQuery,
+    ) -> Result<Vec<NotificationThread>, LocalStoreError> {
+        crate::notification::query_notifications(&self.conn, query).await
+    }
+
+    async fn set_notification_read(
+        &self,
+        id: &NotificationThreadId,
+    ) -> Result<(), LocalStoreError> {
+        crate::notification::set_notification_read(&self.conn, id).await
+    }
+
+    async fn remove_notification(&self, id: &NotificationThreadId) -> Result<(), LocalStoreError> {
+        crate::notification::remove_notification(&self.conn, id).await
     }
 
     async fn put_pipelines(

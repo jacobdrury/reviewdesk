@@ -99,6 +99,22 @@ create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_l
     (
         5,
         "
+create table reviewdesk_notification_threads (
+    id text not null primary key,
+    pull_request_id text not null,
+    title text not null,
+    repo_label text not null,
+    reason text not null,
+    unread integer not null default 1 check (unread in (0, 1)),
+    updated_at text not null
+);
+create index idx_notification_threads_updated_at on reviewdesk_notification_threads(updated_at);
+create index idx_notification_threads_unread on reviewdesk_notification_threads(unread);
+",
+    ),
+    (
+        6,
+        "
 create table pull_request_pipelines (
     pull_request_id text not null primary key,
     snapshot_json text not null
