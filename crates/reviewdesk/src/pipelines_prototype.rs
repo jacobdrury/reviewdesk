@@ -5,14 +5,15 @@
 //! checks, and empty ≠ green read in the Review pane? Merge/auto-merge stay on
 //! Metadata; Metadata only shows a compact Check rollup that activates this tab.
 //!
-//! Host shell is the picked primary chrome (Linear sidebar + right Metadata dock
-//! + focus Review). Switcher cycles Pipelines layout variants; `,` / `.` cycle
-//! stub scenarios.
+//! Visual language locked to the Linear Issues clone on
+//! `prototype/pull-requests-list-nav`: dense single-line rows, nest indent,
+//! collapsible group headers, quiet Filter/Display chrome, soft selection wash.
+//! Switcher cycles layout variants; `,` / `.` cycle stub scenarios.
 //!
-//! Three variants:
-//! - A (Nested list): rollup + expandable Pipeline → Job rows
-//! - B (Split panes): Pipeline list | Job detail (Files-like dual scroll)
-//! - C (Attention-first): needs-attention band, then denser Pipeline timeline
+//! Three variants (structure differs; paint matches Linear):
+//! - A (Issues list): Pipeline groups + Job rows (sub-issue nest)
+//! - B (Project detail): left Pipeline nav + Jobs as the main list
+//! - C (Group by status): Failed / Pending / Passed groups across Jobs
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/pipelines-tab` (never merge as-is)
@@ -97,9 +98,9 @@ impl PipelinesVariant {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::A => "Nested list",
-            Self::B => "Split panes",
-            Self::C => "Attention-first",
+            Self::A => "Issues list",
+            Self::B => "Project detail",
+            Self::C => "Group by status",
         }
     }
 
@@ -209,7 +210,6 @@ impl JobState {
             Self::Success => "passed",
             Self::Pending => "pending",
             Self::Failure => "failed",
-            Self::Neutral => "—",
         }
     }
 }

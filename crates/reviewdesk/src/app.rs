@@ -1,5 +1,6 @@
 //! Thin GPUI shell: chrome, Effect driver, and Render over [`ReviewSession`].
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
@@ -65,8 +66,9 @@ pub struct ReviewDesk {
     /// PROTOTYPE: Pipelines tab layout variant + stub scenario.
     pipelines_variant: PipelinesVariant,
     pipelines_scenario: StubScenario,
-    pipeline_expanded: Vec<bool>,
     selected_pipeline: usize,
+    /// Collapsed Linear-style group keys (`pipeline:0`, `status:failed`, …).
+    collapsed_groups: HashSet<String>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -105,8 +107,8 @@ impl ReviewDesk {
             metadata_open: false,
             pipelines_variant: PipelinesVariant::A,
             pipelines_scenario: StubScenario::FailingRequired,
-            pipeline_expanded: vec![true, false, false],
             selected_pipeline: 0,
+            collapsed_groups: HashSet::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -298,17 +300,15 @@ impl ReviewDesk {
         } else {
             self.pipelines_scenario.prev()
         };
-        let n = self.pipelines_scenario.data().pipelines.len();
-        self.pipeline_expanded = (0..n).map(|i| i == 0).collect();
         self.selected_pipeline = 0;
+        self.collapsed_groups.clear();
         cx.notify();
     }
 
-    pub(crate) fn toggle_pipeline_expanded(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.pipeline_expanded.len() {
-            self.pipeline_expanded.resize(index + 1, false);
+    pub(crate) fn toggle_collapsed_group(&mut self, key: String, cx: &mut Context<Self>) {
+        if !self.collapsed_groups.remove(&key) {
+            self.collapsed_groups.insert(key);
         }
-        self.pipeline_expanded[index] = !self.pipeline_expanded[index];
         cx.notify();
     }
 
@@ -411,8 +411,8 @@ impl Render for ReviewDesk {
                 metadata_open: self.metadata_open,
                 pipelines_variant: self.pipelines_variant,
                 pipelines_scenario: self.pipelines_scenario,
-                pipeline_expanded: self.pipeline_expanded.clone(),
                 selected_pipeline: self.selected_pipeline,
+                collapsed_groups: self.collapsed_groups.clone(),
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),

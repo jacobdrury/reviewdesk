@@ -1,10 +1,12 @@
-//! PROTOTYPE paint: Pipelines tab variants. Throwaway with the branch.
+//! PROTOTYPE paint: Linear Issues-style Pipelines tab variants.
+//! Visual language borrowed from `prototype/pull-requests-list-nav`.
+
+use std::collections::HashSet;
 
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
-    list::ListItem,
     resizable::{h_resizable, resizable_panel},
     scroll::Scrollbar,
     v_flex,
@@ -12,7 +14,7 @@ use gpui_kit::component::{
 use gpui_kit::{
     App, Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, UniformListScrollHandle, WeakEntity, div,
-    percentage, px, uniform_list, prelude::FluentBuilder as _,
+    px, uniform_list, prelude::FluentBuilder as _,
 };
 
 use crate::app::ReviewDesk;
@@ -20,11 +22,19 @@ use crate::pipelines_prototype::{
     JobState, PipelinesVariant, RollupState, StubJob, StubPipeline, StubPipelinesData, StubScenario,
 };
 
+/// Matches Linear Issues list nest padding from the PR-list prototype.
+const LIST_ROW_BASE_PL: f32 = 16.;
+const LIST_NEST_STEP: f32 = 20.;
+
+fn list_row_pl(depth: u8) -> f32 {
+    LIST_ROW_BASE_PL + LIST_NEST_STEP * f32::from(depth)
+}
+
 pub(crate) struct PipelinesPaint {
     pub variant: PipelinesVariant,
     pub scenario: StubScenario,
-    pub expanded: Vec<bool>,
     pub selected_pipeline: usize,
+    pub collapsed_groups: HashSet<String>,
     pub list_scroll: UniformListScrollHandle,
     pub detail_scroll: UniformListScrollHandle,
     pub entity: WeakEntity<ReviewDesk>,
@@ -47,16 +57,14 @@ pub(crate) fn render_compact_check_rollup(
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let data = scenario.data();
-    let (dot, color) = rollup_visual(data.rollup, cx);
+    let color = rollup_color(data.rollup, cx);
     div()
         .id("metadata-check-rollup")
         .cursor_pointer()
         .rounded_md()
         .px_2()
-        .py_1()
-        .border_1()
-        .border_color(cx.theme().border)
-        .hover(|s| s.bg(cx.theme().secondary.opacity(0.5)))
+        .py(px(5.))
+        .hover(|s| s.bg(cx.theme().secondary.opacity(0.45)))
         .on_click(cx.listener(|this, _, _, cx| {
             this.open_pipelines_tab(cx);
         }))
@@ -64,26 +72,38 @@ pub(crate) fn render_compact_check_rollup(
             h_flex()
                 .items_center()
                 .gap_2()
-                .child(div().text_sm().text_color(color).child(dot))
+                .child(
+                    Icon::new(rollup_icon(data.rollup))
+                        .xsmall()
+                        .text_color(color),
+                )
                 .child(
                     v_flex()
                         .gap_0()
+                        .min_w_0()
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .child("Check rollup"),
                         )
-                        .child(div().text_sm().truncate().child(data.rollup_label)),
+                        .child(
+                            div()
+                                .text_sm()
+                                .truncate()
+                                .child(data.rollup_label),
+                        ),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("→ Pipelines"),
+                        .child("Pipelines"),
                 ),
         )
 }
+
+// --- A: Issues list (Pipeline groups → Job rows) ---
 
 fn render_variant_a(
     paint: PipelinesPaint,
@@ -91,15 +111,15 @@ fn render_variant_a(
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let scroll = paint.list_scroll.clone();
-    let pipelines = data.pipelines;
-    let expanded = paint.expanded;
     let entity = paint.entity.clone();
-    let row_count = visible_row_count_a(pipelines, &expanded);
+    let collapsed = paint.collapsed_groups.clone();
+    let rows = build_issues_rows(data.pipelines, &collapsed);
+    let row_count = rows.len();
 
     v_flex()
         .size_full()
         .min_h_0()
-        .child(render_rollup_banner(&data, "A · Nested list", cx))
+        .child(render_linear_toolbar(&data, "pipeline", cx))
         .child(match data.empty_copy {
             Some(copy) => empty_state(copy, cx).into_any_element(),
             None => div()
@@ -107,33 +127,44 @@ fn render_variant_a(
                 .min_h_0()
                 .relative()
                 .child(
-                    uniform_list("proto-pipelines-a", row_count, {
-                        let expanded = expanded.clone();
-                        move |range, _, cx| {
-                            range
-                                .filter_map(|flat_ix| {
-                                    let row = row_at_a(pipelines, &expanded, flat_ix)?;
-                                    Some(match row {
-                                        FlatRow::Pipeline { index, pipeline } => {
-                                            let open =
-                                                expanded.get(index).copied().unwrap_or(false);
-                                            pipeline_row_a(
-                                                index,
-                                                pipeline,
-                                                open,
-                                                entity.clone(),
-                                                cx,
-                                            )
-                                            .into_any_element()
-                                        }
-                                        FlatRow::Job {
-                                            pipeline_index,
-                                            job,
-                                        } => job_row(pipeline_index, job, cx).into_any_element(),
-                                    })
-                                })
-                                .collect()
-                        }
+                    uniform_list("proto-pipelines-a", row_count, move |range, _, cx| {
+                        range
+                            .map(|ix| match &rows[ix] {
+                                FlatRow::Group {
+                                    key,
+                                    label,
+                                    count,
+                                    state,
+                                    depth,
+                                    can_rerun,
+                                } => group_header_row(
+                                    key,
+                                    label,
+                                    *count,
+                                    *state,
+                                    *depth,
+                                    *can_rerun,
+                                    collapsed.contains(key),
+                                    entity.clone(),
+                                    cx,
+                                )
+                                .into_any_element(),
+                                FlatRow::Job {
+                                    pipeline_name,
+                                    pipeline_index,
+                                    job,
+                                    depth,
+                                } => job_issue_row(
+                                    *pipeline_index,
+                                    pipeline_name,
+                                    job,
+                                    *depth,
+                                    false,
+                                    cx,
+                                )
+                                .into_any_element(),
+                            })
+                            .collect()
                     })
                     .size_full()
                     .track_scroll(&scroll),
@@ -142,6 +173,8 @@ fn render_variant_a(
                 .into_any_element(),
         })
 }
+
+// --- B: Project detail (Pipeline nav | Jobs list) ---
 
 fn render_variant_b(
     paint: PipelinesPaint,
@@ -159,7 +192,7 @@ fn render_variant_b(
     v_flex()
         .size_full()
         .min_h_0()
-        .child(render_rollup_banner(&data, "B · Split panes", cx))
+        .child(render_linear_toolbar(&data, "project", cx))
         .child(match data.empty_copy {
             Some(copy) => empty_state(copy, cx).into_any_element(),
             None => div()
@@ -169,138 +202,19 @@ fn render_variant_b(
                     h_resizable("proto-pipelines-split")
                         .child(
                             resizable_panel()
-                                .size(px(280.))
-                                .size_range(px(200.)..px(420.))
-                                .child(
-                                    v_flex()
-                                        .size_full()
-                                        .min_h_0()
-                                        .border_r_1()
-                                        .border_color(cx.theme().border)
-                                        .child(
-                                            div()
-                                                .px_3()
-                                                .py(px(4.))
-                                                .border_b_1()
-                                                .border_color(cx.theme().border)
-                                                .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .font_medium()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .child("PIPELINES"),
-                                                ),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_h_0()
-                                                .relative()
-                                                .child(
-                                                    uniform_list(
-                                                        "proto-pipelines-b-list",
-                                                        pipelines.len(),
-                                                        {
-                                                            let entity = entity.clone();
-                                                            move |range, _, cx| {
-                                                                range
-                                                                    .map(|ix| {
-                                                                        let pipeline =
-                                                                            &pipelines[ix];
-                                                                        let is_sel = ix == selected;
-                                                                        let owner = entity.clone();
-                                                                        ListItem::new(
-                                                                            SharedString::from(
-                                                                                format!(
-                                                                                    "pl-b-{ix}"
-                                                                                ),
-                                                                            ),
-                                                                        )
-                                                                        .selected(is_sel)
-                                                                        .px_3()
-                                                                        .py(px(6.))
-                                                                        .child(
-                                                                            v_flex()
-                                                                                .w_full()
-                                                                                .gap_1()
-                                                                                .child(
-                                                                                    h_flex()
-                                                                                        .w_full()
-                                                                                        .items_center()
-                                                                                        .gap_2()
-                                                                                        .child(
-                                                                                            state_dot(
-                                                                                                pipeline
-                                                                                                    .state,
-                                                                                                cx,
-                                                                                            ),
-                                                                                        )
-                                                                                        .child(
-                                                                                            div()
-                                                                                                .flex_1()
-                                                                                                .min_w_0()
-                                                                                                .text_sm()
-                                                                                                .font_medium()
-                                                                                                .truncate()
-                                                                                                .child(
-                                                                                                    pipeline
-                                                                                                        .name,
-                                                                                                ),
-                                                                                        ),
-                                                                                )
-                                                                                .child(
-                                                                                    div()
-                                                                                        .text_xs()
-                                                                                        .text_color(
-                                                                                            cx.theme()
-                                                                                                .muted_foreground,
-                                                                                        )
-                                                                                        .truncate()
-                                                                                        .child(
-                                                                                            format!(
-                                                                                                "{} · {} · {}",
-                                                                                                pipeline
-                                                                                                    .kind
-                                                                                                    .label(),
-                                                                                                pipeline
-                                                                                                    .state
-                                                                                                    .label(),
-                                                                                                pipeline
-                                                                                                    .created
-                                                                                            ),
-                                                                                        ),
-                                                                                ),
-                                                                        )
-                                                                        .on_click(
-                                                                            move |_, _, cx| {
-                                                                                let _ = owner
-                                                                                    .update(
-                                                                                        cx,
-                                                                                        |this,
-                                                                                         cx| {
-                                                                                            this.select_pipeline(
-                                                                                            ix, cx,
-                                                                                        );
-                                                                                        },
-                                                                                    );
-                                                                            },
-                                                                        )
-                                                                        .into_any_element()
-                                                                    })
-                                                                    .collect()
-                                                            }
-                                                        },
-                                                    )
-                                                    .size_full()
-                                                    .track_scroll(&list_scroll),
-                                                )
-                                                .child(Scrollbar::vertical(&list_scroll)),
-                                        ),
-                                ),
+                                .size(px(220.))
+                                .size_range(px(180.)..px(320.))
+                                .child(render_pipeline_nav(
+                                    pipelines,
+                                    selected,
+                                    list_scroll,
+                                    entity,
+                                    cx,
+                                )),
                         )
                         .child(
                             resizable_panel().size_range(px(280.)..px(2000.)).child(
-                                render_pipeline_detail(
+                                render_jobs_main(
                                     pipelines.get(selected),
                                     detail_scroll,
                                     cx,
@@ -312,25 +226,23 @@ fn render_variant_b(
         })
 }
 
+// --- C: Group by status ---
+
 fn render_variant_c(
     paint: PipelinesPaint,
     data: StubPipelinesData,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let scroll = paint.list_scroll.clone();
-    let attention = attention_jobs(data.pipelines);
-    let pipelines = data.pipelines;
-    let attention_len = attention.len();
-    let total = if data.empty_copy.is_some() {
-        0
-    } else {
-        attention_len + 1 + pipelines.len()
-    };
+    let entity = paint.entity.clone();
+    let collapsed = paint.collapsed_groups.clone();
+    let rows = build_status_rows(data.pipelines, &collapsed);
+    let row_count = rows.len();
 
     v_flex()
         .size_full()
         .min_h_0()
-        .child(render_rollup_banner(&data, "C · Attention-first", cx))
+        .child(render_linear_toolbar(&data, "status", cx))
         .child(match data.empty_copy {
             Some(copy) => empty_state(copy, cx).into_any_element(),
             None => div()
@@ -338,24 +250,42 @@ fn render_variant_c(
                 .min_h_0()
                 .relative()
                 .child(
-                    uniform_list("proto-pipelines-c", total, move |range, _, cx| {
+                    uniform_list("proto-pipelines-c", row_count, move |range, _, cx| {
                         range
-                            .map(|ix| {
-                                if ix < attention_len {
-                                    let (pipeline_name, job) = attention[ix];
-                                    return attention_row(ix, pipeline_name, job, cx)
-                                        .into_any_element();
-                                }
-                                if ix == attention_len {
-                                    let label = if attention_len == 0 {
-                                        "All Pipelines · newest first"
-                                    } else {
-                                        "All Pipelines · newest first (below attention)"
-                                    };
-                                    return section_label(label, cx).into_any_element();
-                                }
-                                let p_ix = ix - attention_len - 1;
-                                timeline_pipeline_row(p_ix, &pipelines[p_ix], cx).into_any_element()
+                            .map(|ix| match &rows[ix] {
+                                FlatRow::Group {
+                                    key,
+                                    label,
+                                    count,
+                                    state,
+                                    depth,
+                                    can_rerun,
+                                } => group_header_row(
+                                    key,
+                                    label,
+                                    *count,
+                                    *state,
+                                    *depth,
+                                    *can_rerun,
+                                    collapsed.contains(key),
+                                    entity.clone(),
+                                    cx,
+                                )
+                                .into_any_element(),
+                                FlatRow::Job {
+                                    pipeline_name,
+                                    pipeline_index,
+                                    job,
+                                    depth,
+                                } => job_issue_row(
+                                    *pipeline_index,
+                                    pipeline_name,
+                                    job,
+                                    *depth,
+                                    true,
+                                    cx,
+                                )
+                                .into_any_element(),
                             })
                             .collect()
                     })
@@ -367,56 +297,206 @@ fn render_variant_c(
         })
 }
 
-fn render_rollup_banner(
+/// Quiet Filter + Display strip + Check rollup chip (Linear top chrome).
+fn render_linear_toolbar(
     data: &StubPipelinesData,
-    variant_hint: &str,
+    group_by: &str,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    let (dot, color) = rollup_visual(data.rollup, cx);
+    let color = rollup_color(data.rollup, cx);
     h_flex()
         .w_full()
-        .px_3()
-        .py(px(8.))
+        .px_4()
+        .py_2()
         .items_center()
-        .justify_between()
-        .gap_3()
+        .gap_2()
         .border_b_1()
         .border_color(cx.theme().border)
-        .bg(rollup_bg(data.rollup, cx))
         .child(
             h_flex()
                 .items_center()
-                .gap_2()
-                .min_w_0()
-                .child(div().text_sm().text_color(color).child(dot))
+                .gap_1()
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .hover(|s| s.bg(cx.theme().secondary.opacity(0.5)))
                 .child(
-                    v_flex()
-                        .min_w_0()
-                        .gap_0()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("Check rollup · {variant_hint}")),
-                        )
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_medium()
-                                .truncate()
-                                .child(data.rollup_label),
-                        ),
+                    Icon::new(IconName::Menu)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Filter"),
                 ),
+        )
+        .child(filter_chip("Rollup", "is", data.rollup_label, rollup_icon(data.rollup), color, cx))
+        .when(data.rollup != RollupState::Absent, |el| {
+            el.child(filter_chip(
+                "Required",
+                "drives",
+                "urgency",
+                IconName::Asterisk,
+                cx.theme().muted_foreground,
+                cx,
+            ))
+        })
+        .child(div().flex_1())
+        .child(
+            h_flex()
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .hover(|s| s.bg(cx.theme().secondary.opacity(0.5)))
+                .child(
+                    Icon::new(IconName::Settings2)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Display"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("· {group_by}")),
+                ),
+        )
+}
+
+fn filter_chip(
+    key: &str,
+    op: &str,
+    value: &str,
+    icon: IconName,
+    icon_color: gpui_kit::Hsla,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py(px(3.))
+        .rounded_md()
+        .bg(cx.theme().secondary.opacity(0.55))
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(key.to_string()),
         )
         .child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(format!("state · {}", data.rollup.short())),
+                .child(op.to_string()),
+        )
+        .child(Icon::new(icon).xsmall().text_color(icon_color))
+        .child(div().text_xs().child(value.to_string()))
+}
+
+fn render_pipeline_nav(
+    pipelines: &'static [StubPipeline],
+    selected: usize,
+    scroll: UniformListScrollHandle,
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    v_flex()
+        .size_full()
+        .min_h_0()
+        .border_r_1()
+        .border_color(cx.theme().border)
+        .child(
+            div()
+                .px_3()
+                .py(px(8.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Pipelines"),
+                ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .relative()
+                .child(
+                    uniform_list("proto-pipelines-b-nav", pipelines.len(), move |range, _, cx| {
+                        range
+                            .map(|ix| {
+                                let pipeline = &pipelines[ix];
+                                let is_sel = ix == selected;
+                                let owner = entity.clone();
+                                div()
+                                    .id(SharedString::from(format!("nav-pl-{ix}")))
+                                    .w_full()
+                                    .px_3()
+                                    .py(px(7.))
+                                    .border_b_1()
+                                    .border_color(cx.theme().border.opacity(0.55))
+                                    .cursor_pointer()
+                                    .when(is_sel, |el| {
+                                        el.bg(cx.theme().secondary.opacity(0.4))
+                                    })
+                                    .when(!is_sel, |el| {
+                                        el.hover(|s| s.bg(cx.theme().secondary.opacity(0.25)))
+                                    })
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |this, cx| {
+                                            this.select_pipeline(ix, cx);
+                                        });
+                                    })
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Icon::new(job_icon(pipeline.state))
+                                                    .xsmall()
+                                                    .text_color(job_color(pipeline.state, cx)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .text_sm()
+                                                    .truncate()
+                                                    .child(pipeline.name),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(pipeline.created),
+                                            ),
+                                    )
+                                    .into_any_element()
+                            })
+                            .collect()
+                    })
+                    .size_full()
+                    .track_scroll(&scroll),
+                )
+                .child(Scrollbar::vertical(&scroll)),
         )
 }
 
-fn render_pipeline_detail(
+fn render_jobs_main(
     pipeline: Option<&StubPipeline>,
     scroll: UniformListScrollHandle,
     cx: &mut Context<ReviewDesk>,
@@ -425,11 +505,9 @@ fn render_pipeline_detail(
         return empty_state("Select a Pipeline.", cx).into_any_element();
     };
     let jobs = pipeline.jobs;
-    let can_rerun = pipeline.can_rerun;
     let name = pipeline.name;
     let kind = pipeline.kind.label();
-    let state = pipeline.state.label();
-    let created = pipeline.created;
+    let can_rerun = pipeline.can_rerun;
 
     v_flex()
         .size_full()
@@ -437,27 +515,39 @@ fn render_pipeline_detail(
         .child(
             h_flex()
                 .w_full()
-                .px_3()
-                .py(px(6.))
+                .px_4()
+                .py(px(8.))
                 .items_center()
                 .justify_between()
                 .border_b_1()
                 .border_color(cx.theme().border)
                 .child(
-                    v_flex()
+                    h_flex()
+                        .items_center()
+                        .gap_2()
                         .min_w_0()
-                        .gap_0()
-                        .child(div().text_sm().font_medium().truncate().child(name))
+                        .child(
+                            Icon::new(job_icon(pipeline.state))
+                                .xsmall()
+                                .text_color(job_color(pipeline.state, cx)),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_medium()
+                                .truncate()
+                                .child(name),
+                        )
                         .child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(format!("{kind} · {state} · {created}")),
+                                .child(kind),
                         ),
                 )
                 .child(if can_rerun {
                     Button::new("rerun-pipeline")
-                        .outline()
+                        .ghost()
                         .xsmall()
                         .label("Re-run")
                         .on_click(|_, _, _| {})
@@ -478,7 +568,9 @@ fn render_pipeline_detail(
                 .child(
                     uniform_list("proto-pipelines-b-jobs", jobs.len(), move |range, _, cx| {
                         range
-                            .map(|ix| job_row(0, &jobs[ix], cx).into_any_element())
+                            .map(|ix| {
+                                job_issue_row(0, name, &jobs[ix], 0, false, cx).into_any_element()
+                            })
                             .collect()
                     })
                     .size_full()
@@ -489,263 +581,227 @@ fn render_pipeline_detail(
         .into_any_element()
 }
 
-fn pipeline_row_a(
-    index: usize,
-    pipeline: &StubPipeline,
-    open: bool,
+fn group_header_row(
+    key: &str,
+    label: &str,
+    count: usize,
+    state: Option<JobState>,
+    depth: u8,
+    can_rerun: bool,
+    is_collapsed: bool,
     entity: WeakEntity<ReviewDesk>,
     cx: &App,
 ) -> impl IntoElement {
-    let can_rerun = pipeline.can_rerun;
-    h_flex()
-        .id(SharedString::from(format!("pl-a-{index}")))
+    let chevron = if is_collapsed {
+        IconName::ChevronRight
+    } else {
+        IconName::ChevronDown
+    };
+    let group_key = key.to_string();
+    let pt = if depth == 0 { 14. } else { 8. };
+
+    let mut header = h_flex().w_full().items_center().gap_2().child(
+        Icon::new(chevron)
+            .xsmall()
+            .text_color(cx.theme().muted_foreground),
+    );
+    if let Some(state) = state {
+        header = header.child(
+            Icon::new(job_icon(state))
+                .xsmall()
+                .text_color(job_color(state, cx)),
+        );
+    } else {
+        header = header.child(
+            Icon::new(IconName::Folder)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        );
+    }
+
+    div()
+        .id(SharedString::from(format!("group-{key}")))
         .w_full()
-        .px_3()
-        .py(px(6.))
-        .items_center()
-        .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border)
+        .pl(px(list_row_pl(depth)))
+        .pr_4()
+        .pt(px(pt))
+        .pb(px(6.))
         .cursor_pointer()
-        .hover(|s| s.bg(cx.theme().secondary.opacity(0.35)))
+        .rounded_md()
+        .hover(|s| s.bg(cx.theme().secondary.opacity(0.3)))
         .on_click(move |_, _, cx| {
+            let key = group_key.clone();
             let _ = entity.update(cx, |this, cx| {
-                this.toggle_pipeline_expanded(index, cx);
+                this.toggle_collapsed_group(key, cx);
             });
         })
         .child(
-            Icon::new(IconName::ChevronRight)
-                .xsmall()
-                .text_color(cx.theme().muted_foreground)
-                .rotate(percentage(if open { 0.25 } else { 0. })),
-        )
-        .child(state_dot(pipeline.state, cx))
-        .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_0()
+            header
                 .child(
-                    div()
-                        .text_sm()
-                        .font_medium()
-                        .truncate()
-                        .child(pipeline.name),
+                    h_flex()
+                        .items_center()
+                        .gap_1()
+                        .child(div().text_sm().font_medium().child(label.to_string()))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(count.to_string()),
+                        ),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .truncate()
-                        .child(format!(
-                            "{} · {} jobs · {}",
-                            pipeline.kind.label(),
-                            pipeline.jobs.len(),
-                            pipeline.created
-                        )),
-                ),
+                .child(div().flex_1())
+                .child(if can_rerun {
+                    Button::new(SharedString::from(format!("rerun-group-{key}")))
+                        .ghost()
+                        .xsmall()
+                        .label("Re-run")
+                        .on_click(|_, _, _| {})
+                        .into_any_element()
+                } else {
+                    div().into_any_element()
+                }),
         )
-        .child(if can_rerun {
-            Button::new(SharedString::from(format!("rerun-a-{index}")))
-                .ghost()
-                .xsmall()
-                .label("Re-run")
-                .on_click(|_, _, _| {})
-                .into_any_element()
-        } else {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("App")
-                .into_any_element()
-        })
 }
 
-fn job_row(pipeline_index: usize, job: &StubJob, cx: &App) -> impl IntoElement {
-    let emphasis = job.required && matches!(job.state, JobState::Failure | JobState::Pending);
-    h_flex()
-        .id(SharedString::from(format!(
-            "job-{}-{}",
-            pipeline_index, job.name
-        )))
-        .w_full()
-        .px_3()
-        .pl_8()
-        .py(px(4.))
-        .items_center()
-        .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border.opacity(0.6))
-        .when(emphasis, |el| el.bg(cx.theme().danger.opacity(0.08)))
-        .child(state_dot(job.state, cx))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .truncate()
-                .when(emphasis, |el| el.font_medium())
-                .child(job.name),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(if job.required { "required" } else { "optional" }),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(job.duration),
-        )
-        .child(if job.can_rerun {
-            Button::new(SharedString::from(format!(
-                "rerun-job-{}-{}",
-                pipeline_index, job.name
-            )))
-            .ghost()
-            .xsmall()
-            .label("Re-run")
-            .on_click(|_, _, _| {})
-            .into_any_element()
-        } else {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("—")
-                .into_any_element()
-        })
-}
-
-fn attention_row(
-    ix: usize,
+/// Dense Linear Issues row for a Job.
+fn job_issue_row(
+    pipeline_index: usize,
     pipeline_name: &str,
     job: &StubJob,
+    depth: u8,
+    show_pipeline_pill: bool,
     cx: &App,
 ) -> impl IntoElement {
-    h_flex()
-        .id(SharedString::from(format!("attn-{ix}")))
+    let emphasis = job.required && matches!(job.state, JobState::Failure | JobState::Pending);
+    let mut row = h_flex()
         .w_full()
-        .px_3()
-        .py(px(6.))
         .items_center()
         .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().danger.opacity(0.1))
-        .child(state_dot(job.state, cx))
         .child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_0()
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.))
                 .child(
                     div()
-                        .text_sm()
-                        .font_medium()
-                        .truncate()
-                        .child(format!("{} · {}", pipeline_name, job.name)),
+                        .flex_none()
+                        .w(px(14.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(job_icon(job.state))
+                                .xsmall()
+                                .text_color(job_color(job.state, cx)),
+                        ),
                 )
                 .child(
                     div()
+                        .flex_none()
+                        .w(px(52.))
+                        .text_xs()
+                        .text_color(if job.required {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(if job.required { "req" } else { "opt" }),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(40.))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "{} · {}",
-                            if job.required {
-                                "required"
-                            } else {
-                                "optional"
-                            },
-                            job.state.label()
-                        )),
+                        .child(job.duration),
                 ),
-        )
-        .child(if job.can_rerun {
-            Button::new(SharedString::from(format!("rerun-attn-{ix}")))
-                .outline()
-                .xsmall()
-                .label("Re-run")
-                .on_click(|_, _, _| {})
-                .into_any_element()
-        } else {
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("display only")
-                .into_any_element()
-        })
-}
-
-fn timeline_pipeline_row(index: usize, pipeline: &StubPipeline, cx: &App) -> impl IntoElement {
-    let required_fail = pipeline
-        .jobs
-        .iter()
-        .any(|j| j.required && j.state == JobState::Failure);
-    let required_pending = pipeline
-        .jobs
-        .iter()
-        .any(|j| j.required && j.state == JobState::Pending);
-    let urgency = if required_fail {
-        "required failing"
-    } else if required_pending {
-        "required pending"
-    } else {
-        "ok / optional noise"
-    };
-
-    h_flex()
-        .id(SharedString::from(format!("tl-{index}")))
-        .w_full()
-        .px_3()
-        .py(px(5.))
-        .items_center()
-        .gap_2()
-        .border_b_1()
-        .border_color(cx.theme().border)
-        .child(
-            div()
-                .w(px(8.))
-                .h(px(8.))
-                .rounded_full()
-                .bg(state_color(pipeline.state, cx)),
         )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .text_sm()
+                .when(emphasis, |el| el.font_medium())
                 .truncate()
-                .child(format!(
-                    "{} · {} · {}",
-                    pipeline.name,
-                    pipeline.kind.label(),
-                    pipeline.created
-                )),
-        )
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(urgency),
-        )
+                .child(job.name),
+        );
+
+    if show_pipeline_pill {
+        row = row.child(pipeline_pill(pipeline_name, cx));
+    }
+
+    if job.state == JobState::Failure && job.required {
+        row = row.child(
+            h_flex()
+                .items_center()
+                .justify_center()
+                .size(px(16.))
+                .rounded_full()
+                .bg(cx.theme().danger.opacity(0.85))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger_foreground)
+                        .child("!"),
+                ),
+        );
+    }
+
+    row = row.child(if job.can_rerun {
+        Button::new(SharedString::from(format!(
+            "rerun-job-{pipeline_index}-{}",
+            job.name
+        )))
+        .ghost()
+        .xsmall()
+        .label("Re-run")
+        .on_click(|_, _, _| {})
+        .into_any_element()
+    } else {
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child("—")
+            .into_any_element()
+    });
+
+    div()
+        .id(SharedString::from(format!(
+            "job-{pipeline_index}-{}",
+            job.name
+        )))
+        .w_full()
+        .pl(px(list_row_pl(depth)))
+        .pr_4()
+        .py(px(7.))
+        .border_b_1()
+        .border_color(cx.theme().border.opacity(0.55))
+        .when(emphasis, |el| el.bg(cx.theme().danger.opacity(0.06)))
+        .hover(|s| s.bg(cx.theme().secondary.opacity(0.25)))
+        .child(row)
 }
 
-fn section_label(text: &str, cx: &App) -> impl IntoElement {
-    div()
-        .w_full()
-        .px_3()
-        .py(px(6.))
-        .bg(cx.theme().secondary.opacity(0.4))
-        .border_b_1()
-        .border_color(cx.theme().border)
+fn pipeline_pill(name: &str, cx: &App) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .py(px(2.))
+        .rounded_md()
+        .bg(cx.theme().secondary.opacity(0.65))
+        .flex_shrink_0()
+        .child(
+            Icon::new(IconName::LoaderCircle)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        )
         .child(
             div()
+                .max_w(px(120.))
                 .text_xs()
-                .font_medium()
                 .text_color(cx.theme().muted_foreground)
-                .child(text.to_string()),
+                .truncate()
+                .child(name.to_string()),
         )
 }
 
@@ -757,6 +813,10 @@ fn empty_state(copy: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
         .justify_center()
         .px_6()
         .gap_2()
+        .child(
+            Icon::new(IconName::Square)
+                .text_color(cx.theme().muted_foreground),
+        )
         .child(
             div()
                 .text_sm()
@@ -773,92 +833,119 @@ fn empty_state(copy: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
         )
 }
 
-fn attention_jobs(pipelines: &[StubPipeline]) -> Vec<(&'static str, &'static StubJob)> {
-    let mut out = Vec::new();
-    for pipeline in pipelines {
-        for job in pipeline.jobs {
-            let required_bad =
-                job.required && matches!(job.state, JobState::Failure | JobState::Pending);
-            let optional_fail = !job.required && job.state == JobState::Failure;
-            if !required_bad && !optional_fail {
-                continue;
-            }
-            out.push((pipeline.name, job));
-        }
-    }
-    out.sort_by_key(|(_, job)| {
-        let required_rank = if job.required { 0 } else { 1 };
-        let state_rank = match job.state {
-            JobState::Failure => 0,
-            JobState::Pending => 1,
-            _ => 2,
-        };
-        (required_rank, state_rank)
-    });
-    out
-}
-
 enum FlatRow {
-    Pipeline {
-        index: usize,
-        pipeline: &'static StubPipeline,
+    Group {
+        key: String,
+        label: String,
+        count: usize,
+        state: Option<JobState>,
+        depth: u8,
+        can_rerun: bool,
     },
     Job {
+        pipeline_name: &'static str,
         pipeline_index: usize,
         job: &'static StubJob,
+        depth: u8,
     },
 }
 
-fn visible_row_count_a(pipelines: &[StubPipeline], expanded: &[bool]) -> usize {
-    let mut n = 0;
-    for (ix, pipeline) in pipelines.iter().enumerate() {
-        n += 1;
-        if expanded.get(ix).copied().unwrap_or(false) {
-            n += pipeline.jobs.len();
-        }
-    }
-    n
-}
-
-fn row_at_a(
+fn build_issues_rows(
     pipelines: &'static [StubPipeline],
-    expanded: &[bool],
-    flat_ix: usize,
-) -> Option<FlatRow> {
-    let mut cursor = 0;
+    collapsed: &HashSet<String>,
+) -> Vec<FlatRow> {
+    let mut rows = Vec::new();
     for (index, pipeline) in pipelines.iter().enumerate() {
-        if cursor == flat_ix {
-            return Some(FlatRow::Pipeline { index, pipeline });
-        }
-        cursor += 1;
-        if !expanded.get(index).copied().unwrap_or(false) {
+        let key = format!("pipeline:{index}");
+        rows.push(FlatRow::Group {
+            key: key.clone(),
+            label: pipeline.name.to_string(),
+            count: pipeline.jobs.len(),
+            state: Some(pipeline.state),
+            depth: 0,
+            can_rerun: pipeline.can_rerun,
+        });
+        if collapsed.contains(&key) {
             continue;
         }
         for job in pipeline.jobs {
-            if cursor == flat_ix {
-                return Some(FlatRow::Job {
-                    pipeline_index: index,
-                    job,
-                });
-            }
-            cursor += 1;
+            rows.push(FlatRow::Job {
+                pipeline_name: pipeline.name,
+                pipeline_index: index,
+                job,
+                depth: 1,
+            });
         }
     }
-    None
+    rows
 }
 
-fn state_dot(state: JobState, cx: &App) -> impl IntoElement {
-    div()
-        .text_sm()
-        .text_color(state_color(state, cx))
-        .child(match state {
-            JobState::Success => "●",
-            JobState::Pending => "◐",
-            JobState::Failure => "✕",
-        })
+fn build_status_rows(
+    pipelines: &'static [StubPipeline],
+    collapsed: &HashSet<String>,
+) -> Vec<FlatRow> {
+    let mut failed = Vec::new();
+    let mut pending = Vec::new();
+    let mut passed = Vec::new();
+    for (index, pipeline) in pipelines.iter().enumerate() {
+        for job in pipeline.jobs {
+            let entry = (pipeline.name, index, job);
+            match job.state {
+                JobState::Failure => failed.push(entry),
+                JobState::Pending => pending.push(entry),
+                JobState::Success => passed.push(entry),
+            }
+        }
+    }
+    // Required urgency first within each bucket.
+    let sort_jobs = |items: &mut Vec<(&'static str, usize, &'static StubJob)>| {
+        items.sort_by_key(|(_, _, job)| if job.required { 0 } else { 1 });
+    };
+    sort_jobs(&mut failed);
+    sort_jobs(&mut pending);
+    sort_jobs(&mut passed);
+
+    let mut rows = Vec::new();
+    for (key, label, state, items) in [
+        ("status:failed", "Failed", JobState::Failure, failed),
+        ("status:pending", "Pending", JobState::Pending, pending),
+        ("status:passed", "Passed", JobState::Success, passed),
+    ] {
+        if items.is_empty() {
+            continue;
+        }
+        rows.push(FlatRow::Group {
+            key: key.to_string(),
+            label: label.to_string(),
+            count: items.len(),
+            state: Some(state),
+            depth: 0,
+            can_rerun: false,
+        });
+        if collapsed.contains(key) {
+            continue;
+        }
+        for (pipeline_name, pipeline_index, job) in items {
+            rows.push(FlatRow::Job {
+                pipeline_name,
+                pipeline_index,
+                job,
+                depth: 1,
+            });
+        }
+    }
+    rows
 }
 
-fn state_color(state: JobState, cx: &App) -> gpui_kit::Hsla {
+fn job_icon(state: JobState) -> IconName {
+    match state {
+        JobState::Success => IconName::CircleCheck,
+        JobState::Pending => IconName::LoaderCircle,
+        JobState::Failure => IconName::CircleX,
+    }
+}
+
+fn job_color(state: JobState, cx: &App) -> gpui_kit::Hsla {
     match state {
         JobState::Success => cx.theme().success,
         JobState::Pending => cx.theme().warning,
@@ -866,23 +953,20 @@ fn state_color(state: JobState, cx: &App) -> gpui_kit::Hsla {
     }
 }
 
-fn rollup_visual(
-    state: RollupState,
-    cx: &mut Context<ReviewDesk>,
-) -> (&'static str, gpui_kit::Hsla) {
+fn rollup_icon(state: RollupState) -> IconName {
     match state {
-        RollupState::Success => ("●", cx.theme().success),
-        RollupState::Pending => ("◐", cx.theme().warning),
-        RollupState::Failure => ("✕", cx.theme().danger),
-        RollupState::Absent => ("○", cx.theme().muted_foreground),
+        RollupState::Success => IconName::CircleCheck,
+        RollupState::Pending => IconName::LoaderCircle,
+        RollupState::Failure => IconName::CircleX,
+        RollupState::Absent => IconName::Square,
     }
 }
 
-fn rollup_bg(state: RollupState, cx: &mut Context<ReviewDesk>) -> gpui_kit::Hsla {
+fn rollup_color(state: RollupState, cx: &mut Context<ReviewDesk>) -> gpui_kit::Hsla {
     match state {
-        RollupState::Failure => cx.theme().danger.opacity(0.1),
-        RollupState::Pending => cx.theme().warning.opacity(0.1),
-        RollupState::Success => cx.theme().success.opacity(0.08),
-        RollupState::Absent => cx.theme().secondary.opacity(0.35),
+        RollupState::Success => cx.theme().success,
+        RollupState::Pending => cx.theme().warning,
+        RollupState::Failure => cx.theme().danger,
+        RollupState::Absent => cx.theme().muted_foreground,
     }
 }
