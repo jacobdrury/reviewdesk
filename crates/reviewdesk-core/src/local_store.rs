@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::id::PullRequestId;
+use crate::inbox::{InboxItem, InboxQuery};
 use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
 
@@ -44,6 +45,12 @@ impl LocalStoreError {
 pub trait LocalStore: Send + Sync {
     /// Schema version after the latest successful migration.
     async fn schema_version(&self) -> Result<u32, LocalStoreError>;
+
+    /// Upserts Inbox rows from a Provider sync snapshot and removes rows not in `items`.
+    async fn sync_inbox(&self, items: &[InboxItem]) -> Result<(), LocalStoreError>;
+
+    /// Lists Inbox rows matching `query` (filters, sort). Does not load Patch blobs.
+    async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError>;
 
     /// Persists overview detail for a pull request, replacing any prior row for the same id.
     async fn put_pull_request_detail(

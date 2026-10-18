@@ -2,7 +2,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use reviewdesk_core::{
-    LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId,
+    InboxItem, InboxQuery, LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId,
 };
 use turso::{Builder, Connection, Database};
 
@@ -43,6 +43,14 @@ impl TursoLocalStore {
 impl LocalStore for TursoLocalStore {
     async fn schema_version(&self) -> Result<u32, LocalStoreError> {
         migrate::applied_version(&self.conn).await
+    }
+
+    async fn sync_inbox(&self, items: &[InboxItem]) -> Result<(), LocalStoreError> {
+        crate::inbox::sync_inbox(&self.conn, items).await
+    }
+
+    async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError> {
+        crate::inbox::query_inbox(&self.conn, query).await
     }
 
     async fn put_pull_request_detail(

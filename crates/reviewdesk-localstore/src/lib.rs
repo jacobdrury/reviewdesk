@@ -2,6 +2,7 @@
 
 mod detail_patch;
 mod error;
+mod inbox;
 mod migrate;
 mod store;
 
