@@ -87,7 +87,7 @@ async fn sync_notifications_reconcile_drops_absent_rows() {
         .await
         .expect("sync");
     store
-        .sync_notifications(&[keep.clone()])
+        .sync_notifications(std::slice::from_ref(&keep))
         .await
         .expect("reconcile");
 
@@ -110,7 +110,7 @@ async fn set_notification_read_removes_from_default_unread_list() {
         Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
     );
     store
-        .sync_notifications(&[row.clone()])
+        .sync_notifications(std::slice::from_ref(&row))
         .await
         .expect("sync");
 
@@ -145,7 +145,7 @@ async fn remove_notification_deletes_row() {
         Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
     );
     store
-        .sync_notifications(&[row.clone()])
+        .sync_notifications(std::slice::from_ref(&row))
         .await
         .expect("sync");
 

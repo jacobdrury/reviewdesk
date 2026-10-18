@@ -157,34 +157,34 @@ fn render_view_tabs(
                     }),
             )
             .when(pane.view_dirty, |el| {
-            el.child(
-                Button::new("view-save")
-                    .ghost()
-                    .xsmall()
-                    .label("Save")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, cx| {
-                            let _ = entity.update(cx, |this, cx| {
-                                this.dispatch(Intent::SaveActiveView, cx);
-                            });
-                        }
-                    }),
-            )
-            .child(
-                Button::new("view-discard")
-                    .ghost()
-                    .xsmall()
-                    .label("Discard")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, cx| {
-                            let _ = entity.update(cx, |this, cx| {
-                                this.dispatch(Intent::DiscardViewEdits, cx);
-                            });
-                        }
-                    }),
-            )
+                el.child(
+                    Button::new("view-save")
+                        .ghost()
+                        .xsmall()
+                        .label("Save")
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.dispatch(Intent::SaveActiveView, cx);
+                                });
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("view-discard")
+                        .ghost()
+                        .xsmall()
+                        .label("Discard")
+                        .on_click({
+                            let entity = entity.clone();
+                            move |_, _, cx| {
+                                let _ = entity.update(cx, |this, cx| {
+                                    this.dispatch(Intent::DiscardViewEdits, cx);
+                                });
+                            }
+                        }),
+                )
             }),
     )
 }
@@ -195,9 +195,10 @@ fn render_filter_bar(
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let filter = &pane.working_filter;
-    let can_rename = pane.views.iter().any(|view| {
-        pane.active_view_id.as_ref() == Some(&view.id) && view.can_rename()
-    });
+    let can_rename = pane
+        .views
+        .iter()
+        .any(|view| pane.active_view_id.as_ref() == Some(&view.id) && view.can_rename());
 
     let drafts_label = match filter.drafts {
         DraftFilter::All => "Drafts: all",
@@ -275,11 +276,7 @@ fn render_filter_bar(
                         )
                     },
                 ))
-                .child(disabled_filter_chip(
-                    "Assignee",
-                    "not cached yet",
-                    cx,
-                ))
+                .child(disabled_filter_chip("Assignee", "not cached yet", cx))
                 .child(disabled_filter_chip(
                     "CI status",
                     match filter.ci_status {
@@ -313,37 +310,37 @@ fn render_filter_bar(
                             this.dispatch(Intent::RequestRenameActiveView, cx);
                         })),
                 )
-        .child(
-            Button::new("view-save-as")
-                .ghost()
-                .xsmall()
-                .label("Save as new")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    let name = this
-                        .session
-                        .view()
-                        .pull_requests_pane
-                        .active_view_name
-                        .unwrap_or_else(|| "Custom View".into());
-                    this.dispatch(Intent::SaveViewAsNew { name }, cx);
-                })),
-        )
-        .when(
-            pane.views
-                .iter()
-                .any(|v| pane.active_view_id.as_ref() == Some(&v.id) && v.can_delete()),
-            |el| {
-                el.child(
-                    Button::new("view-delete")
+                .child(
+                    Button::new("view-save-as")
                         .ghost()
                         .xsmall()
-                        .label("Delete")
+                        .label("Save as new")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Intent::DeleteActiveView, cx);
+                            let name = this
+                                .session
+                                .view()
+                                .pull_requests_pane
+                                .active_view_name
+                                .unwrap_or_else(|| "Custom View".into());
+                            this.dispatch(Intent::SaveViewAsNew { name }, cx);
                         })),
                 )
-            },
-        ),
+                .when(
+                    pane.views
+                        .iter()
+                        .any(|v| pane.active_view_id.as_ref() == Some(&v.id) && v.can_delete()),
+                    |el| {
+                        el.child(
+                            Button::new("view-delete")
+                                .ghost()
+                                .xsmall()
+                                .label("Delete")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Intent::DeleteActiveView, cx);
+                                })),
+                        )
+                    },
+                ),
         )
 }
 
@@ -416,7 +413,11 @@ where
         })
 }
 
-fn disabled_filter_chip(title: &str, reason: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+fn disabled_filter_chip(
+    title: &str,
+    reason: &str,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
     h_flex()
         .items_center()
         .gap_1()

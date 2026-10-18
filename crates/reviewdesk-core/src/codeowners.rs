@@ -95,9 +95,7 @@ mod tests {
 
     #[test]
     fn parse_skips_comments_and_requires_owners() {
-        let rules = parse_codeowners(
-            "# comment\n\n/docs/ @docs-team\n*.rs @rust\nempty-pattern\n",
-        );
+        let rules = parse_codeowners("# comment\n\n/docs/ @docs-team\n*.rs @rust\nempty-pattern\n");
         assert_eq!(rules.len(), 2);
         assert_eq!(rules[0].0, "/docs/");
         assert_eq!(rules[1].0, "*.rs");

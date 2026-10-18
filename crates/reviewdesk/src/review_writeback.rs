@@ -94,9 +94,7 @@ pub async fn set_thread_status(
     thread_id: &ThreadId,
     status: ThreadStatus,
 ) -> Result<PullRequestThreads, ProviderError> {
-    let snapshot = provider
-        .set_thread_status(id, thread_id, status)
-        .await?;
+    let snapshot = provider.set_thread_status(id, thread_id, status).await?;
     store
         .put_pull_request_threads(id, &snapshot)
         .await
@@ -228,12 +226,13 @@ mod tests {
             }
 
             let mut map = self.threads.lock().expect("lock");
-            let mut snapshot = map.get(id.as_str()).cloned().unwrap_or_else(|| {
-                PullRequestThreads {
-                    threads: Vec::new(),
-                    pending_review: None,
-                }
-            });
+            let mut snapshot =
+                map.get(id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| PullRequestThreads {
+                        threads: Vec::new(),
+                        pending_review: None,
+                    });
 
             if snapshot.pending_review.is_none() {
                 snapshot.pending_review = Some(PendingReview {
@@ -322,9 +321,7 @@ mod tests {
                 });
             };
             for thread in &mut snapshot.threads {
-                thread
-                    .comments
-                    .retain(|comment| !comment.is_pending);
+                thread.comments.retain(|comment| !comment.is_pending);
             }
             snapshot
                 .threads
@@ -465,15 +462,9 @@ mod tests {
         add_pending_diff_review_comment(&provider, &store, &id, sample_comment())
             .await
             .expect("write");
-        submit_pending_review(
-            &provider,
-            &store,
-            &id,
-            ReviewSubmitEvent::Comment,
-            None,
-        )
-        .await
-        .expect("submit");
+        submit_pending_review(&provider, &store, &id, ReviewSubmitEvent::Comment, None)
+            .await
+            .expect("submit");
 
         let cached = store
             .get_pull_request_threads(&id)
@@ -564,10 +555,7 @@ mod tests {
             .await
             .expect("read")
             .expect("snapshot");
-        assert!(matches!(
-            cached.threads[0].status,
-            ThreadStatus::Resolved
-        ));
+        assert!(matches!(cached.threads[0].status, ThreadStatus::Resolved));
     }
 
     #[tokio::test]
@@ -638,10 +626,7 @@ mod tests {
             .expect_err("expected failure");
         assert!(matches!(err, ProviderError::Other(_)));
 
-        let cached = store
-            .get_pull_request_threads(&id)
-            .await
-            .expect("read");
+        let cached = store.get_pull_request_threads(&id).await.expect("read");
         assert!(cached.is_none());
     }
 }

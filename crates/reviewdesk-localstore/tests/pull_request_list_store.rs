@@ -12,6 +12,7 @@ fn pr(id: &str) -> PullRequestId {
     PullRequestId::new(id).expect("id")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn item(
     id: &str,
     title: &str,
@@ -114,7 +115,7 @@ async fn sync_pull_requests_updates_existing_row() {
         }],
     );
     store
-        .sync_pull_requests(&[updated.clone()])
+        .sync_pull_requests(std::slice::from_ref(&updated))
         .await
         .expect("resync");
 
@@ -156,7 +157,7 @@ async fn sync_pull_requests_reconcile_removes_stale_rows() {
         .expect("sync");
 
     store
-        .sync_pull_requests(&[keep.clone()])
+        .sync_pull_requests(std::slice::from_ref(&keep))
         .await
         .expect("reconcile");
 

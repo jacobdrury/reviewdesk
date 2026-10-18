@@ -121,10 +121,7 @@ mod tests {
     #[test]
     fn suggestion_from_body_parses_fenced_block() {
         let body = "Please fix:\n```suggestion\nlet x = 1;\n```\n";
-        assert_eq!(
-            suggestion_from_body(body),
-            Some("let x = 1;".to_string())
-        );
+        assert_eq!(suggestion_from_body(body), Some("let x = 1;".to_string()));
     }
 
     #[test]

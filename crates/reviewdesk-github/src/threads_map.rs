@@ -62,6 +62,7 @@ pub struct ReviewThreadNode {
     pub line: Option<i64>,
     pub start_line: Option<i64>,
     pub diff_side: Option<String>,
+    #[allow(dead_code)]
     pub start_diff_side: Option<String>,
     pub subject_type: Option<String>,
     pub comments: ReviewCommentConnection,
@@ -234,7 +235,10 @@ struct RestReviewComment {
     id: u64,
 }
 
-pub fn find_viewer_pending_review_id(body: &str, viewer_login: &str) -> Result<Option<u64>, ProviderError> {
+pub fn find_viewer_pending_review_id(
+    body: &str,
+    viewer_login: &str,
+) -> Result<Option<u64>, ProviderError> {
     let reviews: Vec<RestReviewList> = serde_json::from_str(body)
         .map_err(|e| ProviderError::other(format!("reviews list decode: {e}")))?;
     Ok(reviews.into_iter().find_map(|review| {
@@ -282,10 +286,7 @@ mod tests {
         assert_eq!(thread.status, ThreadStatus::Open);
         assert_eq!(thread.comments.len(), 2);
         assert!(thread.comments[1].is_pending);
-        assert_eq!(
-            thread.comments[0].suggestion.as_deref(),
-            Some("let x = 1;")
-        );
+        assert_eq!(thread.comments[0].suggestion.as_deref(), Some("let x = 1;"));
         assert!(snapshot.pending_review.is_some());
         assert_eq!(
             snapshot.pending_review.as_ref().unwrap().provider_review_id,
@@ -303,9 +304,6 @@ mod tests {
             find_viewer_pending_review_id(body, "alice").unwrap(),
             Some(991)
         );
-        assert_eq!(
-            find_viewer_pending_review_id(body, "bob").unwrap(),
-            None
-        );
+        assert_eq!(find_viewer_pending_review_id(body, "bob").unwrap(), None);
     }
 }

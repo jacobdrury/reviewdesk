@@ -1,6 +1,4 @@
-use reviewdesk_core::{
-    LocalStoreError, PullRequestId, PullRequestThreads,
-};
+use reviewdesk_core::{LocalStoreError, PullRequestId, PullRequestThreads};
 use turso::Connection;
 
 use crate::error::map_other;
@@ -10,8 +8,8 @@ pub async fn put_pull_request_threads(
     id: &PullRequestId,
     snapshot: &PullRequestThreads,
 ) -> Result<(), LocalStoreError> {
-    let payload = serde_json::to_string(snapshot)
-        .map_err(|e| LocalStoreError::other(e.to_string()))?;
+    let payload =
+        serde_json::to_string(snapshot).map_err(|e| LocalStoreError::other(e.to_string()))?;
 
     conn.execute(
         "

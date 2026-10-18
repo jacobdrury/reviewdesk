@@ -307,7 +307,6 @@ fn build_nested_repo_status_rows(items: &[PullRequestListItem]) -> Vec<PullReque
 mod tests {
     use super::*;
     use crate::id::PullRequestId;
-    use crate::pull_request_list::DraftFilter;
     use crate::pull_request_list::PullRequestLabel;
     use crate::views::ViewFilter;
     use chrono::TimeZone;

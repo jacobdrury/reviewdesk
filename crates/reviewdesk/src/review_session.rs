@@ -109,6 +109,8 @@ pub enum Intent {
     },
     RequestRenameActiveView,
     DeleteActiveView,
+    /// Drag-reorder / programmatic order; UI today uses left/right moves.
+    #[allow(dead_code)]
     ReorderViews {
         order: Vec<ViewId>,
     },
@@ -220,6 +222,8 @@ pub enum Effect {
     FetchThreads {
         id: PullRequestId,
     },
+    /// Network refresh that keeps the cached projection (had_cache path).
+    #[allow(dead_code)]
     RefreshThreads {
         id: PullRequestId,
     },
@@ -370,14 +374,6 @@ impl PullRequestsSyncView {
             return format!("Pull requests synced {}", format_sync_time(at));
         }
         "Pull requests not synced yet".into()
-    }
-
-    pub fn empty_placeholder(&self) -> &'static str {
-        if self.syncing {
-            "Syncing pull requests…"
-        } else {
-            "No pull requests waiting for your review."
-        }
     }
 }
 
@@ -870,7 +866,12 @@ impl ReviewSession {
         self.pull_request_cache = LoadState::Loading;
         self.inbox = LoadState::Loading;
         self.sidebar_tab = SidebarTab::Inbox;
-        let mut effects = vec![Effect::QueryPullRequests, Effect::QueryInbox];
+        let mut effects = vec![
+            Effect::BootstrapPullRequestsViews,
+            Effect::FetchViewerLogin,
+            Effect::QueryPullRequests,
+            Effect::QueryInbox,
+        ];
         effects.extend(self.begin_pull_requests_sync());
         effects.push(Effect::ArmPullRequestsRefreshTimer);
         effects.extend(self.begin_inbox_sync());
@@ -1630,7 +1631,6 @@ impl ReviewSession {
         self.saved_snapshot = Some((view.filter.clone(), view.group_by, view.sort.clone()));
     }
 
-
     fn begin_add_diff_review_comment(&mut self, range: DiffLineRange) -> Vec<Effect> {
         let Some(id) = self.selected_id.clone() else {
             return Vec::new();
@@ -1671,11 +1671,7 @@ impl ReviewSession {
         vec![Effect::DiscardPendingReviewWrite { id }]
     }
 
-    fn begin_set_thread_status(
-        &mut self,
-        thread_id: String,
-        status: ThreadStatus,
-    ) -> Vec<Effect> {
+    fn begin_set_thread_status(&mut self, thread_id: String, status: ThreadStatus) -> Vec<Effect> {
         let Some(id) = self.selected_id.clone() else {
             return Vec::new();
         };
@@ -1694,11 +1690,7 @@ impl ReviewSession {
         let LoadState::Ready(snapshot) = &self.threads else {
             return false;
         };
-        let Some(thread) = snapshot
-            .threads
-            .iter()
-            .find(|t| t.id.as_str() == thread_id)
-        else {
+        let Some(thread) = snapshot.threads.iter().find(|t| t.id.as_str() == thread_id) else {
             return false;
         };
         if matches!(thread.status, ThreadStatus::Outdated) {
@@ -2025,6 +2017,8 @@ mod tests {
         assert_eq!(
             effects,
             vec![
+                Effect::BootstrapPullRequestsViews,
+                Effect::FetchViewerLogin,
                 Effect::QueryPullRequests,
                 Effect::QueryInbox,
                 Effect::SyncPullRequests { generation: 1 },
@@ -2194,12 +2188,14 @@ mod tests {
         });
         assert_eq!(fresh, vec![Effect::QueryPullRequests]);
         assert!(!session.view().pull_requests_pane.sync.syncing);
-        assert!(session
-            .view()
-            .pull_requests_pane
-            .sync
-            .last_success
-            .is_some());
+        assert!(
+            session
+                .view()
+                .pull_requests_pane
+                .sync
+                .last_success
+                .is_some()
+        );
     }
 
     #[test]
@@ -2351,6 +2347,7 @@ mod tests {
         assert_eq!(session.view().selected_file.as_deref(), Some("new"));
     }
 
+    #[test]
     fn views_bootstrap_seeds_when_store_empty() {
         let mut session = ReviewSession::new();
         let effects = session.apply(Intent::PullRequestsViewsBootstrapFinished {

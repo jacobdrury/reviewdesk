@@ -611,8 +611,18 @@ pub(crate) fn render_metadata_strip(
                         .child("METADATA"),
                 )
                 .child(div().text_xs().child(status))
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(review_gate))
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(mergeable))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(review_gate),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(mergeable),
+                )
                 .child(render_compact_check_rollup(view, cx)),
         )
         .child(

@@ -1,6 +1,6 @@
 use gpui_kit::component::diff::DiffState;
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     tab::{Tab, TabBar},
@@ -14,8 +14,8 @@ use gpui_kit::{
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, MetadataDock, ReviewTab, SessionView};
 use crate::ui::{
-    pipelines_tab::render_pipelines_tab, render_conversation, render_files,
-    render_metadata_panel, render_metadata_strip, render_overview,
+    pipelines_tab::render_pipelines_tab, render_conversation, render_files, render_metadata_panel,
+    render_metadata_strip, render_overview,
 };
 
 const TABS: [(ReviewTab, &str); 4] = [
@@ -75,11 +75,10 @@ pub(crate) fn render_review_pane(
 
     let content = match view.review_tab {
         ReviewTab::Overview => render_overview(view, entity.clone(), cx).into_any_element(),
-        ReviewTab::Pipelines => {
-            render_pipelines_tab(view, pipelines_scroll, entity.clone(), cx)
+        ReviewTab::Pipelines => render_pipelines_tab(view, pipelines_scroll, entity.clone(), cx),
+        ReviewTab::Conversation => {
+            render_conversation(view, conversation_scroll, entity.clone(), cx).into_any_element()
         }
-        ReviewTab::Conversation => render_conversation(view, conversation_scroll, entity.clone(), cx)
-            .into_any_element(),
         ReviewTab::Changes => {
             render_files(view, diff, files_scroll, entity.clone(), cx).into_any_element()
         }
@@ -138,25 +137,4 @@ fn render_review_chrome(
                     this.dispatch(Intent::ToggleMetadataDock, cx);
                 })),
         )
-}
-
-fn render_empty_tab(
-    title: &'static str,
-    message: &'static str,
-    cx: &mut Context<ReviewDesk>,
-) -> gpui_kit::AnyElement {
-    v_flex()
-        .size_full()
-        .min_h_0()
-        .items_center()
-        .justify_center()
-        .gap_1()
-        .child(div().text_sm().font_medium().child(title))
-        .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(message),
-        )
-        .into_any_element()
 }

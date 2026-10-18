@@ -4,20 +4,20 @@ use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    codeowners_breakdown, parse_codeowners, Credentials, MergeMethod, NotificationListOptions,
-    NotificationPage, NotificationThreadId, Patch, PendingDiffReviewComment, PipelinesSnapshot,
-    Provider, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
-    PullRequestListOptions, PullRequestThreads, RerunTarget, ReviewSubmitEvent, ThreadId,
-    ThreadStatus, TimelineConversationComment,
+    Credentials, MergeMethod, NotificationListOptions, NotificationPage, NotificationThreadId,
+    Patch, PendingDiffReviewComment, PipelinesSnapshot, Provider, ProviderError, PullRequestDetail,
+    PullRequestId, PullRequestListItem, PullRequestListOptions, PullRequestThreads, RerunTarget,
+    ReviewSubmitEvent, ThreadId, ThreadStatus, TimelineConversationComment, codeowners_breakdown,
+    parse_codeowners,
 };
 use serde_json::json;
 
 use crate::error_map::from_status;
 use crate::id::parse_pull_request_id;
 use crate::map::{
-    merge_method_to_graphql, merge_method_to_rest, GraphQlResponse, PullRequestData,
-    PullRequestNodeIdData, SearchData, ViewerData, map_pull_request_detail,
-    map_pull_request_list_item,
+    GraphQlResponse, PullRequestData, PullRequestNodeIdData, SearchData, ViewerData,
+    map_pull_request_detail, map_pull_request_list_item, merge_method_to_graphql,
+    merge_method_to_rest,
 };
 use crate::notification::{NotificationThreadPayload, map_notification_thread};
 use crate::pipelines_map::{PipelinesData, map_pipelines};
@@ -350,10 +350,8 @@ impl GitHubProvider {
             if pending_nodes.is_empty() {
                 pending_nodes = pull_request.reviews.nodes;
             }
-            for node in pull_request.review_threads.nodes {
-                if let Some(thread) = node {
-                    all_thread_nodes.push(thread);
-                }
+            for thread in pull_request.review_threads.nodes.into_iter().flatten() {
+                all_thread_nodes.push(thread);
             }
             if !pull_request.review_threads.page_info.has_next_page {
                 break;
@@ -940,7 +938,7 @@ impl Provider for GitHubProvider {
                 .find(|thread| &thread.id == thread_id)
                 .and_then(|thread| thread.comments.first())
                 .map(|c| c.id.as_str())
-                .ok_or_else(|| ProviderError::NotFound)?;
+                .ok_or(ProviderError::NotFound)?;
             let root_comment_id = root_id
                 .parse::<u64>()
                 .map_err(|_| ProviderError::other("review comment id is not numeric"))?;
@@ -978,10 +976,11 @@ impl Provider for GitHubProvider {
             .or(self
                 .find_pending_review_id(&owner, &repo, number, &viewer)
                 .await?);
-        let review_id = review_id
-            .ok_or_else(|| ProviderError::other("no pending review to submit"))?;
+        let review_id =
+            review_id.ok_or_else(|| ProviderError::other("no pending review to submit"))?;
 
-        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/events");
+        let url =
+            format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/events");
         let mut payload = json!({ "event": review_submit_event_to_rest(event) });
         if let Some(body) = summary_body {
             payload["body"] = json!(body);
@@ -1053,11 +1052,8 @@ impl Provider for GitHubProvider {
                 ));
             }
         };
-        self.graphql::<serde_json::Value>(
-            query,
-            json!({ "threadId": thread_id.as_str() }),
-        )
-        .await?;
+        self.graphql::<serde_json::Value>(query, json!({ "threadId": thread_id.as_str() }))
+            .await?;
         self.load_review_threads(id).await
     }
 

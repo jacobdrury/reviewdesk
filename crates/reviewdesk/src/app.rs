@@ -24,6 +24,7 @@ use tokio::runtime::Handle;
 
 use crate::PULL_REQUESTS_REFRESH;
 use crate::metadata_write::apply_metadata_write;
+use crate::review_session::SidebarTab;
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::review_writeback::{
     add_pending_diff_review_comment, discard_pending_review, load_threads_via_store,
@@ -40,8 +41,9 @@ use crate::theme::{
     Appearance, ToastIntent, apply_sync_result, discover_macos, missing_theme_notification,
     should_sync_on_activation,
 };
-use crate::ui::{PullRequestsListChrome, render_inbox, render_pull_requests, render_review_pane, render_sidebar};
-use crate::review_session::SidebarTab;
+use crate::ui::{
+    PullRequestsListChrome, render_inbox, render_pull_requests, render_review_pane, render_sidebar,
+};
 
 fn appearance_from_window(window: &Window) -> Appearance {
     appearance_from_system(window.appearance())
@@ -181,9 +183,7 @@ impl ReviewDesk {
                     event,
                     summary_body,
                 } => self.run_submit_pending_review(id, event, summary_body, cx),
-                Effect::DiscardPendingReviewWrite { id } => {
-                    self.run_discard_pending_review(id, cx)
-                }
+                Effect::DiscardPendingReviewWrite { id } => self.run_discard_pending_review(id, cx),
                 Effect::FetchPipelines { id } => self.run_fetch_pipelines(id, cx),
                 Effect::RerunPipeline { id, target } => self.run_rerun_pipeline(id, target, cx),
                 Effect::SetThreadStatusWrite {
@@ -202,9 +202,7 @@ impl ReviewDesk {
                     last_used,
                     scoped_repository,
                 } => self.run_persist_views(views, last_used, scoped_repository, cx),
-                Effect::RunMetadataWrite { id, write } => {
-                    self.run_metadata_write(id, write, cx)
-                }
+                Effect::RunMetadataWrite { id, write } => self.run_metadata_write(id, write, cx),
                 Effect::QueryInbox => self.run_query_inbox(cx),
                 Effect::SyncInbox {
                     generation,
@@ -240,11 +238,15 @@ impl ReviewDesk {
                     return;
                 }
                 let _ = this.update(cx, |this, cx| {
-                    this.dispatch(Intent::RenameActiveView { name: trimmed.to_string() }, cx);
+                    this.dispatch(
+                        Intent::RenameActiveView {
+                            name: trimmed.to_string(),
+                        },
+                        cx,
+                    );
                 });
             })
             .detach();
-            return;
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -273,10 +275,13 @@ impl ReviewDesk {
         let runtime = self.runtime.clone();
         self._metadata_write_task = cx.spawn(async move |this, cx| {
             let finished_id = id.clone();
-            let result = runtime
-                .spawn(async move { apply_metadata_write(provider.as_ref(), &store, &id, write).await })
-                .await
-                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let result =
+                runtime
+                    .spawn(async move {
+                        apply_metadata_write(provider.as_ref(), &store, &id, write).await
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
             let _ = this.update(cx, |this, cx| {
                 this.dispatch(
                     Intent::MetadataWriteFinished {
@@ -810,13 +815,8 @@ impl ReviewDesk {
             let write_id = request_id.clone();
             let result = runtime
                 .spawn(async move {
-                    add_pending_diff_review_comment(
-                        provider.as_ref(),
-                        &store,
-                        &write_id,
-                        comment,
-                    )
-                    .await
+                    add_pending_diff_review_comment(provider.as_ref(), &store, &write_id, comment)
+                        .await
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
@@ -848,14 +848,8 @@ impl ReviewDesk {
             let write_id = request_id.clone();
             let result = runtime
                 .spawn(async move {
-                    submit_pending_review(
-                        provider.as_ref(),
-                        &store,
-                        &write_id,
-                        event,
-                        summary_body,
-                    )
-                    .await
+                    submit_pending_review(provider.as_ref(), &store, &write_id, event, summary_body)
+                        .await
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
@@ -879,12 +873,13 @@ impl ReviewDesk {
         let request_id = id;
         self._threads_write_task = cx.spawn(async move |this, cx| {
             let write_id = request_id.clone();
-            let result = runtime
-                .spawn(async move {
-                    discard_pending_review(provider.as_ref(), &store, &write_id).await
-                })
-                .await
-                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+            let result =
+                runtime
+                    .spawn(async move {
+                        discard_pending_review(provider.as_ref(), &store, &write_id).await
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
 
             let _ = this.update(cx, |this, cx| {
                 this.dispatch(
@@ -944,14 +939,7 @@ impl ReviewDesk {
             let tid = ThreadId::new(thread_id);
             let result = runtime
                 .spawn(async move {
-                    set_thread_status(
-                        provider.as_ref(),
-                        &store,
-                        &write_id,
-                        &tid,
-                        status,
-                    )
-                    .await
+                    set_thread_status(provider.as_ref(), &store, &write_id, &tid, status).await
                 })
                 .await
                 .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
@@ -1042,7 +1030,8 @@ impl Render for ReviewDesk {
                         )
                         .child({
                             let middle = if view.sidebar_tab == SidebarTab::Inbox {
-                                render_inbox(&view, &self.inbox_scroll, entity.clone(), cx).into_any_element()
+                                render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)
+                                    .into_any_element()
                             } else {
                                 render_pull_requests(
                                     &view,
@@ -1098,8 +1087,6 @@ async fn macos_text_prompt(title: &str, default_answer: &str) -> Option<String> 
         return None;
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let Some(text) = stdout.strip_prefix("text returned:") else {
-        return None;
-    };
+    let text = stdout.strip_prefix("text returned:")?;
     Some(text.trim().to_string())
 }

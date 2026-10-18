@@ -4,8 +4,8 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::{
-    App, Context, IntoElement, ParentElement as _, SharedString, Styled as _, UniformListScrollHandle,
-    WeakEntity, div, px, uniform_list, prelude::FluentBuilder as _,
+    App, Context, IntoElement, ParentElement as _, SharedString, Styled as _,
+    UniformListScrollHandle, WeakEntity, div, prelude::FluentBuilder as _, px, uniform_list,
 };
 use reviewdesk_core::ThreadStatus;
 
@@ -70,21 +70,16 @@ pub(crate) fn render_conversation(
                 .flex_1()
                 .min_h_0()
                 .when(row_count == 0, |el| {
-                    el.flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No comments yet."),
-                        )
+                    el.flex().items_center().justify_center().child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("No comments yet."),
+                    )
                 })
                 .when(row_count > 0, |el| {
-                    el.child(uniform_list(
-                        "conversation-threads",
-                        row_count,
-                        move |range, _, cx| {
+                    el.child(
+                        uniform_list("conversation-threads", row_count, move |range, _, cx| {
                             range
                                 .map(|ix| {
                                     let thread = &threads[ix];
@@ -95,24 +90,19 @@ pub(crate) fn render_conversation(
                                         .into_any_element()
                                 })
                                 .collect()
-                        },
+                        })
+                        .track_scroll(scroll),
                     )
-                    .track_scroll(scroll))
                 }),
         )
         .child(render_timeline_composer(composer_entity, cx))
         .into_any_element()
 }
 
-fn conversation_threads(
-    threads: &[ThreadView],
-    hide_resolved: bool,
-) -> Vec<ThreadView> {
+fn conversation_threads(threads: &[ThreadView], hide_resolved: bool) -> Vec<ThreadView> {
     threads
         .iter()
-        .filter(|thread| {
-            !hide_resolved || !matches!(thread.status, ThreadStatus::Resolved)
-        })
+        .filter(|thread| !hide_resolved || !matches!(thread.status, ThreadStatus::Resolved))
         .cloned()
         .collect()
 }
@@ -131,11 +121,24 @@ fn render_conversation_header(
         .border_b_1()
         .border_color(cx.theme().border)
         .child(
-            div()
-                .text_xs()
-                .font_medium()
-                .text_color(cx.theme().muted_foreground)
-                .child("Conversation"),
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Conversation"),
+                )
+                .when(view.threads_syncing, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Updating…"),
+                    )
+                }),
         )
         .child(
             h_flex()
@@ -270,13 +273,7 @@ fn render_linear_thread(
                 ),
             )
         })
-        .child(render_comment_row(
-            root,
-            thread,
-            true,
-            entity.clone(),
-            cx,
-        ))
+        .child(render_comment_row(root, thread, true, entity.clone(), cx))
         .when(!replies.is_empty(), |el| {
             el.child(
                 v_flex()
@@ -313,9 +310,8 @@ fn render_comment_row(
     cx: &mut App,
 ) -> impl IntoElement {
     let thread_id = thread.id.clone();
-    let can_resolve = is_root
-        && !matches!(thread.status, ThreadStatus::Outdated)
-        && thread.anchor.is_some();
+    let can_resolve =
+        is_root && !matches!(thread.status, ThreadStatus::Outdated) && thread.anchor.is_some();
     let resolve_label = if matches!(thread.status, ThreadStatus::Resolved) {
         "Unresolve"
     } else {
@@ -359,14 +355,17 @@ fn render_comment_row(
                                     .child("Draft"),
                             )
                         })
-                        .when(matches!(thread.status, ThreadStatus::Outdated) && is_root, |el| {
-                            el.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Outdated"),
-                            )
-                        }),
+                        .when(
+                            matches!(thread.status, ThreadStatus::Outdated) && is_root,
+                            |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Outdated"),
+                                )
+                            },
+                        ),
                 )
                 .when(can_resolve, |el| {
                     el.child(
@@ -393,40 +392,32 @@ fn render_comment_row(
                 }),
         )
         .when(is_root && thread.anchor.is_some(), |el| {
+            el.child(div().pl(px(28.)).child(render_anchor_header(thread, cx)))
+        })
+        .child(div().pl(px(28.)).text_sm().child(comment.body.to_string()))
+        .when_some(comment.suggestion.as_ref(), |el, suggestion| {
             el.child(
-                div().pl(px(28.)).child(render_anchor_header(thread, cx)),
+                div()
+                    .pl(px(28.))
+                    .child(suggestion_block(suggestion.as_ref(), cx)),
             )
         })
-        .child(
-            div()
-                .pl(px(28.))
-                .text_sm()
-                .child(comment.body.to_string()),
-        )
-        .when_some(comment.suggestion.as_ref(), |el, suggestion| {
-            el.child(div().pl(px(28.)).child(suggestion_block(suggestion.as_ref(), cx)))
-        })
-        .child(
-            h_flex()
-                .pl(px(28.))
-                .gap_1()
-                .child({
-                    let owner = entity.clone();
-                    let tid = thread_id.clone();
-                    Button::new(SharedString::from(format!("reply-{thread_id}")))
-                        .ghost()
-                        .xsmall()
-                        .label("Reply")
-                        .on_click(move |_, _, cx| {
-                            let _ = owner.update(cx, |this, cx| {
-                                this.dispatch(
-                                    Intent::SetConversationReplyThread(Some(tid.clone().into())),
-                                    cx,
-                                );
-                            });
-                        })
-                }),
-        )
+        .child(h_flex().pl(px(28.)).gap_1().child({
+            let owner = entity.clone();
+            let tid = thread_id.clone();
+            Button::new(SharedString::from(format!("reply-{thread_id}")))
+                .ghost()
+                .xsmall()
+                .label("Reply")
+                .on_click(move |_, _, cx| {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.dispatch(
+                            Intent::SetConversationReplyThread(Some(tid.clone().into())),
+                            cx,
+                        );
+                    });
+                })
+        }))
 }
 
 fn render_anchor_header(thread: &ThreadView, cx: &mut App) -> impl IntoElement {
