@@ -16,7 +16,9 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::INBOX_REFRESH;
-use crate::chrome_prototype::{ChromeVariant, PrototypeReviewTab, ShellNav};
+use crate::chrome_prototype::{
+    ChromeVariant, ListDemoMode, PrototypeReviewTab, ShellNav, StubViewId,
+};
 use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
@@ -54,11 +56,14 @@ pub struct ReviewDesk {
     inbox_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     notif_scroll: UniformListScrollHandle,
-    /// PROTOTYPE chrome state (throwaway with `prototype/primary-shell-chrome`).
+    /// PROTOTYPE chrome state (throwaway with `prototype/pull-requests-list-nav`).
     chrome: ChromeVariant,
     shell_nav: ShellNav,
     prototype_tab: PrototypeReviewTab,
     metadata_open: bool,
+    selected_view: StubViewId,
+    list_demo: ListDemoMode,
+    selected_stub_id: Option<&'static str>,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _detail_task: Task<()>,
@@ -93,6 +98,9 @@ impl ReviewDesk {
             shell_nav: ShellNav::PullRequests,
             prototype_tab: PrototypeReviewTab::Overview,
             metadata_open: true,
+            selected_view: StubViewId::NeedsMyReview,
+            list_demo: ListDemoMode::Populated,
+            selected_stub_id: None,
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
@@ -275,11 +283,45 @@ impl ReviewDesk {
         } else {
             self.chrome.prev()
         };
+        self.selected_stub_id = None;
         cx.notify();
     }
 
     pub(crate) fn set_shell_nav(&mut self, nav: ShellNav, cx: &mut Context<Self>) {
         self.shell_nav = nav;
+        if nav == ShellNav::Inbox {
+            self.selected_stub_id = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_selected_view(&mut self, view: StubViewId, cx: &mut Context<Self>) {
+        self.selected_view = view;
+        self.selected_stub_id = None;
+        self.shell_nav = ShellNav::PullRequests;
+        cx.notify();
+    }
+
+    pub(crate) fn cycle_list_demo(&mut self, cx: &mut Context<Self>) {
+        self.list_demo = self.list_demo.next();
+        self.selected_stub_id = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_list_demo(&mut self, demo: ListDemoMode, cx: &mut Context<Self>) {
+        self.list_demo = demo;
+        self.selected_stub_id = None;
+        cx.notify();
+    }
+
+    pub(crate) fn set_selected_stub(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.selected_stub_id = Some(id);
+        self.shell_nav = ShellNav::PullRequests;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_selected_stub(&mut self, cx: &mut Context<Self>) {
+        self.selected_stub_id = None;
         cx.notify();
     }
 
@@ -297,10 +339,6 @@ impl ReviewDesk {
     pub(crate) fn toggle_metadata(&mut self, cx: &mut Context<Self>) {
         self.metadata_open = !self.metadata_open;
         cx.notify();
-    }
-
-    pub(crate) fn clear_selected_pull_request(&mut self, cx: &mut Context<Self>) {
-        self.dispatch(Intent::ClearPullRequestSelection, cx);
     }
 
     fn run_fetch_patch(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
@@ -366,6 +404,9 @@ impl Render for ReviewDesk {
                 shell_nav: self.shell_nav,
                 review_tab: self.prototype_tab,
                 metadata_open: self.metadata_open,
+                selected_view: self.selected_view,
+                list_demo: self.list_demo,
+                selected_stub_id: self.selected_stub_id,
                 view,
                 diff: self.diff.clone(),
                 inbox_scroll: self.inbox_scroll.clone(),

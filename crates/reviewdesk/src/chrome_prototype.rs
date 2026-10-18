@@ -1,24 +1,26 @@
-//! PROTOTYPE (throwaway): primary shell chrome for Review Desk.
+//! PROTOTYPE (throwaway): Pull requests list in Views + left nav refinement.
 //!
-//! Question: how should Inbox ↔ Pull requests nav, Review pane tabs
-//! (Overview / Files / Pipelines / Conversation), and a foldable Metadata
-//! panel (open by default) sit together, and which density wins against the
-//! earlier Dock Dense notes (`prototype/zed-shell-chrome` variant A)?
+//! Question: what should the PR list inside a View look like (row density,
+//! grouping, filter/sort chrome, empty vs zero-match), and how should the
+//! Linear-style left nav place Inbox / Pull requests / Views?
 //!
-//! Standing preference from HITL: Linear-style labeled primary sidebar
-//! (Inbox + Pull requests). Variants only change Metadata placement / density.
+//! Builds on #58 HITL pick: Linear sidebar, full-screen Review with Back,
+//! Overview · Pipelines · Conversation · Changes, Metadata right dock.
+//! Variants only change Views placement + list structure — not Review chrome.
 //!
-//! HITL pick so far: A's Linear + right Metadata dock, plus C's full-screen
-//! Review when a PR is opened. Tab order: Overview, Pipelines, Conversation,
-//! Changes. Metadata opens by default on Overview only; other tabs collapse it.
+//! Three variants, cycled with the bottom bar (or `[` / `]`):
+//! - A (Nested Views): Views indented under Pull requests in the sidebar;
+//!   dense single-line rows; compact filter/sort strip; group headers in-list.
+//! - B (View chips): flat sidebar (Inbox + Pull requests); Views as chips above
+//!   the list; roomier multi-line rows; filter chips + side-by-side list/Review.
+//! - C (Views rail): flat sidebar; narrow Views index beside the PR list;
+//!   table-ish columns; collapsible groups; explicit empty / zero-match CTAs.
 //!
-//! Three variants on the live app, cycled with the bottom bar (or `[` / `]`):
-//! - A (Picked): dense Linear sidebar, right Metadata dock, focus Review on open
-//! - B (Linear + Header Meta): roomier; Metadata folds under the tab bar
-//! - C (Linear + Drawer): Metadata as a bottom drawer (also focus Review on open)
+//! Stub Views from #52: All PRs (builtin) + Needs my review / Mine / Drafts.
+//! Demo mode cycles populated ↔ empty store ↔ zero-match.
 //!
 //! Run: `cargo run -p reviewdesk`
-//! Branch: `prototype/primary-shell-chrome` (never merge as-is)
+//! Branch: `prototype/pull-requests-list-nav` (never merge as-is)
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChromeVariant {
@@ -41,8 +43,28 @@ pub enum PrototypeReviewTab {
     Overview,
     Pipelines,
     Conversation,
-    /// Last tab; paints the existing Files/Diff surface.
+    /// Last tab; paints the existing Files/Diff surface when a real PR is open.
     Changes,
+}
+
+/// Built-in + seed Views from #52 grilling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StubViewId {
+    AllPrs,
+    NeedsMyReview,
+    Mine,
+    Drafts,
+}
+
+/// Force empty / zero-match surfaces without real LocalStore gymnastics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListDemoMode {
+    #[default]
+    Populated,
+    /// No cached pull requests at all.
+    EmptyStore,
+    /// Cache has PRs; this View's filters match none.
+    ZeroMatch,
 }
 
 impl ChromeVariant {
@@ -56,9 +78,9 @@ impl ChromeVariant {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::A => "Picked (Dock + Focus)",
-            Self::B => "Linear + Header Meta",
-            Self::C => "Linear + Drawer",
+            Self::A => "Nested Views",
+            Self::B => "View chips",
+            Self::C => "Views rail",
         }
     }
 
@@ -84,48 +106,62 @@ impl ChromeVariant {
 
     pub fn sidebar_width(self) -> f32 {
         match self {
-            Self::A => 200.,
-            Self::B | Self::C => 220.,
+            Self::A => 220.,
+            Self::B => 200.,
+            Self::C => 200.,
         }
     }
 
+    /// Width of the PR list column (not the Views rail).
     pub fn list_default_width(self) -> f32 {
         match self {
-            Self::A => 280.,
-            Self::B => 320.,
-            Self::C => 340.,
+            Self::A => 320.,
+            Self::B => 360.,
+            Self::C => 380.,
         }
+    }
+
+    pub fn views_rail_width(self) -> f32 {
+        168.
     }
 
     pub fn metadata_default_width(self) -> f32 {
-        match self {
-            Self::A => 260.,
-            Self::B | Self::C => 280.,
-        }
+        260.
     }
 
-    /// Opening a PR hides the list; Back restores it (A pick + C).
+    /// Views live as indented children under Pull requests in the sidebar.
+    pub fn views_in_sidebar(self) -> bool {
+        matches!(self, Self::A)
+    }
+
+    /// Views as a horizontal chip strip above the PR list.
+    pub fn views_as_chips(self) -> bool {
+        matches!(self, Self::B)
+    }
+
+    /// Views as a narrow index rail beside the PR list.
+    pub fn views_as_rail(self) -> bool {
+        matches!(self, Self::C)
+    }
+
+    /// Opening a PR hides the list; Back restores it (A + C).
     pub fn focus_stack(self) -> bool {
         matches!(self, Self::A | Self::C)
     }
 
-    /// Metadata as a right dock panel (A).
-    pub fn metadata_right_dock(self) -> bool {
+    /// Dense Dock-style row padding (A).
+    pub fn dense(self) -> bool {
         matches!(self, Self::A)
     }
 
-    /// Metadata as a band under the review tab bar (B).
-    pub fn metadata_under_tabs(self) -> bool {
+    /// Roomier multi-line PR rows (B).
+    pub fn roomy_rows(self) -> bool {
         matches!(self, Self::B)
     }
 
-    /// Metadata as a bottom drawer (C).
-    pub fn metadata_bottom_drawer(self) -> bool {
+    /// Table-ish columns in the PR list (C).
+    pub fn table_rows(self) -> bool {
         matches!(self, Self::C)
-    }
-
-    pub fn dense(self) -> bool {
-        matches!(self, Self::A)
     }
 
     pub fn uppercase_labels(self) -> bool {
@@ -161,7 +197,6 @@ impl PrototypeReviewTab {
         }
     }
 
-    /// Metadata starts open on Overview; other tabs collapse it by default.
     pub fn metadata_open_by_default(self) -> bool {
         matches!(self, Self::Overview)
     }
@@ -172,6 +207,69 @@ impl ShellNav {
         match self {
             Self::Inbox => "Inbox",
             Self::PullRequests => "Pull requests",
+        }
+    }
+}
+
+impl StubViewId {
+    pub const ALL: &[Self] = &[
+        Self::AllPrs,
+        Self::NeedsMyReview,
+        Self::Mine,
+        Self::Drafts,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AllPrs => "All PRs",
+            Self::NeedsMyReview => "Needs my review",
+            Self::Mine => "Mine",
+            Self::Drafts => "Drafts",
+        }
+    }
+
+    pub fn builtin(self) -> bool {
+        matches!(self, Self::AllPrs)
+    }
+
+    pub fn filter_summary(self) -> &'static str {
+        match self {
+            Self::AllPrs => "No filters · updated ↓",
+            Self::NeedsMyReview => "I am reviewer · ready · open",
+            Self::Mine => "I am author · open",
+            Self::Drafts => "I am author · draft",
+        }
+    }
+
+    /// Default group-by for the prototype list (None = flat).
+    pub fn group_by(self) -> Option<&'static str> {
+        match self {
+            Self::AllPrs => Some("repo"),
+            Self::NeedsMyReview => Some("review state"),
+            Self::Mine => Some("repo"),
+            Self::Drafts => None,
+        }
+    }
+
+    pub fn sort_label(self) -> &'static str {
+        "Updated ↓"
+    }
+}
+
+impl ListDemoMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Populated => "Populated",
+            Self::EmptyStore => "Empty store",
+            Self::ZeroMatch => "Zero-match",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Populated => Self::EmptyStore,
+            Self::EmptyStore => Self::ZeroMatch,
+            Self::ZeroMatch => Self::Populated,
         }
     }
 }
