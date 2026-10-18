@@ -9,12 +9,13 @@
 //! Variants only change Views placement + list structure — not Review chrome.
 //!
 //! Three variants, cycled with the bottom bar (or `[` / `]`):
-//! - A (Nested Views): Views indented under Pull requests in the sidebar;
-//!   dense single-line rows; compact filter/sort strip; group headers in-list.
-//! - B (View chips): flat sidebar (Inbox + Pull requests); Views as chips above
-//!   the list; roomier multi-line rows; filter chips + side-by-side list/Review.
-//! - C (Views rail): flat sidebar; narrow Views index beside the PR list;
-//!   table-ish columns; collapsible groups; explicit empty / zero-match CTAs.
+//! - A (Linear Issues): flat sidebar (Inbox + Pull requests); full-bleed list;
+//!   View tabs like Linear All/Active/Backlog; Filter + Display; dense single-line
+//!   rows (CI · owner/repo#n · review · title · updated · author); group headers.
+//! - B (View chips): flat sidebar; Views as chips; roomier multi-line rows;
+//!   side-by-side list/Review (no focus stack).
+//! - C (Views rail): Views index rail beside a narrower list; table-ish columns;
+//!   focus Review on open.
 //!
 //! Stub Views from #52: All PRs (builtin) + Needs my review / Mine / Drafts.
 //! Demo mode cycles populated ↔ empty store ↔ zero-match.
@@ -78,7 +79,7 @@ impl ChromeVariant {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::A => "Nested Views",
+            Self::A => "Linear Issues",
             Self::B => "View chips",
             Self::C => "Views rail",
         }
@@ -112,13 +113,23 @@ impl ChromeVariant {
         }
     }
 
-    /// Width of the PR list column (not the Views rail).
+    /// Width of the PR list column when not full-bleed (not the Views rail).
     pub fn list_default_width(self) -> f32 {
         match self {
             Self::A => 320.,
             Self::B => 360.,
             Self::C => 380.,
         }
+    }
+
+    /// List owns the main pane (Linear Issues); Review only after open + Back.
+    pub fn full_bleed_list(self) -> bool {
+        matches!(self, Self::A)
+    }
+
+    /// View tabs across the top of the list (Linear All / Active / Backlog).
+    pub fn views_as_tabs(self) -> bool {
+        matches!(self, Self::A)
     }
 
     pub fn views_rail_width(self) -> f32 {
@@ -131,7 +142,7 @@ impl ChromeVariant {
 
     /// Views live as indented children under Pull requests in the sidebar.
     pub fn views_in_sidebar(self) -> bool {
-        matches!(self, Self::A)
+        false
     }
 
     /// Views as a horizontal chip strip above the PR list.
@@ -244,10 +255,10 @@ impl StubViewId {
     /// Default group-by for the prototype list (None = flat).
     pub fn group_by(self) -> Option<&'static str> {
         match self {
-            Self::AllPrs => Some("repo"),
+            Self::AllPrs => Some("review state"),
             Self::NeedsMyReview => Some("review state"),
             Self::Mine => Some("repo"),
-            Self::Drafts => None,
+            Self::Drafts => Some("repo"),
         }
     }
 

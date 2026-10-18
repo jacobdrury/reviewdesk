@@ -252,6 +252,7 @@ fn render_body(proto: PrototypeChrome, cx: &mut Context<ReviewDesk>) -> impl Int
     let chrome = proto.chrome;
     let notif_count = STUB_NOTIFICATIONS.len();
 
+    // Focus Review (A/C) — list gone until Back.
     if chrome.focus_stack() && proto.selected_stub_id.is_some() {
         return h_flex()
             .size_full()
@@ -263,6 +264,28 @@ fn render_body(proto: PrototypeChrome, cx: &mut Context<ReviewDesk>) -> impl Int
                     .min_h_0()
                     .h_full()
                     .child(render_focus_review(&proto, cx)),
+            )
+            .into_any_element();
+    }
+
+    // Linear Issues (A): full-bleed list / Inbox; no empty Review column.
+    if chrome.full_bleed_list() {
+        return h_flex()
+            .size_full()
+            .min_h_0()
+            .child(render_sidebar(&proto, notif_count, cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .h_full()
+                    .child(match proto.shell_nav {
+                        ShellNav::Inbox => render_notifications(&proto, cx).into_any_element(),
+                        ShellNav::PullRequests => {
+                            render_pull_requests(&proto, cx).into_any_element()
+                        }
+                    }),
             )
             .into_any_element();
     }
@@ -697,14 +720,19 @@ fn render_pull_requests(
 ) -> impl IntoElement {
     let chrome = proto.chrome;
     let view = proto.selected_view;
-    let header_py = if chrome.dense() { px(4.) } else { px(8.) };
 
-    let mut pane = v_flex()
-        .size_full()
-        .min_h_0()
-        .border_r_1()
-        .border_color(cx.theme().border)
-        .child(
+    let mut pane = v_flex().size_full().min_h_0();
+    if !chrome.full_bleed_list() {
+        pane = pane.border_r_1().border_color(cx.theme().border);
+    }
+
+    if chrome.views_as_tabs() {
+        pane = pane
+            .child(render_linear_view_tabs(proto, cx))
+            .child(render_linear_filter_display(proto, cx));
+    } else {
+        let header_py = if chrome.dense() { px(4.) } else { px(8.) };
+        pane = pane.child(
             h_flex()
                 .w_full()
                 .px_3()
@@ -744,12 +772,11 @@ fn render_pull_requests(
                         })),
                 ),
         );
-
-    if chrome.views_as_chips() {
-        pane = pane.child(render_view_chips(proto, cx));
+        if chrome.views_as_chips() {
+            pane = pane.child(render_view_chips(proto, cx));
+        }
+        pane = pane.child(render_filter_sort_chrome(proto, cx));
     }
-
-    pane = pane.child(render_filter_sort_chrome(proto, cx));
 
     match proto.list_demo {
         ListDemoMode::EmptyStore => pane
@@ -767,6 +794,116 @@ fn render_pull_requests(
                 .into_any_element()
         }
     }
+}
+
+/// Linear-style View tabs (maps to All issues / Active / Backlog).
+fn render_linear_view_tabs(
+    proto: &PrototypeChrome,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let mut tabs = h_flex()
+        .w_full()
+        .px_3()
+        .pt_2()
+        .pb_1()
+        .gap_1()
+        .items_center();
+    for view_id in StubViewId::ALL {
+        let view_id = *view_id;
+        let active = proto.selected_view == view_id;
+        tabs = tabs.child(
+            div()
+                .id(SharedString::from(format!("tab-{}", view_id.label())))
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .when(active, |el| el.bg(cx.theme().secondary.opacity(0.7)))
+                .when(!active, |el| {
+                    el.hover(|style| style.bg(cx.theme().secondary.opacity(0.35)))
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_selected_view(view_id, cx);
+                }))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_medium()
+                        .text_color(if active {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(view_id.label()),
+                ),
+        );
+    }
+    tabs.child(div().flex_1()).child(
+        Button::new("demo-mode-tabs")
+            .ghost()
+            .xsmall()
+            .label(proto.list_demo.label())
+            .tooltip("Cycle populated / empty store / zero-match")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.cycle_list_demo(cx);
+            })),
+    )
+}
+
+/// Linear Filter bar + Display control.
+fn render_linear_filter_display(
+    proto: &PrototypeChrome,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let view = proto.selected_view;
+    let group = view.group_by().unwrap_or("None");
+    h_flex()
+        .w_full()
+        .px_3()
+        .py_2()
+        .items_center()
+        .gap_2()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .py(px(5.))
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    Icon::new(IconName::Search)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Filter"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .truncate()
+                        .child(view.filter_summary()),
+                ),
+        )
+        .child(
+            Button::new("display-stub")
+                .ghost()
+                .small()
+                .label(format!("Display · {group}"))
+                .tooltip("Group / sort / display density (stub)"),
+        )
 }
 
 fn render_view_chips(
@@ -1023,26 +1160,35 @@ fn render_pr_rows(
                             ListRow::Group { label, count } => div()
                                 .id(SharedString::from(format!("group-{ix}")))
                                 .w_full()
-                                .px_3()
-                                .py(px(4.))
-                                .bg(cx.theme().secondary.opacity(0.4))
+                                .px_4()
+                                .py(px(6.))
                                 .child(
                                     h_flex()
                                         .w_full()
                                         .items_center()
-                                        .justify_between()
+                                        .gap_2()
+                                        .child(
+                                            Icon::new(IconName::ChevronDown)
+                                                .xsmall()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_sm()
                                                 .font_medium()
-                                                .text_color(cx.theme().muted_foreground)
                                                 .child(label.clone()),
                                         )
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_sm()
                                                 .text_color(cx.theme().muted_foreground)
                                                 .child(count.to_string()),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Icon::new(IconName::Plus)
+                                                .xsmall()
+                                                .text_color(cx.theme().muted_foreground),
                                         ),
                                 )
                                 .into_any_element(),
@@ -1052,9 +1198,13 @@ fn render_pr_rows(
                                 let owner = entity.clone();
                                 let row = ListItem::new(SharedString::from(pr.id))
                                     .selected(is_sel)
-                                    .px_3()
-                                    .py(if chrome.dense() {
-                                        px(3.)
+                                    .px(if chrome.full_bleed_list() {
+                                        px(16.)
+                                    } else {
+                                        px(12.)
+                                    })
+                                    .py(if chrome.dense() || chrome.full_bleed_list() {
+                                        px(6.)
                                     } else if chrome.roomy_rows() {
                                         px(8.)
                                     } else {
@@ -1087,11 +1237,37 @@ fn render_pr_rows(
         .child(Scrollbar::vertical(&scroll))
 }
 
+/// Linear Issues row → PR: CI · short id · review · title · updated · author.
 fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
+    let short_id = format!("{}#{}", short_repo(pr.repo), pr.number);
+    let author_initial = pr
+        .author
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "?".into());
     h_flex()
         .w_full()
         .items_center()
         .gap_2()
+        .child(
+            Icon::new(ci_icon(pr.ci))
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        )
+        .child(
+            div()
+                .w(px(96.))
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .truncate()
+                .child(short_id),
+        )
+        .child(
+            Icon::new(review_icon(pr.review_state, pr.is_draft))
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
+        )
         .child(
             div()
                 .flex_1()
@@ -1104,14 +1280,44 @@ fn render_dense_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(format!("{}#{}", short_repo(pr.repo), pr.number)),
+                .child(pr.updated),
         )
         .child(
             div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(pr.updated),
+                .size(px(20.))
+                .rounded_md()
+                .bg(cx.theme().secondary)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_medium()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(author_initial),
+                ),
         )
+}
+
+fn ci_icon(ci: &str) -> IconName {
+    match ci {
+        "Passing" => IconName::CircleCheck,
+        "Failing" => IconName::CircleX,
+        "Pending" => IconName::LoaderCircle,
+        _ => IconName::Dash,
+    }
+}
+
+fn review_icon(state: &str, is_draft: bool) -> IconName {
+    if is_draft {
+        return IconName::Square;
+    }
+    match state {
+        "Approved" => IconName::CircleCheck,
+        "Changes requested" => IconName::CircleAlert,
+        _ => IconName::Dash,
+    }
 }
 
 fn render_roomy_pr_row(pr: StubPr, cx: &App) -> impl IntoElement {
