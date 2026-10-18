@@ -24,6 +24,7 @@ pub struct PullRequestsPaneView {
     pub group_by_label: String,
     pub repo_scope: Option<String>,
     pub repositories: Arc<[String]>,
+    pub working_filter: ViewFilter,
 }
 
 impl Default for PullRequestsPaneView {
@@ -40,6 +41,7 @@ impl Default for PullRequestsPaneView {
             group_by_label: group_by_display_label(ViewGroupBy::None).to_string(),
             repo_scope: None,
             repositories: Arc::from([]),
+            working_filter: ViewFilter::default(),
         }
     }
 }
@@ -115,5 +117,6 @@ pub fn project_pull_requests_pane(inputs: &PullRequestsPaneInputs<'_>) -> PullRe
         group_by_label: group_by_display_label(inputs.working_group_by).to_string(),
         repo_scope: inputs.repo_scope.clone(),
         repositories,
+        working_filter: inputs.working_filter.clone(),
     }
 }

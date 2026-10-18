@@ -107,10 +107,19 @@ pub enum Intent {
     RenameActiveView {
         name: String,
     },
+    RequestRenameActiveView,
     DeleteActiveView,
-    #[allow(dead_code)]
     ReorderViews {
         order: Vec<ViewId>,
+    },
+    MoveActiveViewLeft,
+    MoveActiveViewRight,
+    ToggleWorkingFilterAuthor,
+    ToggleWorkingFilterReviewer,
+    CycleWorkingFilterDrafts,
+    CycleWorkingFilterUpdatedWithin,
+    ToggleWorkingFilterReviewState {
+        state: reviewdesk_core::ReviewState,
     },
     ViewsPersistFinished {
         views: Result<Vec<View>, ProviderError>,
@@ -254,6 +263,9 @@ pub enum Effect {
     RunMetadataWrite {
         id: PullRequestId,
         write: MetadataWrite,
+    },
+    PromptRenameView {
+        default_name: String,
     },
 }
 
@@ -631,8 +643,51 @@ impl ReviewSession {
                 Vec::new()
             }
             Intent::RenameActiveView { name } => self.rename_active_view(name),
+            Intent::RequestRenameActiveView => self.request_rename_active_view(),
             Intent::DeleteActiveView => self.delete_active_view(),
             Intent::ReorderViews { order } => self.reorder_views(order),
+            Intent::MoveActiveViewLeft => self.move_active_view(-1),
+            Intent::MoveActiveViewRight => self.move_active_view(1),
+            Intent::ToggleWorkingFilterAuthor => {
+                self.working_filter.i_am_author = !self.working_filter.i_am_author;
+                Vec::new()
+            }
+            Intent::ToggleWorkingFilterReviewer => {
+                self.working_filter.i_am_reviewer = !self.working_filter.i_am_reviewer;
+                Vec::new()
+            }
+            Intent::CycleWorkingFilterDrafts => {
+                use reviewdesk_core::DraftFilter;
+                self.working_filter.drafts = match self.working_filter.drafts {
+                    DraftFilter::All => DraftFilter::ReadyOnly,
+                    DraftFilter::ReadyOnly => DraftFilter::DraftsOnly,
+                    DraftFilter::DraftsOnly => DraftFilter::All,
+                };
+                Vec::new()
+            }
+            Intent::CycleWorkingFilterUpdatedWithin => {
+                use reviewdesk_core::UpdatedWithin;
+                self.working_filter.updated_within = match self.working_filter.updated_within {
+                    UpdatedWithin::Any => UpdatedWithin::Last24h,
+                    UpdatedWithin::Last24h => UpdatedWithin::Last7d,
+                    UpdatedWithin::Last7d => UpdatedWithin::Last30d,
+                    UpdatedWithin::Last30d => UpdatedWithin::Any,
+                };
+                Vec::new()
+            }
+            Intent::ToggleWorkingFilterReviewState { state } => {
+                if let Some(pos) = self
+                    .working_filter
+                    .review_states
+                    .iter()
+                    .position(|s| *s == state)
+                {
+                    self.working_filter.review_states.remove(pos);
+                } else {
+                    self.working_filter.review_states.push(state);
+                }
+                Vec::new()
+            }
             Intent::ViewsPersistFinished { views } => {
                 self.on_views_persist_finished(views);
                 Vec::new()
@@ -1423,6 +1478,43 @@ impl ReviewSession {
 
     fn discard_view_edits(&mut self) {
         self.load_working_from_active_view();
+    }
+
+    fn request_rename_active_view(&mut self) -> Vec<Effect> {
+        let Some(active) = self.active_view_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let Some(view) = views.iter().find(|v| v.id == active) else {
+            return Vec::new();
+        };
+        if !view.can_rename() {
+            return Vec::new();
+        }
+        vec![Effect::PromptRenameView {
+            default_name: view.name.clone(),
+        }]
+    }
+
+    fn move_active_view(&mut self, delta: i32) -> Vec<Effect> {
+        let Some(active) = self.active_view_id.clone() else {
+            return Vec::new();
+        };
+        let LoadState::Ready(views) = &self.views else {
+            return Vec::new();
+        };
+        let mut ordered: Vec<ViewId> = views.iter().map(|v| v.id.clone()).collect();
+        let Some(index) = ordered.iter().position(|id| *id == active) else {
+            return Vec::new();
+        };
+        let next = index as i32 + delta;
+        if next < 0 || next as usize >= ordered.len() {
+            return Vec::new();
+        }
+        ordered.swap(index, next as usize);
+        self.reorder_views(ordered)
     }
 
     fn rename_active_view(&mut self, name: String) -> Vec<Effect> {

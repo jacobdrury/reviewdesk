@@ -4,8 +4,8 @@ use gpui_kit::component::{
     h_flex, v_flex,
 };
 use gpui_kit::{
-    Context, IntoElement, ParentElement as _, SharedString, Styled as _, WeakEntity, div, px,
-    prelude::FluentBuilder as _,
+    App, Context, IntoElement, ParentElement as _, SharedString, Styled as _, UniformListScrollHandle,
+    WeakEntity, div, px, uniform_list, prelude::FluentBuilder as _,
 };
 use reviewdesk_core::ThreadStatus;
 
@@ -17,6 +17,7 @@ const DEFAULT_TIMELINE_COMMENT: &str = "Timeline comment from Review Desk.";
 
 pub(crate) fn render_conversation(
     view: &SessionView,
+    scroll: &UniformListScrollHandle,
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
@@ -54,48 +55,65 @@ pub(crate) fn render_conversation(
 
     let threads = conversation_threads(view.shared_threads.as_ref(), view.hide_resolved_threads);
     let reply_open = view.conversation_reply_thread.clone();
+    let row_count = threads.len();
+    let header_entity = entity.clone();
+    let list_entity = entity.clone();
+    let composer_entity = entity;
 
     v_flex()
         .size_full()
         .min_h_0()
         .bg(cx.theme().secondary.opacity(0.22))
-        .child(render_conversation_header(view, entity.clone(), cx))
+        .child(render_conversation_header(view, header_entity, cx))
         .child(
-            v_flex()
+            div()
                 .flex_1()
                 .min_h_0()
-                .overflow_hidden()
-                .px_4()
-                .pt_3()
-                .pb_2()
-                .gap_3()
-                .when(threads.is_empty(), |el| {
-                    el.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("No comments yet."),
-                    )
+                .when(row_count == 0, |el| {
+                    el.flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No comments yet."),
+                        )
                 })
-                .children(threads.into_iter().map(|thread| {
-                    let reply =
-                        reply_open.as_ref().is_some_and(|id| id.as_ref() == thread.id.as_str());
-                    render_linear_thread(thread, reply, entity.clone(), cx).into_any_element()
-                })),
+                .when(row_count > 0, |el| {
+                    el.child(uniform_list(
+                        "conversation-threads",
+                        row_count,
+                        move |range, _, cx| {
+                            range
+                                .map(|ix| {
+                                    let thread = &threads[ix];
+                                    let reply = reply_open
+                                        .as_ref()
+                                        .is_some_and(|id| id.as_ref() == thread.id.as_str());
+                                    render_linear_thread(thread, reply, list_entity.clone(), cx)
+                                        .into_any_element()
+                                })
+                                .collect()
+                        },
+                    )
+                    .track_scroll(scroll))
+                }),
         )
-        .child(render_timeline_composer(entity, cx))
+        .child(render_timeline_composer(composer_entity, cx))
         .into_any_element()
 }
 
-fn conversation_threads<'a>(
-    threads: &'a [ThreadView],
+fn conversation_threads(
+    threads: &[ThreadView],
     hide_resolved: bool,
-) -> Vec<&'a ThreadView> {
+) -> Vec<ThreadView> {
     threads
         .iter()
         .filter(|thread| {
             !hide_resolved || !matches!(thread.status, ThreadStatus::Resolved)
         })
+        .cloned()
         .collect()
 }
 
@@ -223,7 +241,7 @@ fn render_linear_thread(
     thread: &ThreadView,
     reply_open: bool,
     entity: WeakEntity<ReviewDesk>,
-    cx: &mut Context<ReviewDesk>,
+    cx: &mut App,
 ) -> impl IntoElement {
     let Some(root) = thread.comments.first() else {
         return div().into_any_element();
@@ -266,8 +284,6 @@ fn render_linear_thread(
                     .pl(px(14.))
                     .gap_3()
                     .pt_1()
-                    .border_l_1()
-                    .border_color(cx.theme().border)
                     .ml(px(11.))
                     .children(replies.iter().map(|comment| {
                         render_comment_row(comment, thread, false, entity.clone(), cx)
@@ -294,7 +310,7 @@ fn render_comment_row(
     thread: &ThreadView,
     is_root: bool,
     entity: WeakEntity<ReviewDesk>,
-    cx: &mut Context<ReviewDesk>,
+    cx: &mut App,
 ) -> impl IntoElement {
     let thread_id = thread.id.clone();
     let can_resolve = is_root
@@ -413,7 +429,7 @@ fn render_comment_row(
         )
 }
 
-fn render_anchor_header(thread: &ThreadView, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+fn render_anchor_header(thread: &ThreadView, cx: &mut App) -> impl IntoElement {
     let Some(anchor) = &thread.anchor else {
         return div().into_any_element();
     };
@@ -428,7 +444,7 @@ fn render_anchor_header(thread: &ThreadView, cx: &mut Context<ReviewDesk>) -> im
         .into_any_element()
 }
 
-fn suggestion_block(text: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+fn suggestion_block(text: &str, cx: &mut App) -> impl IntoElement {
     v_flex()
         .w_full()
         .gap_1()
@@ -453,7 +469,7 @@ fn suggestion_block(text: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElemen
         )
 }
 
-fn avatar_chip(author: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+fn avatar_chip(author: &str, cx: &mut App) -> impl IntoElement {
     let initial = author
         .chars()
         .next()

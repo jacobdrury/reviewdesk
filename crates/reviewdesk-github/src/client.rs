@@ -7,7 +7,8 @@ use reviewdesk_core::{
     codeowners_breakdown, parse_codeowners, Credentials, MergeMethod, NotificationListOptions,
     NotificationPage, NotificationThreadId, Patch, PendingDiffReviewComment, PipelinesSnapshot,
     Provider, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
-    PullRequestListOptions, PullRequestThreads, RerunTarget, ReviewSubmitEvent,
+    PullRequestListOptions, PullRequestThreads, RerunTarget, ReviewSubmitEvent, ThreadId,
+    ThreadStatus, TimelineConversationComment,
 };
 use serde_json::json;
 
@@ -21,6 +22,12 @@ use crate::map::{
 use crate::notification::{NotificationThreadPayload, map_notification_thread};
 use crate::pipelines_map::{PipelinesData, map_pipelines};
 use crate::query::pull_request_search_query;
+use crate::threads_map::{
+    ReviewConnection, ReviewThreadConnection, ReviewThreadNode, ReviewThreadsData,
+    ReviewThreadsPullRequest, diff_side_to_rest, find_viewer_pending_review_id,
+    map_pull_request_threads, parse_review_comment_id, parse_review_create_id,
+    review_submit_event_to_rest,
+};
 
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const API_BASE: &str = "https://api.github.com";
@@ -166,6 +173,58 @@ mutation DisablePullRequestAutoMerge($input: DisablePullRequestAutoMergeInput!) 
 
 const CODEOWNERS_PATHS: [&str; 3] = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
 
+const PULL_REQUEST_REVIEW_THREADS_QUERY: &str = r#"
+query PullRequestReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      reviews(states: [PENDING], first: 5) {
+        nodes { id databaseId }
+      }
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          isResolved
+          isOutdated
+          path
+          line
+          startLine
+          diffSide
+          startDiffSide
+          subjectType
+          comments(first: 100) {
+            nodes {
+              id
+              databaseId
+              body
+              state
+              author { login }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"#;
+
+const RESOLVE_REVIEW_THREAD: &str = r#"
+mutation ResolveReviewThread($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) {
+    thread { id isResolved }
+  }
+}
+"#;
+
+const UNRESOLVE_REVIEW_THREAD: &str = r#"
+mutation UnresolveReviewThread($threadId: ID!) {
+  unresolveReviewThread(input: { threadId: $threadId }) {
+    thread { id isResolved }
+  }
+}
+"#;
+
 pub struct GitHubProvider {
     client: Client,
     credentials: Credentials,
@@ -256,6 +315,239 @@ impl GitHubProvider {
         parsed
             .data
             .ok_or_else(|| ProviderError::other("graphql response missing data"))
+    }
+
+    async fn load_review_threads(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        let (owner, name, number) = parse_pull_request_id(id)?;
+        let mut after: Option<String> = None;
+        let mut head_ref_oid = None;
+        let mut pending_nodes = Vec::new();
+        let mut all_thread_nodes: Vec<ReviewThreadNode> = Vec::new();
+
+        loop {
+            let data: ReviewThreadsData = self
+                .graphql(
+                    PULL_REQUEST_REVIEW_THREADS_QUERY,
+                    json!({
+                        "owner": owner,
+                        "name": name,
+                        "number": number as i64,
+                        "after": after,
+                    }),
+                )
+                .await?;
+            let pull_request = data
+                .repository
+                .and_then(|repository| repository.pull_request)
+                .ok_or(ProviderError::NotFound)?;
+
+            if head_ref_oid.is_none() {
+                head_ref_oid = pull_request.head_ref_oid.clone();
+            }
+            if pending_nodes.is_empty() {
+                pending_nodes = pull_request.reviews.nodes;
+            }
+            for node in pull_request.review_threads.nodes {
+                if let Some(thread) = node {
+                    all_thread_nodes.push(thread);
+                }
+            }
+            if !pull_request.review_threads.page_info.has_next_page {
+                break;
+            }
+            after = pull_request.review_threads.page_info.end_cursor;
+        }
+
+        let merged = ReviewThreadsPullRequest {
+            head_ref_oid,
+            review_threads: ReviewThreadConnection {
+                page_info: crate::threads_map::PageInfo {
+                    has_next_page: false,
+                    end_cursor: None,
+                },
+                nodes: all_thread_nodes.into_iter().map(Some).collect(),
+            },
+            reviews: ReviewConnection {
+                nodes: pending_nodes,
+            },
+        };
+        Ok(map_pull_request_threads(id, &merged))
+    }
+
+    async fn head_ref_oid(&self, id: &PullRequestId) -> Result<String, ProviderError> {
+        let (owner, name, number) = parse_pull_request_id(id)?;
+        let data: ReviewThreadsData = self
+            .graphql(
+                PULL_REQUEST_REVIEW_THREADS_QUERY,
+                json!({
+                    "owner": owner,
+                    "name": name,
+                    "number": number as i64,
+                    "after": serde_json::Value::Null,
+                }),
+            )
+            .await?;
+        data.repository
+            .and_then(|repository| repository.pull_request)
+            .and_then(|pull_request| pull_request.head_ref_oid)
+            .ok_or(ProviderError::NotFound)
+    }
+
+    async fn ensure_pending_review_id(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        viewer_login: &str,
+        head_commit: &str,
+    ) -> Result<u64, ProviderError> {
+        let list_url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews");
+        let response = self
+            .client
+            .get(&list_url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        if let Some(id) = find_viewer_pending_review_id(&body, viewer_login)? {
+            return Ok(id);
+        }
+
+        let create_url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews");
+        let response = self
+            .client
+            .post(&create_url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .json(&json!({ "commit_id": head_commit }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        parse_review_create_id(&body)
+    }
+
+    async fn post_pending_diff_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+        head_commit: &str,
+        comment: &PendingDiffReviewComment,
+    ) -> Result<(), ProviderError> {
+        let side = diff_side_to_rest(comment.anchor.side);
+        let mut payload = json!({
+            "body": comment.body,
+            "commit_id": head_commit,
+            "path": comment.anchor.path,
+            "line": comment.anchor.end_line,
+            "side": side,
+            "pull_request_review_id": review_id,
+        });
+        if comment.anchor.start_line != comment.anchor.end_line {
+            payload["start_line"] = json!(comment.anchor.start_line);
+            payload["start_side"] = json!(side);
+        }
+
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/comments");
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        let _ = parse_review_comment_id(&body)?;
+        Ok(())
+    }
+
+    async fn post_pending_reply(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        root_comment_id: u64,
+        body: &str,
+    ) -> Result<(), ProviderError> {
+        let url = format!(
+            "{API_BASE}/repos/{owner}/{repo}/pulls/{number}/comments/{root_comment_id}/replies"
+        );
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .json(&json!({ "body": body }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body_text));
+        }
+        let _ = parse_review_comment_id(&body_text)?;
+        Ok(())
+    }
+
+    async fn find_pending_review_id(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        viewer_login: &str,
+    ) -> Result<Option<u64>, ProviderError> {
+        let list_url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews");
+        let response = self
+            .client
+            .get(&list_url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        find_viewer_pending_review_id(&body, viewer_login)
     }
 }
 
@@ -623,62 +915,177 @@ impl Provider for GitHubProvider {
 
     async fn fetch_pull_request_threads(
         &self,
-        _id: &PullRequestId,
+        id: &PullRequestId,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub review threads fetch is not implemented yet",
-        ))
+        self.load_review_threads(id).await
     }
 
     async fn add_pending_diff_review_comment(
         &self,
-        _id: &PullRequestId,
-        _comment: PendingDiffReviewComment,
+        id: &PullRequestId,
+        comment: PendingDiffReviewComment,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub pending review comments are not implemented yet",
-        ))
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let viewer = self.current_user().await?;
+        let head_commit = self.head_ref_oid(id).await?;
+        let review_id = self
+            .ensure_pending_review_id(&owner, &repo, number, &viewer, &head_commit)
+            .await?;
+
+        if let Some(thread_id) = &comment.reply_to_thread {
+            let snapshot = self.load_review_threads(id).await?;
+            let root_id = snapshot
+                .threads
+                .iter()
+                .find(|thread| &thread.id == thread_id)
+                .and_then(|thread| thread.comments.first())
+                .map(|c| c.id.as_str())
+                .ok_or_else(|| ProviderError::NotFound)?;
+            let root_comment_id = root_id
+                .parse::<u64>()
+                .map_err(|_| ProviderError::other("review comment id is not numeric"))?;
+            self.post_pending_reply(&owner, &repo, number, root_comment_id, &comment.body)
+                .await?;
+        } else {
+            self.post_pending_diff_comment(
+                &owner,
+                &repo,
+                number,
+                review_id,
+                &head_commit,
+                &comment,
+            )
+            .await?;
+        }
+
+        self.load_review_threads(id).await
     }
 
     async fn submit_pending_review(
         &self,
-        _id: &PullRequestId,
-        _event: ReviewSubmitEvent,
-        _summary_body: Option<String>,
+        id: &PullRequestId,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub pending review submit is not implemented yet",
-        ))
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let viewer = self.current_user().await?;
+        let snapshot = self.load_review_threads(id).await?;
+        let review_id = snapshot
+            .pending_review
+            .as_ref()
+            .and_then(|pending| pending.provider_review_id.as_ref())
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .or(self
+                .find_pending_review_id(&owner, &repo, number, &viewer)
+                .await?);
+        let review_id = review_id
+            .ok_or_else(|| ProviderError::other("no pending review to submit"))?;
+
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}/events");
+        let mut payload = json!({ "event": review_submit_event_to_rest(event) });
+        if let Some(body) = summary_body {
+            payload["body"] = json!(body);
+        }
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        self.load_review_threads(id).await
     }
 
     async fn discard_pending_review(
         &self,
-        _id: &PullRequestId,
+        id: &PullRequestId,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub pending review discard is not implemented yet",
-        ))
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let viewer = self.current_user().await?;
+        let review_id = self
+            .find_pending_review_id(&owner, &repo, number, &viewer)
+            .await?
+            .ok_or_else(|| ProviderError::other("no pending review to discard"))?;
+
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}/reviews/{review_id}");
+        let response = self
+            .client
+            .delete(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        self.load_review_threads(id).await
     }
 
     async fn set_thread_status(
         &self,
-        _id: &PullRequestId,
-        _thread_id: &reviewdesk_core::ThreadId,
-        _status: reviewdesk_core::ThreadStatus,
+        id: &PullRequestId,
+        thread_id: &ThreadId,
+        status: ThreadStatus,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub thread resolve is not implemented yet",
-        ))
+        let _ = id;
+        let query = match status {
+            ThreadStatus::Resolved => RESOLVE_REVIEW_THREAD,
+            ThreadStatus::Open => UNRESOLVE_REVIEW_THREAD,
+            ThreadStatus::Outdated => {
+                return Err(ProviderError::other(
+                    "outdated threads cannot be resolved via GitHub",
+                ));
+            }
+        };
+        self.graphql::<serde_json::Value>(
+            query,
+            json!({ "threadId": thread_id.as_str() }),
+        )
+        .await?;
+        self.load_review_threads(id).await
     }
 
     async fn publish_timeline_comment(
         &self,
-        _id: &PullRequestId,
-        _comment: reviewdesk_core::TimelineConversationComment,
+        id: &PullRequestId,
+        comment: TimelineConversationComment,
     ) -> Result<PullRequestThreads, ProviderError> {
-        Err(ProviderError::other(
-            "GitHub timeline comments are not implemented yet",
-        ))
+        let (owner, repo, number) = parse_pull_request_id(id)?;
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/comments");
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(self.credentials.token())
+            .header("Accept", REST_ACCEPT)
+            .json(&json!({ "body": comment.body }))
+            .send()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ProviderError::other(e.to_string()))?;
+        if !status.is_success() {
+            return Err(from_status(status.as_u16(), &body));
+        }
+        self.load_review_threads(id).await
     }
 }
 

@@ -15,7 +15,7 @@ ADR-0001’s LocalStore-first **read** path stays in force when Provider writeba
 
 **Cached (survive restart):** notification Inbox rows; Pull requests list rows; PR detail/metadata (including derived CODEOWNERS match summary when Metadata needs it); Patch; Conversation threads; Pipelines/check rollup; Pending review drafts per ADR-0003.
 
-**Not LocalStore:** full CI logs; raw CODEOWNERS file blob (fetch on demand, store derived summary on detail); Views (local-only, already decided); credentials (existing `gh`/PAT path — see [auth-github](../auth-github.md)).
+**Not Provider-synced cache (may still live in app persistence):** full CI logs; raw CODEOWNERS file blob (fetch on demand, store derived summary on detail); **Views** (local product data — filters, sort, group-by — persisted in embedded Turso via LocalStore APIs but never fetched from or written through the Provider); credentials (existing `gh`/PAT path — see [auth-github](../auth-github.md)).
 
 **Sync shape:** Inbox notifications and Pull requests lists use snapshot reconcile (upsert + drop absent rows). Detail, Patch, threads, checks, and draft use keyed put/get; list sync never wipes those. Lists fill on startup/interval; surface entities load on open/focus (paint cache first, background refresh if present).
 

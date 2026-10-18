@@ -71,6 +71,7 @@ pub struct ReviewDesk {
     files_scroll: UniformListScrollHandle,
     collapsed_groups: HashSet<String>,
     pipelines_scroll: UniformListScrollHandle,
+    conversation_scroll: UniformListScrollHandle,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
     _inbox_poll_timer: Task<()>,
@@ -116,6 +117,7 @@ impl ReviewDesk {
             files_scroll: UniformListScrollHandle::new(),
             collapsed_groups: HashSet::new(),
             pipelines_scroll: UniformListScrollHandle::new(),
+            conversation_scroll: UniformListScrollHandle::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
             _inbox_poll_timer: Task::ready(()),
@@ -211,7 +213,43 @@ impl ReviewDesk {
                 Effect::ArmInboxPollTimer { interval } => self.arm_inbox_poll_timer(interval, cx),
                 Effect::MarkNotificationRead { id } => self.run_mark_notification_read(id, cx),
                 Effect::MarkNotificationDone { id } => self.run_mark_notification_done(id, cx),
+                Effect::PromptRenameView { default_name } => {
+                    self.run_prompt_rename_view(default_name, cx)
+                }
             }
+        }
+    }
+
+    fn run_prompt_rename_view(&mut self, default_name: String, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        {
+            let runtime = self.runtime.clone();
+            cx.spawn(async move |this, cx| {
+                let name = match runtime
+                    .spawn(async move { macos_text_prompt("Rename view", &default_name).await })
+                    .await
+                {
+                    Ok(Some(name)) => Some(name),
+                    _ => None,
+                };
+                let Some(name) = name else {
+                    return;
+                };
+                let trimmed = name.trim();
+                if trimmed.is_empty() {
+                    return;
+                }
+                let _ = this.update(cx, |this, cx| {
+                    this.dispatch(Intent::RenameActiveView { name: trimmed.to_string() }, cx);
+                });
+            })
+            .detach();
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = default_name;
+            let _ = cx;
         }
     }
 
@@ -1028,6 +1066,7 @@ impl Render for ReviewDesk {
                                 &self.diff,
                                 &self.files_scroll,
                                 &self.pipelines_scroll,
+                                &self.conversation_scroll,
                                 entity,
                                 cx,
                             ),
@@ -1035,4 +1074,32 @@ impl Render for ReviewDesk {
                 ),
             )
     }
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_text_prompt(title: &str, default_answer: &str) -> Option<String> {
+    use std::process::Stdio;
+    use tokio::process::Command;
+
+    let script = format!(
+        r#"display dialog "{title}" default answer "{default}" with title "Review Desk""#,
+        title = title.replace('"', "\\\""),
+        default = default_answer.replace('"', "\\\"")
+    );
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let Some(text) = stdout.strip_prefix("text returned:") else {
+        return None;
+    };
+    Some(text.trim().to_string())
 }

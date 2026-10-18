@@ -7,6 +7,7 @@ mod map;
 mod notification;
 mod pipelines_map;
 mod query;
+mod threads_map;
 
 pub use client::GitHubProvider;
 pub use id::{GitHubIdError, parse_pull_request_id, pull_request_id};

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::Scrollbar,
@@ -15,7 +15,8 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px, uniform_list,
 };
 use reviewdesk_core::{
-    PullRequestListRow, PullRequestsEmptyKind, review_state_label, visible_list_rows,
+    CiStatusFilter, DraftFilter, PullRequestListRow, PullRequestsEmptyKind, ReviewState,
+    UpdatedWithin, review_state_label, visible_list_rows,
 };
 
 use crate::app::ReviewDesk;
@@ -123,8 +124,39 @@ fn render_view_tabs(
         );
     }
 
-    tabs.child(div().flex_1())
-        .child(h_flex().gap_1().pb(px(6.)).when(pane.view_dirty, |el| {
+    tabs.child(div().flex_1()).child(
+        h_flex()
+            .gap_1()
+            .pb(px(6.))
+            .child(
+                Button::new("view-move-left")
+                    .ghost()
+                    .xsmall()
+                    .label("←")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                this.dispatch(Intent::MoveActiveViewLeft, cx);
+                            });
+                        }
+                    }),
+            )
+            .child(
+                Button::new("view-move-right")
+                    .ghost()
+                    .xsmall()
+                    .label("→")
+                    .on_click({
+                        let entity = entity.clone();
+                        move |_, _, cx| {
+                            let _ = entity.update(cx, |this, cx| {
+                                this.dispatch(Intent::MoveActiveViewRight, cx);
+                            });
+                        }
+                    }),
+            )
+            .when(pane.view_dirty, |el| {
             el.child(
                 Button::new("view-save")
                     .ghost()
@@ -153,53 +185,134 @@ fn render_view_tabs(
                         }
                     }),
             )
-        }))
+            }),
+    )
 }
 
 fn render_filter_bar(
     pane: &crate::pull_requests_pane::PullRequestsPaneView,
-    _entity: WeakEntity<ReviewDesk>,
+    entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
-    h_flex()
+    let filter = &pane.working_filter;
+    let can_rename = pane.views.iter().any(|view| {
+        pane.active_view_id.as_ref() == Some(&view.id) && view.can_rename()
+    });
+
+    let drafts_label = match filter.drafts {
+        DraftFilter::All => "Drafts: all",
+        DraftFilter::ReadyOnly => "Drafts: ready",
+        DraftFilter::DraftsOnly => "Drafts: only",
+    };
+    let updated_label = match filter.updated_within {
+        UpdatedWithin::Any => "Updated: any",
+        UpdatedWithin::Last24h => "Updated: 24h",
+        UpdatedWithin::Last7d => "Updated: 7d",
+        UpdatedWithin::Last30d => "Updated: 30d",
+    };
+
+    v_flex()
         .w_full()
-        .px_4()
-        .py_2()
-        .items_center()
-        .gap_2()
         .border_b_1()
         .border_color(cx.theme().border)
         .child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("Filter"),
+            h_flex()
+                .w_full()
+                .px_4()
+                .py_2()
+                .items_center()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Filter"),
+                )
+                .when_some(pane.active_view_name.as_ref(), |el, name| {
+                    el.child(filter_chip("View", name, cx))
+                })
+                .when_some(pane.repo_scope.as_ref(), |el, repo| {
+                    el.child(filter_chip("Repository", repo, cx))
+                })
+                .child(toggle_filter_chip(
+                    "Author: me",
+                    filter.i_am_author,
+                    entity.clone(),
+                    cx,
+                    |this, cx| this.dispatch(Intent::ToggleWorkingFilterAuthor, cx),
+                ))
+                .child(toggle_filter_chip(
+                    "Reviewer: me",
+                    filter.i_am_reviewer,
+                    entity.clone(),
+                    cx,
+                    |this, cx| this.dispatch(Intent::ToggleWorkingFilterReviewer, cx),
+                ))
+                .child(cycle_filter_chip(
+                    drafts_label.to_string(),
+                    entity.clone(),
+                    cx,
+                    |this, cx| this.dispatch(Intent::CycleWorkingFilterDrafts, cx),
+                ))
+                .child(cycle_filter_chip(
+                    updated_label.to_string(),
+                    entity.clone(),
+                    cx,
+                    |this, cx| this.dispatch(Intent::CycleWorkingFilterUpdatedWithin, cx),
+                ))
+                .child(toggle_filter_chip(
+                    "Review: pending",
+                    filter.review_states.contains(&ReviewState::Pending),
+                    entity.clone(),
+                    cx,
+                    |this, cx| {
+                        this.dispatch(
+                            Intent::ToggleWorkingFilterReviewState {
+                                state: ReviewState::Pending,
+                            },
+                            cx,
+                        )
+                    },
+                ))
+                .child(disabled_filter_chip(
+                    "Assignee",
+                    "not cached yet",
+                    cx,
+                ))
+                .child(disabled_filter_chip(
+                    "CI status",
+                    match filter.ci_status {
+                        CiStatusFilter::Any => "not cached yet",
+                        _ => "checks not on list rows",
+                    },
+                    cx,
+                )),
         )
-        .when_some(pane.active_view_name.as_ref(), |el, name| {
-            el.child(filter_chip("View", name, cx))
-        })
-        .when_some(pane.repo_scope.as_ref(), |el, repo| {
-            el.child(filter_chip("Repository", repo, cx))
-        })
-        .child(div().flex_1())
         .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("Display · {}", pane.group_by_label)),
-        )
-        .child(
-            Button::new("view-rename")
-                .ghost()
-                .xsmall()
-                .label("Rename")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    if let Some(name) = this.session.view().pull_requests_pane.active_view_name {
-                        let next = format!("{name} (copy)");
-                        this.dispatch(Intent::RenameActiveView { name: next }, cx);
-                    }
-                })),
-        )
+            h_flex()
+                .w_full()
+                .px_4()
+                .pb_2()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("Display · {}", pane.group_by_label)),
+                )
+                .child(
+                    Button::new("view-rename")
+                        .ghost()
+                        .xsmall()
+                        .label("Rename")
+                        .disabled(!can_rename)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Intent::RequestRenameActiveView, cx);
+                        })),
+                )
         .child(
             Button::new("view-save-as")
                 .ghost()
@@ -230,6 +343,7 @@ fn render_filter_bar(
                         })),
                 )
             },
+        ),
         )
 }
 
@@ -254,6 +368,75 @@ fn filter_chip(field: &str, value: &str, cx: &mut Context<ReviewDesk>) -> impl I
                 .font_medium()
                 .text_color(cx.theme().foreground)
                 .child(value.to_string()),
+        )
+}
+
+fn toggle_filter_chip<F>(
+    label: &str,
+    active: bool,
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+    dispatch: F,
+) -> impl IntoElement
+where
+    F: Fn(&mut ReviewDesk, &mut Context<ReviewDesk>) + 'static,
+{
+    let label = label.to_string();
+    Button::new(SharedString::from(format!("filter-{label}")))
+        .ghost()
+        .xsmall()
+        .label(label)
+        .when(active, |button| {
+            button.bg(cx.theme().secondary.opacity(0.55))
+        })
+        .on_click(move |_, _, cx| {
+            let _ = entity.update(cx, |this, cx| {
+                dispatch(this, cx);
+            });
+        })
+}
+
+fn cycle_filter_chip<F>(
+    label: String,
+    entity: WeakEntity<ReviewDesk>,
+    _cx: &mut Context<ReviewDesk>,
+    dispatch: F,
+) -> impl IntoElement
+where
+    F: Fn(&mut ReviewDesk, &mut Context<ReviewDesk>) + 'static,
+{
+    Button::new(SharedString::from(format!("cycle-{label}")))
+        .ghost()
+        .xsmall()
+        .label(label)
+        .on_click(move |_, _, cx| {
+            let _ = entity.update(cx, |this, cx| {
+                dispatch(this, cx);
+            });
+        })
+}
+
+fn disabled_filter_chip(title: &str, reason: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_2()
+        .py(px(3.))
+        .rounded_md()
+        .border_1()
+        .border_color(cx.theme().border.opacity(0.5))
+        .opacity(0.55)
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(title.to_string()),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(reason.to_string()),
         )
 }
 

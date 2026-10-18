@@ -1,0 +1,44 @@
+{
+  "repository": {
+    "pullRequest": {
+      "headRefOid": "abc123",
+      "reviews": {
+        "nodes": [{ "id": "PRR_pending", "databaseId": 991 }]
+      },
+      "reviewThreads": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+          {
+            "id": "PRRT_kwDO",
+            "isResolved": false,
+            "isOutdated": false,
+            "path": "src/lib.rs",
+            "line": 10,
+            "startLine": 10,
+            "diffSide": "RIGHT",
+            "startDiffSide": "RIGHT",
+            "subjectType": "LINE",
+            "comments": {
+              "nodes": [
+                {
+                  "id": "PRRC_1",
+                  "databaseId": 1001,
+                  "body": "Fix:\n```suggestion\nlet x = 1;\n```\n",
+                  "state": "SUBMITTED",
+                  "author": { "login": "alice" }
+                },
+                {
+                  "id": "PRRC_2",
+                  "databaseId": 1002,
+                  "body": "draft reply",
+                  "state": "PENDING",
+                  "author": { "login": "alice" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

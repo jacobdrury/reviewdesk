@@ -30,6 +30,7 @@ pub(crate) fn render_review_pane(
     diff: &Entity<DiffState>,
     files_scroll: &UniformListScrollHandle,
     pipelines_scroll: &UniformListScrollHandle,
+    conversation_scroll: &UniformListScrollHandle,
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
@@ -77,9 +78,8 @@ pub(crate) fn render_review_pane(
         ReviewTab::Pipelines => {
             render_pipelines_tab(view, pipelines_scroll, entity.clone(), cx)
         }
-        ReviewTab::Conversation => {
-            render_conversation(view, entity.clone(), cx).into_any_element()
-        }
+        ReviewTab::Conversation => render_conversation(view, conversation_scroll, entity.clone(), cx)
+            .into_any_element(),
         ReviewTab::Changes => {
             render_files(view, diff, files_scroll, entity.clone(), cx).into_any_element()
         }
