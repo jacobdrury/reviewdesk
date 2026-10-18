@@ -39,7 +39,7 @@ tasks:
       - '@globs(tests)'
 
   lint:
-    command: 'cargo clippy --workspace'
+    command: 'cargo clippy --workspace -- -D warnings'
     inputs:
       - '@globs(sources)'
       - '@globs(tests)'

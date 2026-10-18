@@ -39,39 +39,42 @@ pub fn parse_body_segments(source: &str) -> Vec<BodySegment> {
     parse_segments(source, &mut next_id)
 }
 
+/// Inputs for [`compose_overview_markdown`].
+pub struct OverviewMarkdownInput<'a> {
+    pub title: &'a str,
+    pub author: &'a str,
+    pub is_draft: bool,
+    pub web_url: &'a str,
+    pub labels: &'a str,
+    pub reviewers: &'a str,
+    pub body: &'a str,
+    pub segments: &'a [BodySegment],
+    pub is_open: &'a dyn Fn(&DetailsBlock) -> bool,
+}
+
 /// Build the full Overview markdown, including title/meta and details fences.
-pub fn compose_overview_markdown(
-    title: &str,
-    author: &str,
-    is_draft: bool,
-    web_url: &str,
-    labels: &str,
-    reviewers: &str,
-    body: &str,
-    segments: &[BodySegment],
-    is_open: &dyn Fn(&DetailsBlock) -> bool,
-) -> String {
+pub fn compose_overview_markdown(input: OverviewMarkdownInput<'_>) -> String {
     let mut out = String::new();
     out.push_str("# ");
-    out.push_str(title.trim());
+    out.push_str(input.title.trim());
     out.push_str("\n\n");
-    out.push_str(author.trim());
+    out.push_str(input.author.trim());
     out.push_str(" · ");
-    out.push_str(if is_draft { "Draft" } else { "Ready" });
+    out.push_str(if input.is_draft { "Draft" } else { "Ready" });
     out.push_str(" · ");
-    out.push_str(web_url.trim());
+    out.push_str(input.web_url.trim());
     out.push_str("\n\n");
     out.push_str("Labels: ");
-    out.push_str(labels);
+    out.push_str(input.labels);
     out.push_str("\n\n");
     out.push_str("Reviewers: ");
-    out.push_str(reviewers);
+    out.push_str(input.reviewers);
     out.push_str("\n\n");
-    if body.trim().is_empty() {
+    if input.body.trim().is_empty() {
         out.push_str("No description.");
         return out;
     }
-    out.push_str(&compose_body_segments(segments, is_open));
+    out.push_str(&compose_body_segments(input.segments, input.is_open));
     out
 }
 
@@ -416,7 +419,7 @@ fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len()
         && a.iter()
             .zip(b.iter())
-            .all(|(l, r)| l.to_ascii_lowercase() == r.to_ascii_lowercase())
+            .all(|(l, r)| l.eq_ignore_ascii_case(r))
 }
 
 #[cfg(test)]

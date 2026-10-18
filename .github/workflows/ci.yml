@@ -1,0 +1,83 @@
+# Lint, test, and build via moon ci.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+
+jobs:
+  ci:
+    name: moon ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+
+      # GPUI / Linux native deps (fontconfig, wayland/x11, audio). Trimmed from
+      # Zed's script/linux apt list so cargo build/clippy/test can link on Ubuntu.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            libasound2-dev \
+            libfontconfig-dev \
+            libssl-dev \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
+
+      # moon syncToolchainConfig updates an existing rust-toolchain.toml from
+      # .prototools but cannot create the file when missing (save assumes it
+      # exists). Seed from the proto pin before toolchain setup so rustup and
+      # moon see the same channel on a clean checkout.
+      - name: Seed rust-toolchain.toml for moon sync
+        run: |
+          if [ ! -f rust-toolchain.toml ]; then
+            channel=$(sed -n 's/^rust = "\([^"]*\)"/\1/p' .prototools | head -1)
+            printf '[toolchain]\nchannel = "%s"\n' "${channel:?rust pin missing from .prototools}" > rust-toolchain.toml
+          fi
+
+      - uses: moonrepo/setup-toolchain@v0.6.4
+        with:
+          auto-install: true
+          # Warm ~/.proto from main so PR jobs restore the toolchain cache.
+          cache-base: main
+
+      # Persist Cargo registry + target/; without this, gpui-kit rebuilds cold every run.
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          shared-key: reviewdesk
+          cache-on-failure: true
+
+      # moon task hashes/outputs only (not the rest of .moon/cache).
+      - uses: actions/cache@v4.2.4
+        with:
+          path: |
+            .moon/cache/hashes
+            .moon/cache/outputs
+          key: moon-${{ runner.os }}-${{ hashFiles('.prototools', 'moon.yml', 'Cargo.lock', '.moon/toolchains.yml') }}-${{ github.sha }}
+          restore-keys: |
+            moon-${{ runner.os }}-${{ hashFiles('.prototools', 'moon.yml', 'Cargo.lock', '.moon/toolchains.yml') }}-
+            moon-${{ runner.os }}-
+
+      - run: moon ci :format :lint :test :build
+
+      - uses: moonrepo/run-report-action@v1.10.0
+        if: github.event_name == 'pull_request' && (success() || failure())
+        with:
+          access-token: ${{ secrets.GITHUB_TOKEN }}

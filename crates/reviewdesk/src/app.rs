@@ -30,8 +30,8 @@ use tokio::runtime::Handle;
 
 use crate::INBOX_REFRESH;
 use crate::overview_body::{
-    BodySegment, DetailsBlock, DetailsFence, compose_overview_markdown, details_effective_open,
-    open_details_ids, parse_body_segments, parse_details_fence,
+    BodySegment, DetailsBlock, DetailsFence, OverviewMarkdownInput, compose_overview_markdown,
+    details_effective_open, open_details_ids, parse_body_segments, parse_details_fence,
 };
 use crate::patch_index::{PatchIndex, index_patch};
 use crate::sync::{
@@ -216,10 +216,10 @@ impl ReviewDesk {
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(items) => {
-                        if let Some(selected) = &previous {
-                            if !items.iter().any(|item| &item.id == selected) {
-                                this.clear_selection(cx);
-                            }
+                        if let Some(selected) = &previous
+                            && !items.iter().any(|item| &item.id == selected)
+                        {
+                            this.clear_selection(cx);
                         }
                         this.inbox = LoadState::Ready(Arc::from(items));
                     }
@@ -407,17 +407,17 @@ impl ReviewDesk {
                 .join(", ")
         };
         let is_open = |block: &DetailsBlock| self.details_is_open(block);
-        let markdown = SharedString::from(compose_overview_markdown(
-            &detail.title,
-            &detail.author_login,
-            detail.is_draft,
-            &detail.web_url,
-            &labels,
-            &reviewers,
-            &detail.body,
-            &self.overview_segments,
-            &is_open,
-        ));
+        let markdown = SharedString::from(compose_overview_markdown(OverviewMarkdownInput {
+            title: &detail.title,
+            author: &detail.author_login,
+            is_draft: detail.is_draft,
+            web_url: &detail.web_url,
+            labels: &labels,
+            reviewers: &reviewers,
+            body: &detail.body,
+            segments: &self.overview_segments,
+            is_open: &is_open,
+        }));
         self.overview_compose_cache = Some(OverviewComposeCache {
             pr_id: key.0,
             open_details: key.1,

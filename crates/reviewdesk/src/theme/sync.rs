@@ -171,10 +171,10 @@ fn default_theme_name(appearance: Appearance) -> &'static str {
 }
 
 fn lookup_theme(name: &str, discovery: &DiscoveryInputs<'_>) -> Option<ThemeConfig> {
-    if let Some(json) = family_from_extension_index(name, discovery) {
-        if let Ok(config) = adapt_named_theme(json, name) {
-            return Some(config);
-        }
+    if let Some(json) = family_from_extension_index(name, discovery)
+        && let Ok(config) = adapt_named_theme(json, name)
+    {
+        return Some(config);
     }
 
     for family_json in discovery.user_families {
