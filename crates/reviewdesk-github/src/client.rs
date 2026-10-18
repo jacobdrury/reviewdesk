@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use reqwest::header::HeaderMap;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, NotificationListOptions, NotificationPage, NotificationThreadId, Patch, Provider,
-    ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem, PullRequestListOptions,
+    Credentials, NotificationListOptions, NotificationPage, NotificationThreadId, Patch,
+    PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListOptions, PullRequestThreads, ReviewSubmitEvent,
 };
 use serde_json::json;
 
@@ -296,6 +297,45 @@ impl Provider for GitHubProvider {
             .await
             .map_err(|e| ProviderError::other(e.to_string()))?;
         ensure_success(response).await
+    }
+
+    async fn fetch_pull_request_threads(
+        &self,
+        _id: &PullRequestId,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub review threads fetch is not implemented yet",
+        ))
+    }
+
+    async fn add_pending_diff_review_comment(
+        &self,
+        _id: &PullRequestId,
+        _comment: PendingDiffReviewComment,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review comments are not implemented yet",
+        ))
+    }
+
+    async fn submit_pending_review(
+        &self,
+        _id: &PullRequestId,
+        _event: ReviewSubmitEvent,
+        _summary_body: Option<String>,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review submit is not implemented yet",
+        ))
+    }
+
+    async fn discard_pending_review(
+        &self,
+        _id: &PullRequestId,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review discard is not implemented yet",
+        ))
     }
 }
 

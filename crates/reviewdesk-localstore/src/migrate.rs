@@ -112,6 +112,15 @@ create index idx_notification_threads_updated_at on reviewdesk_notification_thre
 create index idx_notification_threads_unread on reviewdesk_notification_threads(unread);
 ",
     ),
+    (
+        6,
+        "
+create table if not exists pull_request_threads (
+    pull_request_id text not null primary key,
+    threads_json text not null
+);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
