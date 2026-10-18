@@ -75,9 +75,6 @@ pub fn compose_overview_markdown(
     out
 }
 
-/// Whether a details block should compose as open (inline body after the fence).
-///
-/// `user_override` is `Some` when the reviewer has toggled this block in the UI.
 /// Collect ids of details blocks that compose as open, in ascending order.
 pub fn open_details_ids(
     segments: &[BodySegment],
@@ -105,6 +102,10 @@ fn collect_open_details_ids(
     }
 }
 
+/// Whether a details block should compose as open (inline body after the fence).
+///
+/// `user_override` is `Some` when the reviewer has toggled this block in the UI.
+/// Provider `<details open>` with a heavy nested body stays closed until toggled.
 pub fn details_effective_open(block: &DetailsBlock, user_override: Option<bool>) -> bool {
     if let Some(open) = user_override {
         return open;
