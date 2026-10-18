@@ -78,6 +78,33 @@ pub fn compose_overview_markdown(
 /// Whether a details block should compose as open (inline body after the fence).
 ///
 /// `user_override` is `Some` when the reviewer has toggled this block in the UI.
+/// Collect ids of details blocks that compose as open, in ascending order.
+pub fn open_details_ids(
+    segments: &[BodySegment],
+    is_open: &dyn Fn(&DetailsBlock) -> bool,
+) -> Vec<usize> {
+    let mut ids = Vec::new();
+    collect_open_details_ids(segments, is_open, &mut ids);
+    ids.sort_unstable();
+    ids
+}
+
+fn collect_open_details_ids(
+    segments: &[BodySegment],
+    is_open: &dyn Fn(&DetailsBlock) -> bool,
+    ids: &mut Vec<usize>,
+) {
+    for segment in segments {
+        let BodySegment::Details(block) = segment else {
+            continue;
+        };
+        if is_open(block) {
+            ids.push(block.id);
+        }
+        collect_open_details_ids(&block.segments, is_open, ids);
+    }
+}
+
 pub fn details_effective_open(block: &DetailsBlock, user_override: Option<bool>) -> bool {
     if let Some(open) = user_override {
         return open;
@@ -511,6 +538,15 @@ after
         });
         assert!(composed.contains("````reviewdesk-details 0 open 1\nsmall\n````"));
         assert!(composed.contains("short body"));
+    }
+
+    #[test]
+    fn open_details_ids_sorted_and_nested() {
+        let segments = parse_body_segments(
+            "<details open>\n<summary>outer</summary>\n<details>\n<summary>inner closed</summary>\nx\n</details>\n</details>\n\n<details open>\n<summary>second</summary>\ny\n</details>",
+        );
+        let ids = super::open_details_ids(&segments, &|block| block.default_open);
+        assert_eq!(ids, vec![0, 2]);
     }
 
     #[test]

@@ -27,10 +27,16 @@ use reviewdesk_core::{
 use tokio::runtime::Handle;
 
 use crate::overview_body::{
-    compose_overview_markdown, details_effective_open, parse_body_segments, parse_details_fence,
-    BodySegment, DetailsBlock,
-    DetailsFence,
+    compose_overview_markdown, details_effective_open, open_details_ids, parse_body_segments,
+    parse_details_fence, BodySegment, DetailsBlock, DetailsFence,
 };
+
+#[derive(Clone, PartialEq, Eq)]
+struct OverviewComposeCache {
+    pr_id: PullRequestId,
+    open_details: Vec<usize>,
+    markdown: SharedString,
+}
 use crate::patch_index::{index_patch, PatchIndex};
 use crate::theme::{
     apply_sync_result, discover_macos, missing_theme_notification, should_sync_on_activation,
@@ -88,6 +94,8 @@ pub struct ReviewDesk {
     files_scroll: UniformListScrollHandle,
     overview_segments: Vec<BodySegment>,
     details_open: HashMap<usize, bool>,
+    overview_compose_cache: Option<OverviewComposeCache>,
+    file_list_paths: Arc<[SharedString]>,
     _inbox_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
@@ -124,6 +132,8 @@ impl ReviewDesk {
             files_scroll: UniformListScrollHandle::new(),
             overview_segments: Vec::new(),
             details_open: HashMap::new(),
+            overview_compose_cache: None,
+            file_list_paths: Arc::from([]),
             _inbox_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
@@ -214,6 +224,8 @@ impl ReviewDesk {
         self.selected_file = None;
         self.overview_segments.clear();
         self.details_open.clear();
+        self.overview_compose_cache = None;
+        self.file_list_paths = Arc::from([]);
         self.diff.update(cx, |state, cx| state.set_files([], cx));
     }
 
@@ -230,6 +242,8 @@ impl ReviewDesk {
         self.selected_file = None;
         self.overview_segments.clear();
         self.details_open.clear();
+        self.overview_compose_cache = None;
+        self.file_list_paths = Arc::from([]);
         self.diff.update(cx, |state, cx| state.set_files([], cx));
         cx.notify();
 
@@ -244,6 +258,74 @@ impl ReviewDesk {
     fn toggle_details(&mut self, id: usize, currently_open: bool, cx: &mut Context<Self>) {
         self.details_open.insert(id, !currently_open);
         cx.notify();
+    }
+
+    fn overview_compose_cache_key(&self, pr_id: &PullRequestId) -> (PullRequestId, Vec<usize>) {
+        let open_details = open_details_ids(&self.overview_segments, &|block| {
+            self.details_is_open(block)
+        });
+        (pr_id.clone(), open_details)
+    }
+
+    fn overview_markdown_cache_hit(&self) -> Option<SharedString> {
+        let LoadState::Ready(detail) = &self.detail else {
+            return None;
+        };
+        let key = self.overview_compose_cache_key(&detail.id);
+        let cache = self.overview_compose_cache.as_ref()?;
+        if cache.pr_id == key.0 && cache.open_details == key.1 {
+            Some(cache.markdown.clone())
+        } else {
+            None
+        }
+    }
+
+    fn cached_overview_markdown(&mut self, detail: &PullRequestDetail) -> SharedString {
+        let key = self.overview_compose_cache_key(&detail.id);
+        if let Some(cache) = &self.overview_compose_cache {
+            if cache.pr_id == key.0 && cache.open_details == key.1 {
+                return cache.markdown.clone();
+            }
+        }
+
+        let reviewers = if detail.reviewers.is_empty() {
+            "None".to_string()
+        } else {
+            detail
+                .reviewers
+                .iter()
+                .map(|r| r.login.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let labels = if detail.labels.is_empty() {
+            "None".to_string()
+        } else {
+            detail
+                .labels
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let is_open = |block: &DetailsBlock| self.details_is_open(block);
+        let markdown = SharedString::from(compose_overview_markdown(
+            &detail.title,
+            &detail.author_login,
+            detail.is_draft,
+            &detail.web_url,
+            &labels,
+            &reviewers,
+            &detail.body,
+            &self.overview_segments,
+            &is_open,
+        ));
+        self.overview_compose_cache = Some(OverviewComposeCache {
+            pr_id: key.0,
+            open_details: key.1,
+            markdown: markdown.clone(),
+        });
+        markdown
     }
 
     fn load_detail(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
@@ -262,6 +344,7 @@ impl ReviewDesk {
                     return;
                 }
                 this.details_open.clear();
+                this.overview_compose_cache = None;
                 this.detail = match result {
                     Ok(detail) => {
                         this.overview_segments = parse_body_segments(&detail.body);
@@ -295,15 +378,26 @@ impl ReviewDesk {
                 this.patch_index = match result {
                     Ok(patch) => match index_patch(patch) {
                         Ok(index) => {
+                            this.file_list_paths = index
+                                .paths()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .into();
                             if let Some(path) = index.first_path() {
                                 this.selected_file = Some(path.clone());
                                 this.materialize_file(path, cx);
                             }
                             LoadState::Ready(index)
                         }
-                        Err(error) => LoadState::Error(error),
+                        Err(error) => {
+                            this.file_list_paths = Arc::from([]);
+                            LoadState::Error(error)
+                        }
                     },
-                    Err(error) => LoadState::Error(error),
+                    Err(error) => {
+                        this.file_list_paths = Arc::from([]);
+                        LoadState::Error(error)
+                    }
                 };
                 cx.notify();
             });
@@ -556,7 +650,7 @@ impl ReviewDesk {
             })
     }
 
-    fn render_review_pane(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_review_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         if self.selected_id.is_none() {
             return v_flex()
                 .size_full()
@@ -609,8 +703,22 @@ impl ReviewDesk {
             .into_any_element()
     }
 
-    fn render_overview(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_overview(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
+        if let Some(markdown) = self.overview_markdown_cache_hit() {
+            let owner = cx.entity().downgrade();
+            return div()
+                .size_full()
+                .min_h_0()
+                .p_4()
+                .child(
+                    TextView::markdown("pr-overview", markdown)
+                        .scrollable(true)
+                        .text_sm()
+                        .size_full()
+                        .plugin(DetailsTogglePlugin { owner }),
+                );
+        }
         match &self.detail {
             LoadState::Idle | LoadState::Loading => v_flex()
                 .size_full()
@@ -659,38 +767,8 @@ impl ReviewDesk {
                     )
             }
             LoadState::Ready(detail) => {
-                let reviewers = if detail.reviewers.is_empty() {
-                    "None".to_string()
-                } else {
-                    detail
-                        .reviewers
-                        .iter()
-                        .map(|r| r.login.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                let labels = if detail.labels.is_empty() {
-                    "None".to_string()
-                } else {
-                    detail
-                        .labels
-                        .iter()
-                        .map(|l| l.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                let is_open = |block: &DetailsBlock| self.details_is_open(block);
-                let markdown = compose_overview_markdown(
-                    &detail.title,
-                    &detail.author_login,
-                    detail.is_draft,
-                    &detail.web_url,
-                    &labels,
-                    &reviewers,
-                    &detail.body,
-                    &self.overview_segments,
-                    &is_open,
-                );
+                let detail = detail.clone();
+                let markdown = self.cached_overview_markdown(&detail);
                 let owner = cx.entity().downgrade();
                 div()
                     .size_full()
@@ -707,7 +785,7 @@ impl ReviewDesk {
         }
     }
 
-    fn render_files(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_files(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity().downgrade();
         match &self.patch_index {
             LoadState::Idle | LoadState::Loading => {
@@ -753,6 +831,7 @@ impl ReviewDesk {
                                     this.patch_index = LoadState::Loading;
                                     this.file_cache.clear();
                                     this.file_errors.clear();
+                                    this.file_list_paths = Arc::from([]);
                                     cx.notify();
                                     this.load_patch(id, cx);
                                 });
@@ -763,11 +842,7 @@ impl ReviewDesk {
             LoadState::Ready(_) => {}
         }
 
-        let index = match &self.patch_index {
-            LoadState::Ready(index) => index.clone(),
-            _ => unreachable!(),
-        };
-        let file_paths: Vec<SharedString> = index.paths().cloned().collect();
+        let file_paths = self.file_list_paths.clone();
         let selected_file = self.selected_file.clone();
         let selected_file_error = selected_file
             .as_ref()
@@ -842,7 +917,6 @@ impl ReviewDesk {
                                             ),
                                     )
                                     .child({
-                                        let file_paths = file_paths.clone();
                                         let selected_file = selected_file.clone();
                                         let file_entity = entity.clone();
                                         div()
