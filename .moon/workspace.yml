@@ -3,3 +3,11 @@ projects:
 
 vcs:
   defaultBranch: 'main'
+
+# Share CAS blobs/manifests across git worktrees on this machine (moon ≥2.5).
+# Requires casOutputsCache; hashes/locks/state stay per-worktree.
+experiments:
+  casOutputsCache: true
+
+cache:
+  unstable_sharedWorktreeCache: true
