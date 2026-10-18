@@ -2,14 +2,17 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use reviewdesk_core::{
-    DraftFilter, InboxItem, InboxLabel, InboxQuery, InboxSortField, LocalStoreError, ReviewState,
-    SortDirection,
+    DraftFilter, LocalStoreError, PullRequestLabel, PullRequestListItem, PullRequestListQuery,
+    PullRequestListSortField, ReviewState, SortDirection,
 };
 use turso::Connection;
 
 use crate::error::map_other;
 
-pub async fn sync_inbox(conn: &Connection, items: &[InboxItem]) -> Result<(), LocalStoreError> {
+pub async fn sync_pull_requests(
+    conn: &Connection,
+    items: &[PullRequestListItem],
+) -> Result<(), LocalStoreError> {
     for item in items {
         upsert_item(conn, item).await?;
     }
@@ -17,17 +20,17 @@ pub async fn sync_inbox(conn: &Connection, items: &[InboxItem]) -> Result<(), Lo
     Ok(())
 }
 
-async fn upsert_item(conn: &Connection, item: &InboxItem) -> Result<(), LocalStoreError> {
+async fn upsert_item(conn: &Connection, item: &PullRequestListItem) -> Result<(), LocalStoreError> {
     let review_state = encode_review_state(item.review_state);
     let updated_at = item.updated_at.to_rfc3339();
     let is_draft = if item.is_draft { 1i64 } else { 0 };
 
     conn.execute(
         "
-INSERT INTO reviewdesk_inbox_items (
+insert into reviewdesk_pull_request_list_items (
     id, title, web_url, updated_at, author_login, author_avatar_url, repo_label, review_state, is_draft
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-ON CONFLICT(id) DO UPDATE SET
+) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+on conflict(id) do update set
     title = excluded.title,
     web_url = excluded.web_url,
     updated_at = excluded.updated_at,
@@ -53,7 +56,7 @@ ON CONFLICT(id) DO UPDATE SET
     .map_err(map_other)?;
 
     conn.execute(
-        "DELETE FROM reviewdesk_inbox_item_labels WHERE inbox_item_id = ?1",
+        "delete from reviewdesk_pull_request_list_item_labels where pull_request_list_item_id = ?1",
         [item.id.as_str()],
     )
     .await
@@ -62,8 +65,8 @@ ON CONFLICT(id) DO UPDATE SET
     for label in &item.labels {
         conn.execute(
             "
-INSERT INTO reviewdesk_inbox_item_labels (inbox_item_id, name, color)
-VALUES (?1, ?2, ?3)
+insert into reviewdesk_pull_request_list_item_labels (pull_request_list_item_id, name, color)
+values (?1, ?2, ?3)
 ",
             (item.id.as_str(), label.name.as_str(), label.color.as_str()),
         )
@@ -74,22 +77,25 @@ VALUES (?1, ?2, ?3)
     Ok(())
 }
 
-async fn reconcile(conn: &Connection, items: &[InboxItem]) -> Result<(), LocalStoreError> {
+async fn reconcile(
+    conn: &Connection,
+    items: &[PullRequestListItem],
+) -> Result<(), LocalStoreError> {
     if items.is_empty() {
-        conn.execute("DELETE FROM reviewdesk_inbox_items", ())
+        conn.execute("delete from reviewdesk_pull_request_list_items", ())
             .await
             .map_err(map_other)?;
         return Ok(());
     }
 
     let mut stmt = conn
-        .prepare("DELETE FROM reviewdesk_inbox_items WHERE id = ?1")
+        .prepare("delete from reviewdesk_pull_request_list_items where id = ?1")
         .await
         .map_err(map_other)?;
 
     let keep: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
     let mut rows = conn
-        .query("SELECT id FROM reviewdesk_inbox_items", ())
+        .query("select id from reviewdesk_pull_request_list_items", ())
         .await
         .map_err(map_other)?;
 
@@ -111,17 +117,17 @@ async fn reconcile(conn: &Connection, items: &[InboxItem]) -> Result<(), LocalSt
     Ok(())
 }
 
-pub async fn query_inbox(
+pub async fn query_pull_requests(
     conn: &Connection,
-    query: &InboxQuery,
-) -> Result<Vec<InboxItem>, LocalStoreError> {
+    query: &PullRequestListQuery,
+) -> Result<Vec<PullRequestListItem>, LocalStoreError> {
     let (sql, params) = build_list_sql(query)?;
     let mut rows = conn.query(&sql, params).await.map_err(map_other)?;
 
     let mut items = Vec::new();
     let mut ids = Vec::new();
     while let Some(row) = rows.next().await.map_err(map_other)? {
-        let (item, id) = row_to_inbox_item(&row)?;
+        let (item, id) = row_to_pull_request_list_item(&row)?;
         items.push(item);
         ids.push(id);
     }
@@ -138,7 +144,9 @@ pub async fn query_inbox(
     Ok(items)
 }
 
-fn build_list_sql(query: &InboxQuery) -> Result<(String, Vec<turso::Value>), LocalStoreError> {
+fn build_list_sql(
+    query: &PullRequestListQuery,
+) -> Result<(String, Vec<turso::Value>), LocalStoreError> {
     let mut clauses = Vec::new();
     let mut params: Vec<turso::Value> = Vec::new();
 
@@ -163,24 +171,24 @@ fn build_list_sql(query: &InboxQuery) -> Result<(String, Vec<turso::Value>), Loc
     if let Some(label) = &query.filter.has_label {
         params.push(turso::Value::Text(label.clone()));
         clauses.push(format!(
-            "EXISTS (SELECT 1 FROM reviewdesk_inbox_item_labels l WHERE l.inbox_item_id = reviewdesk_inbox_items.id AND l.name = ?{})",
+            "exists (select 1 from reviewdesk_pull_request_list_item_labels l where l.pull_request_list_item_id = reviewdesk_pull_request_list_items.id and l.name = ?{})",
             params.len()
         ));
     }
 
     let order = match (query.sort.field, query.sort.direction) {
-        (InboxSortField::UpdatedAt, SortDirection::Desc) => "updated_at DESC",
-        (InboxSortField::UpdatedAt, SortDirection::Asc) => "updated_at ASC",
+        (PullRequestListSortField::UpdatedAt, SortDirection::Desc) => "updated_at desc",
+        (PullRequestListSortField::UpdatedAt, SortDirection::Asc) => "updated_at asc",
     };
 
     let where_sql = if clauses.is_empty() {
         String::new()
     } else {
-        format!(" WHERE {}", clauses.join(" AND "))
+        format!(" where {}", clauses.join(" and "))
     };
 
     let sql = format!(
-        "SELECT id, title, web_url, updated_at, author_login, author_avatar_url, repo_label, review_state, is_draft FROM reviewdesk_inbox_items{where_sql} ORDER BY {order}"
+        "select id, title, web_url, updated_at, author_login, author_avatar_url, repo_label, review_state, is_draft from reviewdesk_pull_request_list_items{where_sql} order by {order}"
     );
 
     Ok((sql, params))
@@ -189,12 +197,12 @@ fn build_list_sql(query: &InboxQuery) -> Result<(String, Vec<turso::Value>), Loc
 async fn load_labels(
     conn: &Connection,
     ids: &[String],
-) -> Result<HashMap<String, Vec<InboxLabel>>, LocalStoreError> {
-    let mut map: HashMap<String, Vec<InboxLabel>> = HashMap::new();
+) -> Result<HashMap<String, Vec<PullRequestLabel>>, LocalStoreError> {
+    let mut map: HashMap<String, Vec<PullRequestLabel>> = HashMap::new();
     for id in ids {
         let mut rows = conn
             .query(
-                "SELECT name, color FROM reviewdesk_inbox_item_labels WHERE inbox_item_id = ?1 ORDER BY name",
+                "select name, color from reviewdesk_pull_request_list_item_labels where pull_request_list_item_id = ?1 order by name",
                 [id.as_str()],
             )
             .await
@@ -210,13 +218,15 @@ async fn load_labels(
             )?;
             map.entry(id.clone())
                 .or_default()
-                .push(InboxLabel { name, color });
+                .push(PullRequestLabel { name, color });
         }
     }
     Ok(map)
 }
 
-fn row_to_inbox_item(row: &turso::Row) -> Result<(InboxItem, String), LocalStoreError> {
+fn row_to_pull_request_list_item(
+    row: &turso::Row,
+) -> Result<(PullRequestListItem, String), LocalStoreError> {
     use reviewdesk_core::PullRequestId;
 
     let id = value_to_string(
@@ -266,7 +276,7 @@ fn row_to_inbox_item(row: &turso::Row) -> Result<(InboxItem, String), LocalStore
     let pr_id =
         PullRequestId::new(id.clone()).map_err(|e| LocalStoreError::other(e.to_string()))?;
 
-    let item = InboxItem {
+    let item = PullRequestListItem {
         id: pr_id,
         title,
         web_url,

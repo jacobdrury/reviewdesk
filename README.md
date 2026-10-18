@@ -4,10 +4,10 @@ Desktop client for managing and doing code reviews across providers, starting wi
 
 ## Architecture (local data)
 
-Review Desk is **local-first** for Inbox and cached pull-request data:
+Review Desk is **local-first** for the Pull requests list and cached pull-request data:
 
 - **LocalStore** (`reviewdesk-core` trait, `reviewdesk-localstore` Turso implementation) holds the on-disk cache.
-- The **UI reads LocalStore** on the hot path so Inbox and Review pane screens stay responsive.
+- The **UI reads LocalStore** on the hot path so Pull requests and Review pane screens stay responsive.
 - **Providers** (for example GitHub) **sync in the background** and upsert into LocalStore; they are not the default for every list navigation.
 - Persistence uses **embedded Turso** (SQLite-compatible, in-process). **No Turso Cloud account** or remote database is required for local features.
 - Schema stays **vanilla SQLite** so we can fall back to plain SQLite later if needed.

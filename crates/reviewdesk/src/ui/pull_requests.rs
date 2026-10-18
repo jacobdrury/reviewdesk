@@ -14,9 +14,9 @@ use gpui_kit::{
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView};
 
-pub(crate) fn render_inbox(
+pub(crate) fn render_pull_requests(
     view: &SessionView,
-    inbox_scroll: &UniformListScrollHandle,
+    pull_requests_scroll: &UniformListScrollHandle,
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
@@ -38,15 +38,15 @@ pub(crate) fn render_inbox(
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .font_medium()
-                        .child("INBOX"),
+                        .child("PULL REQUESTS"),
                 )
                 .child(
-                    Button::new("inbox-refresh")
+                    Button::new("pull-requests-refresh")
                         .ghost()
                         .xsmall()
                         .icon(IconName::RefreshCw)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Intent::RefreshInbox, cx);
+                            this.dispatch(Intent::RefreshPullRequests, cx);
                         })),
                 ),
         )
@@ -61,10 +61,10 @@ pub(crate) fn render_inbox(
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .truncate()
-                        .child(view.inbox_sync.status_label()),
+                        .child(view.pull_requests_sync.status_label()),
                 ),
         )
-        .child(match &view.inbox {
+        .child(match &view.pull_requests {
             LoadState::Idle | LoadState::Loading => v_flex()
                 .flex_1()
                 .min_h_0()
@@ -76,7 +76,7 @@ pub(crate) fn render_inbox(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Loading Inbox…"),
+                        .child("Loading pull requests…"),
                 )
                 .into_any_element(),
             LoadState::Error(error) => {
@@ -96,12 +96,12 @@ pub(crate) fn render_inbox(
                             .child(message),
                     )
                     .child(
-                        Button::new("inbox-retry")
+                        Button::new("pull-requests-retry")
                             .outline()
                             .small()
                             .label("Retry")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(Intent::RefreshInbox, cx);
+                                this.dispatch(Intent::RefreshPullRequests, cx);
                             })),
                     )
                     .into_any_element()
@@ -117,7 +117,7 @@ pub(crate) fn render_inbox(
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .text_center()
-                        .child(view.inbox_sync.empty_placeholder()),
+                        .child(view.pull_requests_sync.empty_placeholder()),
                 )
                 .into_any_element(),
             LoadState::Ready(items) => {
@@ -128,7 +128,7 @@ pub(crate) fn render_inbox(
                     .min_h_0()
                     .relative()
                     .child(
-                        uniform_list("inbox-list", items.len(), move |range, _, cx| {
+                        uniform_list("pull-requests-list", items.len(), move |range, _, cx| {
                             range
                                 .map(|ix| {
                                     let item = &items[ix];
@@ -172,9 +172,9 @@ pub(crate) fn render_inbox(
                                 .collect()
                         })
                         .size_full()
-                        .track_scroll(inbox_scroll),
+                        .track_scroll(pull_requests_scroll),
                     )
-                    .child(Scrollbar::vertical(inbox_scroll))
+                    .child(Scrollbar::vertical(pull_requests_scroll))
                     .into_any_element()
             }
         })

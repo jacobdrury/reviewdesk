@@ -66,6 +66,36 @@ CREATE INDEX idx_inbox_items_is_draft ON reviewdesk_inbox_items(is_draft);
 CREATE INDEX idx_inbox_item_labels_name ON reviewdesk_inbox_item_labels(name);
 ",
     ),
+    (
+        4,
+        "
+drop table if exists reviewdesk_inbox_item_labels;
+drop table if exists reviewdesk_inbox_items;
+create table reviewdesk_pull_request_list_items (
+    id text not null primary key,
+    title text not null,
+    web_url text not null,
+    updated_at text not null,
+    author_login text not null,
+    author_avatar_url text,
+    repo_label text not null,
+    review_state text not null,
+    is_draft integer not null default 0 check (is_draft in (0, 1))
+);
+create table reviewdesk_pull_request_list_item_labels (
+    pull_request_list_item_id text not null references reviewdesk_pull_request_list_items(id) on delete cascade,
+    name text not null,
+    color text not null,
+    primary key (pull_request_list_item_id, name)
+);
+create index idx_pull_request_list_items_updated_at on reviewdesk_pull_request_list_items(updated_at);
+create index idx_pull_request_list_items_repo_label on reviewdesk_pull_request_list_items(repo_label);
+create index idx_pull_request_list_items_author_login on reviewdesk_pull_request_list_items(author_login);
+create index idx_pull_request_list_items_review_state on reviewdesk_pull_request_list_items(review_state);
+create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_list_items(is_draft);
+create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

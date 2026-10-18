@@ -1,5 +1,5 @@
 use reviewdesk_core::{
-    InboxLabel, LocalStoreError, Patch, PullRequestDetail, PullRequestId, Reviewer,
+    LocalStoreError, Patch, PullRequestDetail, PullRequestId, PullRequestLabel, Reviewer,
 };
 use serde::{Deserialize, Serialize};
 use turso::{Connection, Value};
@@ -143,7 +143,7 @@ pub async fn get_patch(
     Ok(Some(Patch::new(text_at(&row, 0)?)))
 }
 
-fn encode_labels(labels: &[InboxLabel]) -> Result<String, LocalStoreError> {
+fn encode_labels(labels: &[PullRequestLabel]) -> Result<String, LocalStoreError> {
     let stored = labels
         .iter()
         .map(|label| StoredLabel {
@@ -154,12 +154,12 @@ fn encode_labels(labels: &[InboxLabel]) -> Result<String, LocalStoreError> {
     serde_json::to_string(&stored).map_err(|e| LocalStoreError::other(e.to_string()))
 }
 
-fn decode_labels(json: &str) -> Result<Vec<InboxLabel>, LocalStoreError> {
+fn decode_labels(json: &str) -> Result<Vec<PullRequestLabel>, LocalStoreError> {
     let stored: Vec<StoredLabel> =
         serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
     Ok(stored
         .into_iter()
-        .map(|label| InboxLabel {
+        .map(|label| PullRequestLabel {
             name: label.name,
             color: label.color,
         })

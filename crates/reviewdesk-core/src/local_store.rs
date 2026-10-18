@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use crate::id::PullRequestId;
-use crate::inbox::{InboxItem, InboxQuery};
 use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
+use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
 
 /// Errors from the local persistence layer. Distinct from [`ProviderError`](crate::ProviderError).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -38,7 +38,7 @@ impl LocalStoreError {
     }
 }
 
-/// Local-first cache for Inbox, pull-request metadata, and patches.
+/// Local-first cache for the Pull requests list, pull-request metadata, and patches.
 ///
 /// Turso and SQL stay in the implementation crate; UI and sync depend on this trait only.
 #[async_trait]
@@ -46,11 +46,17 @@ pub trait LocalStore: Send + Sync {
     /// Schema version after the latest successful migration.
     async fn schema_version(&self) -> Result<u32, LocalStoreError>;
 
-    /// Upserts Inbox rows from a Provider sync snapshot and removes rows not in `items`.
-    async fn sync_inbox(&self, items: &[InboxItem]) -> Result<(), LocalStoreError>;
+    /// Upserts Pull requests rows from a Provider sync snapshot and removes rows not in `items`.
+    async fn sync_pull_requests(
+        &self,
+        items: &[PullRequestListItem],
+    ) -> Result<(), LocalStoreError>;
 
-    /// Lists Inbox rows matching `query` (filters, sort). Does not load Patch blobs.
-    async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError>;
+    /// Lists Pull requests rows matching `query` (filters, sort). Does not load Patch blobs.
+    async fn query_pull_requests(
+        &self,
+        query: &PullRequestListQuery,
+    ) -> Result<Vec<PullRequestListItem>, LocalStoreError>;
 
     /// Persists overview detail for a pull request, replacing any prior row for the same id.
     async fn put_pull_request_detail(

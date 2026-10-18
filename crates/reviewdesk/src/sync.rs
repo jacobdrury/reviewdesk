@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use reviewdesk_core::{
-    InboxItem, InboxOptions, InboxQuery, LocalStore, LocalStoreError, Patch, Provider,
-    ProviderError, PullRequestDetail, PullRequestId,
+    LocalStore, LocalStoreError, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestListOptions, PullRequestListQuery,
 };
 use tokio::sync::Mutex;
 
@@ -22,9 +22,12 @@ impl AppLocalStore {
         }
     }
 
-    pub async fn query_inbox(&self, query: &InboxQuery) -> Result<Vec<InboxItem>, LocalStoreError> {
+    pub async fn query_pull_requests(
+        &self,
+        query: &PullRequestListQuery,
+    ) -> Result<Vec<PullRequestListItem>, LocalStoreError> {
         let _guard = self.store_lock.lock().await;
-        self.inner.query_inbox(query).await
+        self.inner.query_pull_requests(query).await
     }
 
     pub async fn get_pull_request_detail(
@@ -40,9 +43,12 @@ impl AppLocalStore {
         self.inner.get_patch(id).await
     }
 
-    async fn sync_inbox_locked(&self, items: &[InboxItem]) -> Result<(), LocalStoreError> {
+    async fn sync_pull_requests_locked(
+        &self,
+        items: &[PullRequestListItem],
+    ) -> Result<(), LocalStoreError> {
         let _guard = self.store_lock.lock().await;
-        self.inner.sync_inbox(items).await
+        self.inner.sync_pull_requests(items).await
     }
 
     async fn put_pull_request_detail_locked(
@@ -63,15 +69,15 @@ impl AppLocalStore {
     }
 }
 
-/// Fetches Inbox from the Provider and reconciles into LocalStore.
-pub async fn sync_inbox_from_provider(
+/// Fetches the Pull requests list from the Provider and reconciles into LocalStore.
+pub async fn sync_pull_requests_from_provider(
     provider: &dyn Provider,
     store: &AppLocalStore,
-    options: &InboxOptions,
+    options: &PullRequestListOptions,
 ) -> Result<(), ProviderError> {
-    let items = provider.list_inbox(options).await?;
+    let items = provider.list_pull_requests(options).await?;
     store
-        .sync_inbox_locked(&items)
+        .sync_pull_requests_locked(&items)
         .await
         .map_err(|e| ProviderError::other(e.to_string()))?;
     Ok(())
@@ -155,12 +161,12 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::Utc;
-    use reviewdesk_core::{InboxLabel, ReviewState};
+    use reviewdesk_core::{PullRequestLabel, ReviewState};
 
     use super::*;
 
     struct RecordingStore {
-        inbox: StdMutex<Vec<InboxItem>>,
+        pull_requests: StdMutex<Vec<PullRequestListItem>>,
     }
 
     #[async_trait]
@@ -169,16 +175,19 @@ mod tests {
             Ok(1)
         }
 
-        async fn sync_inbox(&self, items: &[InboxItem]) -> Result<(), LocalStoreError> {
-            *self.inbox.lock().expect("lock") = items.to_vec();
+        async fn sync_pull_requests(
+            &self,
+            items: &[PullRequestListItem],
+        ) -> Result<(), LocalStoreError> {
+            *self.pull_requests.lock().expect("lock") = items.to_vec();
             Ok(())
         }
 
-        async fn query_inbox(
+        async fn query_pull_requests(
             &self,
-            _query: &InboxQuery,
-        ) -> Result<Vec<InboxItem>, LocalStoreError> {
-            Ok(self.inbox.lock().expect("lock").clone())
+            _query: &PullRequestListQuery,
+        ) -> Result<Vec<PullRequestListItem>, LocalStoreError> {
+            Ok(self.pull_requests.lock().expect("lock").clone())
         }
 
         async fn put_pull_request_detail(
@@ -209,16 +218,16 @@ mod tests {
     }
 
     struct StubProvider {
-        inbox: Vec<InboxItem>,
+        pull_requests: Vec<PullRequestListItem>,
     }
 
     #[async_trait]
     impl Provider for StubProvider {
-        async fn list_inbox(
+        async fn list_pull_requests(
             &self,
-            _options: &InboxOptions,
-        ) -> Result<Vec<InboxItem>, ProviderError> {
-            Ok(self.inbox.clone())
+            _options: &PullRequestListOptions,
+        ) -> Result<Vec<PullRequestListItem>, ProviderError> {
+            Ok(self.pull_requests.clone())
         }
 
         async fn fetch_patch(&self, _id: &PullRequestId) -> Result<Patch, ProviderError> {
@@ -233,8 +242,8 @@ mod tests {
         }
     }
 
-    fn sample_item(id: &str) -> InboxItem {
-        InboxItem {
+    fn sample_item(id: &str) -> PullRequestListItem {
+        PullRequestListItem {
             id: PullRequestId::new(id).expect("id"),
             title: "Title".to_string(),
             web_url: "https://example.com".to_string(),
@@ -242,7 +251,7 @@ mod tests {
             author_login: "alice".to_string(),
             author_avatar_url: None,
             repo_label: "acme/widgets".to_string(),
-            labels: vec![InboxLabel {
+            labels: vec![PullRequestLabel {
                 name: "bug".to_string(),
                 color: "ff0000".to_string(),
             }],
@@ -252,22 +261,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_inbox_from_provider_writes_into_store() {
+    async fn sync_pull_requests_from_provider_writes_into_store() {
         let recording = Arc::new(RecordingStore {
-            inbox: StdMutex::new(Vec::new()),
+            pull_requests: StdMutex::new(Vec::new()),
         });
         let store = AppLocalStore::new(recording.clone());
         let item = sample_item("acme/widgets#1");
         let provider = StubProvider {
-            inbox: vec![item.clone()],
+            pull_requests: vec![item.clone()],
         };
 
-        sync_inbox_from_provider(&provider, &store, &InboxOptions::default())
+        sync_pull_requests_from_provider(&provider, &store, &PullRequestListOptions::default())
             .await
             .expect("sync");
 
         let rows = store
-            .query_inbox(&InboxQuery::default())
+            .query_pull_requests(&PullRequestListQuery::default())
             .await
             .expect("query");
         assert_eq!(rows, vec![item]);

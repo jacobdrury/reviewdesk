@@ -29,7 +29,7 @@ pub(crate) fn render_review_pane(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Select a pull request from the Inbox."),
+                    .child("Select a pull request from Pull requests."),
             )
             .into_any_element();
     }
