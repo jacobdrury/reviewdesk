@@ -18,20 +18,8 @@ struct PatchFileEntry {
 }
 
 impl PatchIndex {
-    pub fn patch(&self) -> &Patch {
-        &self.patch
-    }
-
     pub fn paths(&self) -> impl ExactSizeIterator<Item = &SharedString> {
         self.entries.iter().map(|entry| &entry.path)
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     pub fn first_path(&self) -> Option<SharedString> {
@@ -327,7 +315,7 @@ mod tests {
         let mut broken = MULTI_FILE.to_owned();
         broken.push_str("diff --git a/bad b/bad\n--- a/bad\n+++ b/bad\n@@ not a hunk @@\n");
         let index = index_patch(Patch::new(&broken)).unwrap();
-        assert_eq!(index.len(), 5);
+        assert_eq!(index.paths().count(), 5);
         assert!(index.materialize("new").is_ok());
         assert!(index.materialize("bad").is_err());
     }
