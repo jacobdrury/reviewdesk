@@ -670,9 +670,6 @@ fn render_review_stage(
                         }),
                 ),
             )
-            .when(!proto.metadata_open, |el| {
-                el.child(render_metadata_collapsed_strip(cx))
-            })
             .into_any_element();
     }
 
@@ -696,9 +693,6 @@ fn render_review_stage(
                         }),
                 ),
             )
-            .when(!proto.metadata_open, |el| {
-                el.child(render_metadata_collapsed_strip(cx))
-            })
             .into_any_element();
     }
 
@@ -977,32 +971,6 @@ fn render_metadata_panel(
                         .label("Re-request review (stub)")
                         .on_click(|_, _, _| {}),
                 ),
-        )
-}
-
-fn render_metadata_collapsed_strip(cx: &mut Context<ReviewDesk>) -> impl IntoElement {
-    h_flex()
-        .w_full()
-        .px_3()
-        .py(px(4.))
-        .items_center()
-        .justify_between()
-        .border_t_1()
-        .border_color(cx.theme().border)
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("Metadata hidden"),
-        )
-        .child(
-            Button::new("metadata-show")
-                .ghost()
-                .xsmall()
-                .label("Show")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_metadata(cx);
-                })),
         )
 }
 
