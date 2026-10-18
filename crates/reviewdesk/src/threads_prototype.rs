@@ -1,29 +1,20 @@
 //! PROTOTYPE (throwaway): Conversation + Diff-anchored Threads for Review Desk.
 //!
-//! Question: how should Threads read and compose on Conversation and the Diff
-//! surface — concrete enough to grill remaining UX, without live Provider writeback?
+//! HITL pick (locked): Linear comments baseline for Conversation + Diff Threads.
+//! See [comment-on-issues](https://linear.app/docs/comment-on-issues). Sibling
+//! `prototype/pull-requests-list-nav` locks list chrome to Linear Issues.
 //!
-//! Baseline: clone Linear's issue comments
-//! ([comment-on-issues](https://linear.app/docs/comment-on-issues)) for Review Desk
-//! PRs. Sibling prototype `prototype/pull-requests-list-nav` locks the list chrome
-//! to Linear Issues; this branch locks Conversation/Threads to Linear comments.
-//!
-//! Mapping (Linear → Review Desk):
-//! - Issue comment feed → Conversation chronological comments + Thread roots
-//! - Reply-to-comment threads → Thread replies (shared with Diff)
-//! - Resolve thread (root or showcase reply) → Thread resolve
-//! - “Leave a comment…” bottom composer → Conversation compose (timeline posts
-//!   immediately; Diff-anchored drafts sit on Pending review per #54)
-//! - Unsent / Drafts → Pending review drafts (visible with Draft badge)
-//! - Inline comments on description → Diff-anchored Review comments / Suggestions
-//!   with the anchored code snippet shown in Conversation
-//!
-//! Visual contrast (Linear surface ladder): dimmer canvas → lifted Conversation
-//! feed → Thread cards one step above with hairline. Nested replies share the
-//! parent surface (indent + left rail only — no box-in-a-box).
+//! Locked display:
+//! - Chronological Conversation feed; Diff-anchored Threads show path + code snippet
+//! - Thread cards: surface ladder (lifted feed → hairline card); nested replies
+//!   indent + left rail only (no box-in-a-box)
+//! - Bottom “Leave a comment…” composer (⌘ Enter); Reply opens under the Thread
+//! - Pending review drafts as Draft badges + Submit/Discard chip
+//! - Suggestion compose/display only; Resolve / showcase reply affordances
+//! - High-contrast CTAs (avoid theme `.primary()` light-on-light)
 //!
 //! Domain from #54: Review comment / Thread / Suggestion / Pending review.
-//! Annotation is out of product language. Iterate in place — no A/B/C switcher.
+//! Annotation is out of product language.
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/conversation-diff-threads` (never merge as-is)
