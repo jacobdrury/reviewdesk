@@ -515,7 +515,7 @@ fn render_linear_sidebar(
         );
         side = side.child(side_nav_item(
             SharedString::from(format!("repo-{repo}")),
-            IconName::Folder,
+            IconName::Github,
             short_repo(repo),
             selected,
             Some(count),
