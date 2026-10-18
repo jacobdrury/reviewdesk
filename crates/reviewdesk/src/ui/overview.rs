@@ -1,6 +1,6 @@
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     spinner::Spinner,
     text::{MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView, markdown_ast},
     v_flex,
@@ -21,14 +21,18 @@ pub(crate) fn render_overview(
 ) -> impl IntoElement {
     if let Some(markdown) = &view.overview_markdown {
         let owner = entity.clone();
-        return div().size_full().min_h_0().p_4().child(
-            TextView::markdown("pr-overview", markdown.clone())
-                .scrollable(true)
-                .text_sm()
-                .size_full()
-                .plugin(DetailsTogglePlugin { owner }),
-        )
-        .into_any_element();
+        return div()
+            .size_full()
+            .min_h_0()
+            .p_4()
+            .child(
+                TextView::markdown("pr-overview", markdown.clone())
+                    .scrollable(true)
+                    .text_sm()
+                    .size_full()
+                    .plugin(DetailsTogglePlugin { owner }),
+            )
+            .into_any_element();
     }
 
     match &view.detail {

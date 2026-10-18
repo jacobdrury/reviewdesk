@@ -10,9 +10,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
 use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
-use reviewdesk_core::{
-    InboxItem, Patch, ProviderError, PullRequestDetail, PullRequestId,
-};
+use reviewdesk_core::{InboxItem, Patch, ProviderError, PullRequestDetail, PullRequestId};
 
 use crate::overview_body::{
     BodySegment, DetailsBlock, OverviewMarkdownInput, compose_overview_markdown,
@@ -68,15 +66,9 @@ pub enum Intent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     QueryInbox,
-    SyncInbox {
-        generation: u64,
-    },
-    FetchDetail {
-        id: PullRequestId,
-    },
-    FetchPatch {
-        id: PullRequestId,
-    },
+    SyncInbox { generation: u64 },
+    FetchDetail { id: PullRequestId },
+    FetchPatch { id: PullRequestId },
     ArmInboxRefreshTimer,
 }
 
@@ -221,10 +213,7 @@ impl ReviewSession {
                 self.review_tab = tab;
                 Vec::new()
             }
-            Intent::ToggleDetails {
-                id,
-                currently_open,
-            } => {
+            Intent::ToggleDetails { id, currently_open } => {
                 self.details_open.insert(id, !currently_open);
                 Vec::new()
             }
@@ -292,8 +281,7 @@ impl ReviewSession {
             LoadState::Ready(detail) => Some(detail.clone()),
             _ => None,
         };
-        let overview_markdown =
-            ready_detail.map(|detail| self.cached_overview_markdown(&detail));
+        let overview_markdown = ready_detail.map(|detail| self.cached_overview_markdown(&detail));
         let selected_file_error = self
             .selected_file
             .as_ref()
@@ -490,11 +478,7 @@ impl ReviewSession {
         self.detail = LoadState::Ready(detail);
     }
 
-    fn on_patch_local(
-        &mut self,
-        id: PullRequestId,
-        result: Result<Option<Patch>, ProviderError>,
-    ) {
+    fn on_patch_local(&mut self, id: PullRequestId, result: Result<Option<Patch>, ProviderError>) {
         if self.selected_id.as_ref() != Some(&id) {
             return;
         }

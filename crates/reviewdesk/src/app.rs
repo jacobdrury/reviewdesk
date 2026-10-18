@@ -342,24 +342,11 @@ impl Render for ReviewDesk {
                             resizable_panel()
                                 .size(px(240.))
                                 .size_range(px(200.)..px(480.))
-                                .child(render_inbox(
-                                    &view,
-                                    &self.inbox_scroll,
-                                    entity.clone(),
-                                    cx,
-                                )),
+                                .child(render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)),
                         )
-                        .child(
-                            resizable_panel()
-                                .size_range(px(480.)..px(2000.))
-                                .child(render_review_pane(
-                                    &view,
-                                    &self.diff,
-                                    &self.files_scroll,
-                                    entity,
-                                    cx,
-                                )),
-                        ),
+                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
+                            render_review_pane(&view, &self.diff, &self.files_scroll, entity, cx),
+                        )),
                 ),
             )
     }

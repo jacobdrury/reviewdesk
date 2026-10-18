@@ -7,8 +7,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Context, InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _,
-    UniformListScrollHandle, WeakEntity, div, px, uniform_list,
+    Context, IntoElement, ParentElement as _, SharedString, Styled as _, UniformListScrollHandle,
+    WeakEntity, div, px, uniform_list,
 };
 
 use crate::app::ReviewDesk;

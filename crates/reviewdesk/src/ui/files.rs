@@ -12,8 +12,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    Context, ElementId, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, Styled as _, UniformListScrollHandle, WeakEntity, div, px, uniform_list,
+    Context, ElementId, Entity, IntoElement, ParentElement as _, SharedString, Styled as _,
+    UniformListScrollHandle, WeakEntity, div, px, uniform_list,
 };
 
 use crate::app::ReviewDesk;
@@ -167,8 +167,8 @@ pub(crate) fn render_files(
                                                     range
                                                         .map(|ix| {
                                                             let path = file_paths[ix].clone();
-                                                            let selected =
-                                                                selected_file.as_ref() == Some(&path);
+                                                            let selected = selected_file.as_ref()
+                                                                == Some(&path);
                                                             let owner = file_entity.clone();
                                                             ListItem::new(path.clone())
                                                                 .selected(selected)
@@ -182,15 +182,17 @@ pub(crate) fn render_files(
                                                                 )
                                                                 .on_click(move |_, _, cx| {
                                                                     let path = path.clone();
-                                                                    let _ =
-                                                                        owner.update(cx, |this, cx| {
+                                                                    let _ = owner.update(
+                                                                        cx,
+                                                                        |this, cx| {
                                                                             this.dispatch(
                                                                                 Intent::SelectFile(
                                                                                     path,
                                                                                 ),
                                                                                 cx,
                                                                             );
-                                                                        });
+                                                                        },
+                                                                    );
                                                                 })
                                                                 .into_any_element()
                                                         })
@@ -272,7 +274,10 @@ pub(crate) fn render_files(
                                         })
                                         .on_add_annotation(move |range, _, _cx| {
                                             let _ = add_entity.update(_cx, |this, cx| {
-                                                this.dispatch(Intent::AddAnnotation(range.clone()), cx);
+                                                this.dispatch(
+                                                    Intent::AddAnnotation(range.clone()),
+                                                    cx,
+                                                );
                                             });
                                         })
                                         .into_any_element(),

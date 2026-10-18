@@ -1,3 +1,4 @@
+use gpui_kit::component::diff::DiffState;
 use gpui_kit::component::{
     ActiveTheme as _,
     tab::{Tab, TabBar},
@@ -7,7 +8,6 @@ use gpui_kit::{
     Context, Entity, IntoElement, ParentElement as _, Styled as _, UniformListScrollHandle,
     WeakEntity, div,
 };
-use gpui_kit::component::diff::DiffState;
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, ReviewTab, SessionView};
