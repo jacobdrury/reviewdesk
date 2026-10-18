@@ -3,6 +3,11 @@
 
 pub const DETAILS_FENCE_LANG: &str = "reviewdesk-details";
 
+/// Bodies at or above this nested character count are not inlined on first
+/// paint when the Provider marks `<details open>`, so Renovate-sized release
+/// notes stay out of the composed markdown until the reviewer toggles open.
+pub const HEAVY_DETAILS_BODY_MIN_CHARS: usize = 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodySegment {
     Markdown(String),
@@ -68,6 +73,30 @@ pub fn compose_overview_markdown(
     }
     out.push_str(&compose_body_segments(segments, is_open));
     out
+}
+
+/// Whether a details block should compose as open (inline body after the fence).
+///
+/// `user_override` is `Some` when the reviewer has toggled this block in the UI.
+pub fn details_effective_open(block: &DetailsBlock, user_override: Option<bool>) -> bool {
+    if let Some(open) = user_override {
+        return open;
+    }
+    if block.default_open && details_body_char_count(block) >= HEAVY_DETAILS_BODY_MIN_CHARS {
+        return false;
+    }
+    block.default_open
+}
+
+fn details_body_char_count(block: &DetailsBlock) -> usize {
+    block
+        .segments
+        .iter()
+        .map(|segment| match segment {
+            BodySegment::Markdown(text) => text.len(),
+            BodySegment::Details(nested) => details_body_char_count(nested),
+        })
+        .sum()
 }
 
 /// Compose body segments. Open details emit a toggle fence, then their body as
@@ -456,5 +485,45 @@ after
                 summary: "open one".into(),
             }
         );
+    }
+
+    #[test]
+    fn compose_caps_provider_open_when_body_is_heavy() {
+        let heavy_body = "x".repeat(super::HEAVY_DETAILS_BODY_MIN_CHARS + 1);
+        let source = format!(
+            "<details open>\n<summary>Renovate release notes</summary>\n\n{heavy_body}\n</details>"
+        );
+        let segments = parse_body_segments(&source);
+        let composed = compose_body_segments(&segments, &|block| {
+            super::details_effective_open(block, None)
+        });
+        assert!(composed.contains("Renovate release notes"));
+        assert!(composed.contains("````reviewdesk-details 0 closed 1"));
+        assert!(!composed.contains(&heavy_body));
+    }
+
+    #[test]
+    fn compose_inlines_provider_open_when_body_is_light() {
+        let source = "<details open>\n<summary>small</summary>\n\nshort body\n</details>";
+        let segments = parse_body_segments(source);
+        let composed = compose_body_segments(&segments, &|block| {
+            super::details_effective_open(block, None)
+        });
+        assert!(composed.contains("````reviewdesk-details 0 open 1\nsmall\n````"));
+        assert!(composed.contains("short body"));
+    }
+
+    #[test]
+    fn compose_inlines_heavy_body_after_reviewer_opens() {
+        let heavy_body = "y".repeat(super::HEAVY_DETAILS_BODY_MIN_CHARS + 1);
+        let source = format!(
+            "<details open>\n<summary>notes</summary>\n\n{heavy_body}\n</details>"
+        );
+        let segments = parse_body_segments(&source);
+        let composed = compose_body_segments(&segments, &|block| {
+            super::details_effective_open(block, Some(true))
+        });
+        assert!(composed.contains("````reviewdesk-details 0 open 1"));
+        assert!(composed.contains(&heavy_body));
     }
 }
