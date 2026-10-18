@@ -10,6 +10,7 @@ mod patch;
 mod provider;
 mod pull_request;
 mod pull_request_list;
+mod review_threads;
 
 pub use credentials::Credentials;
 pub use error::ProviderError;
@@ -22,4 +23,9 @@ pub use pull_request_list::{
     DraftFilter, PullRequestLabel, PullRequestListFilter, PullRequestListItem,
     PullRequestListOptions, PullRequestListQuery, PullRequestListSort, PullRequestListSortField,
     ReviewState, SortDirection,
+};
+pub use review_threads::{
+    DiffAnchor, DiffLineSide, PendingDiffReviewComment, PendingReview, PullRequestThreads,
+    ReviewComment, ReviewCommentId, ReviewSubmitEvent, Thread, ThreadId, ThreadStatus,
+    suggestion_from_body,
 };

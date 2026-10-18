@@ -4,6 +4,7 @@ mod overview_body;
 mod patch_index;
 mod paths;
 mod review_session;
+mod review_writeback;
 mod sync;
 mod theme;
 mod ui;

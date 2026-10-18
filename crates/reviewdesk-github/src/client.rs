@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
 use reviewdesk_core::{
-    Credentials, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListOptions,
+    Credentials, Patch, PendingDiffReviewComment, Provider, ProviderError, PullRequestDetail,
+    PullRequestId, PullRequestListItem, PullRequestListOptions, PullRequestThreads,
+    ReviewSubmitEvent,
 };
 use serde_json::json;
 
@@ -209,5 +210,44 @@ impl Provider for GitHubProvider {
             .and_then(|r| r.pull_request)
             .ok_or(ProviderError::NotFound)?;
         map_pull_request_detail(&node)
+    }
+
+    async fn fetch_pull_request_threads(
+        &self,
+        _id: &PullRequestId,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub review threads fetch is not implemented yet",
+        ))
+    }
+
+    async fn add_pending_diff_review_comment(
+        &self,
+        _id: &PullRequestId,
+        _comment: PendingDiffReviewComment,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review comments are not implemented yet",
+        ))
+    }
+
+    async fn submit_pending_review(
+        &self,
+        _id: &PullRequestId,
+        _event: ReviewSubmitEvent,
+        _summary_body: Option<String>,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review submit is not implemented yet",
+        ))
+    }
+
+    async fn discard_pending_review(
+        &self,
+        _id: &PullRequestId,
+    ) -> Result<PullRequestThreads, ProviderError> {
+        Err(ProviderError::other(
+            "GitHub pending review discard is not implemented yet",
+        ))
     }
 }

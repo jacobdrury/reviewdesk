@@ -3,13 +3,14 @@ use std::path::Path;
 use async_trait::async_trait;
 use reviewdesk_core::{
     LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId, PullRequestListItem,
-    PullRequestListQuery,
+    PullRequestListQuery, PullRequestThreads,
 };
 use turso::{Builder, Connection, Database};
 
 use crate::detail_patch;
 use crate::error::map_open;
 use crate::migrate;
+use crate::threads;
 
 /// Turso-backed local store. Open with [`TursoLocalStore::open`]; migrations run on open.
 pub struct TursoLocalStore {
@@ -80,5 +81,20 @@ impl LocalStore for TursoLocalStore {
 
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
         detail_patch::get_patch(&self.conn, id).await
+    }
+
+    async fn put_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+        threads: &PullRequestThreads,
+    ) -> Result<(), LocalStoreError> {
+        threads::put_pull_request_threads(&self.conn, id, threads).await
+    }
+
+    async fn get_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
+        threads::get_pull_request_threads(&self.conn, id).await
     }
 }

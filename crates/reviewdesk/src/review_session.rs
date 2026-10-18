@@ -9,9 +9,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use gpui_kit::SharedString;
-use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode};
+use gpui_kit::component::diff::{DiffFile, DiffLineRange, DiffMode, DiffSide};
 use reviewdesk_core::{
-    Patch, ProviderError, PullRequestDetail, PullRequestId, PullRequestListItem,
+    DiffAnchor, DiffLineSide, Patch, ProviderError, PullRequestDetail, PullRequestId,
+    PullRequestListItem, PullRequestThreads, ReviewSubmitEvent, ThreadStatus,
 };
 
 use crate::overview_body::{
@@ -38,7 +39,12 @@ pub enum Intent {
     SelectFile(SharedString),
     RetryFile(SharedString),
     ToggleDiffMode,
-    AddAnnotation(DiffLineRange),
+    AddDiffReviewComment(DiffLineRange),
+    SubmitPendingReview {
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    },
+    DiscardPendingReview,
     RetryDetail,
     RetryPatch,
     PullRequestListQueryFinished {
@@ -66,6 +72,19 @@ pub enum Intent {
         had_cache: bool,
         result: Result<Patch, ProviderError>,
     },
+    ThreadsLocalFinished {
+        id: PullRequestId,
+        result: Result<Option<PullRequestThreads>, ProviderError>,
+    },
+    ThreadsNetworkFinished {
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PullRequestThreads, ProviderError>,
+    },
+    ThreadsWriteFinished {
+        id: PullRequestId,
+        result: Result<PullRequestThreads, ProviderError>,
+    },
 }
 
 /// Work the shell must perform against LocalStore / Provider / timers.
@@ -75,6 +94,19 @@ pub enum Effect {
     SyncPullRequests { generation: u64 },
     FetchDetail { id: PullRequestId },
     FetchPatch { id: PullRequestId },
+    FetchThreads { id: PullRequestId },
+    RefreshThreads { id: PullRequestId },
+    SaveDiffReviewComment {
+        id: PullRequestId,
+        anchor: DiffAnchor,
+        body: String,
+    },
+    SubmitPendingReviewWrite {
+        id: PullRequestId,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    },
+    DiscardPendingReviewWrite { id: PullRequestId },
     ArmPullRequestsRefreshTimer,
 }
 
@@ -150,10 +182,20 @@ impl PullRequestsSyncView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnnotationView {
+pub struct ReviewCommentView {
     pub id: String,
-    pub range: DiffLineRange,
+    pub author_login: SharedString,
     pub body: SharedString,
+    pub is_pending: bool,
+    pub suggestion: Option<SharedString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadView {
+    pub id: String,
+    pub anchor: Option<DiffAnchor>,
+    pub status: ThreadStatus,
+    pub comments: Arc<[ReviewCommentView]>,
 }
 
 /// Paint projection. No LocalStore / Provider access from here.
@@ -174,7 +216,10 @@ pub struct SessionView {
     pub diff_mode: DiffMode,
     /// Bumps when Diff surface inputs change (mode, selected file, materialization).
     pub diff_revision: u64,
-    pub annotations: Vec<AnnotationView>,
+    /// Shared Thread set for Conversation (#80) and Diff surfaces.
+    pub shared_threads: Arc<[ThreadView]>,
+    pub has_pending_review: bool,
+    pub threads_syncing: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -182,12 +227,6 @@ struct OverviewComposeCache {
     pr_id: PullRequestId,
     open_details: Vec<usize>,
     markdown: SharedString,
-}
-
-struct Annotation {
-    id: String,
-    range: DiffLineRange,
-    body: SharedString,
 }
 
 /// Sole external seam for window session policy.
@@ -206,8 +245,8 @@ pub struct ReviewSession {
     selected_diff_file: Option<DiffFile>,
     diff_mode: DiffMode,
     diff_revision: u64,
-    annotations: HashMap<String, Vec<Annotation>>,
-    annotation_seq: usize,
+    threads: LoadState<PullRequestThreads>,
+    threads_syncing: bool,
     overview_segments: Vec<BodySegment>,
     details_open: HashMap<usize, bool>,
     overview_compose_cache: Option<OverviewComposeCache>,
@@ -231,8 +270,8 @@ impl ReviewSession {
             selected_diff_file: None,
             diff_mode: DiffMode::Split,
             diff_revision: 0,
-            annotations: HashMap::new(),
-            annotation_seq: 0,
+            threads: LoadState::Idle,
+            threads_syncing: false,
             overview_segments: Vec::new(),
             details_open: HashMap::new(),
             overview_compose_cache: None,
@@ -292,10 +331,12 @@ impl ReviewSession {
                 self.bump_diff_revision();
                 Vec::new()
             }
-            Intent::AddAnnotation(range) => {
-                self.add_annotation(range);
-                Vec::new()
-            }
+            Intent::AddDiffReviewComment(range) => self.begin_add_diff_review_comment(range),
+            Intent::SubmitPendingReview {
+                event,
+                summary_body,
+            } => self.begin_submit_pending_review(event, summary_body),
+            Intent::DiscardPendingReview => self.begin_discard_pending_review(),
             Intent::RetryDetail => self.retry_detail(),
             Intent::RetryPatch => self.retry_patch(),
             Intent::PullRequestListQueryFinished { result } => {
@@ -329,6 +370,22 @@ impl ReviewSession {
                 self.on_patch_network(id, had_cache, result);
                 Vec::new()
             }
+            Intent::ThreadsLocalFinished { id, result } => {
+                self.on_threads_local(id, result);
+                Vec::new()
+            }
+            Intent::ThreadsNetworkFinished {
+                id,
+                had_cache,
+                result,
+            } => {
+                self.on_threads_network(id, had_cache, result);
+                Vec::new()
+            }
+            Intent::ThreadsWriteFinished { id, result } => {
+                self.on_threads_write_finished(id, result);
+                Vec::new()
+            }
         }
     }
 
@@ -342,7 +399,7 @@ impl ReviewSession {
             .selected_file
             .as_ref()
             .and_then(|path| self.file_errors.get(path).cloned());
-        let annotations = self.current_annotations();
+        let (shared_threads, has_pending_review) = self.thread_projection();
         let patch_index = match &self.patch_index {
             LoadState::Idle => LoadState::Idle,
             LoadState::Loading => LoadState::Loading,
@@ -365,7 +422,9 @@ impl ReviewSession {
             selected_file_error,
             diff_mode: self.diff_mode,
             diff_revision: self.diff_revision,
-            annotations,
+            shared_threads,
+            has_pending_review,
+            threads_syncing: self.threads_syncing,
         }
     }
 
@@ -439,7 +498,8 @@ impl ReviewSession {
         self.reset_subordinate_state();
         vec![
             Effect::FetchDetail { id: id.clone() },
-            Effect::FetchPatch { id },
+            Effect::FetchPatch { id: id.clone() },
+            Effect::FetchThreads { id },
         ]
     }
 
@@ -459,6 +519,8 @@ impl ReviewSession {
         self.details_open.clear();
         self.overview_compose_cache = None;
         self.file_list_paths = Arc::from([]);
+        self.threads = LoadState::Idle;
+        self.threads_syncing = false;
         self.bump_diff_revision();
     }
 
@@ -651,45 +713,150 @@ impl ReviewSession {
         }
     }
 
-    fn add_annotation(&mut self, range: DiffLineRange) {
-        let Some(pr_id) = self.selected_id.as_ref().map(|id| id.as_str().to_string()) else {
-            return;
-        };
-        let (start, end) = (
-            range.start().min(range.end()),
-            range.start().max(range.end()),
-        );
-        let lines = if start == end {
-            format!("line {end}")
-        } else {
-            format!("lines {start}-{end}")
-        };
-        self.annotation_seq += 1;
-        let id = format!("annotation-{}", self.annotation_seq);
-        self.annotations.entry(pr_id).or_default().push(Annotation {
-            id,
-            range,
-            body: format!("Annotation on {lines}.").into(),
-        });
-    }
-
-    fn current_annotations(&self) -> Vec<AnnotationView> {
-        let Some(pr_id) = self.selected_id.as_ref() else {
+    fn begin_add_diff_review_comment(&mut self, range: DiffLineRange) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
             return Vec::new();
         };
-        self.annotations
-            .get(pr_id.as_str())
-            .map(|items| {
-                items
+        let body = default_review_comment_body(&range);
+        let anchor = diff_anchor_from_range(&range);
+        self.threads_syncing = true;
+        vec![Effect::SaveDiffReviewComment { id, anchor, body }]
+    }
+
+    fn begin_submit_pending_review(
+        &mut self,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+    ) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        if !self.has_pending_review() {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::SubmitPendingReviewWrite {
+            id,
+            event,
+            summary_body,
+        }]
+    }
+
+    fn begin_discard_pending_review(&mut self) -> Vec<Effect> {
+        let Some(id) = self.selected_id.clone() else {
+            return Vec::new();
+        };
+        if !self.has_pending_review() {
+            return Vec::new();
+        }
+        self.threads_syncing = true;
+        vec![Effect::DiscardPendingReviewWrite { id }]
+    }
+
+    fn has_pending_review(&self) -> bool {
+        matches!(
+            &self.threads,
+            LoadState::Ready(snapshot) if snapshot.pending_review.is_some()
+        )
+    }
+
+    fn apply_threads_snapshot(&mut self, snapshot: PullRequestThreads) {
+        self.threads = LoadState::Ready(snapshot);
+        self.threads_syncing = false;
+    }
+
+    fn on_threads_local(
+        &mut self,
+        id: PullRequestId,
+        result: Result<Option<PullRequestThreads>, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        match result {
+            Ok(Some(snapshot)) => self.apply_threads_snapshot(snapshot),
+            Ok(None) => {
+                self.threads = LoadState::Loading;
+            }
+            Err(error) => {
+                self.threads = LoadState::Error(error);
+                self.threads_syncing = false;
+            }
+        }
+    }
+
+    fn on_threads_network(
+        &mut self,
+        id: PullRequestId,
+        had_cache: bool,
+        result: Result<PullRequestThreads, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        if had_cache {
+            if let Ok(snapshot) = result {
+                self.apply_threads_snapshot(snapshot);
+            }
+            return;
+        }
+        match result {
+            Ok(snapshot) => self.apply_threads_snapshot(snapshot),
+            Err(error) => {
+                self.threads = LoadState::Error(error);
+                self.threads_syncing = false;
+            }
+        }
+    }
+
+    fn on_threads_write_finished(
+        &mut self,
+        id: PullRequestId,
+        result: Result<PullRequestThreads, ProviderError>,
+    ) {
+        if self.selected_id.as_ref() != Some(&id) {
+            return;
+        }
+        self.threads_syncing = false;
+        match result {
+            Ok(snapshot) => self.apply_threads_snapshot(snapshot),
+            Err(error) => {
+                if !matches!(&self.threads, LoadState::Ready(_)) {
+                    self.threads = LoadState::Error(error);
+                }
+            }
+        }
+    }
+
+    fn thread_projection(&self) -> (Arc<[ThreadView]>, bool) {
+        let LoadState::Ready(snapshot) = &self.threads else {
+            return (Arc::from([]), false);
+        };
+        let has_pending = snapshot.pending_review.is_some();
+        let views = snapshot
+            .threads
+            .iter()
+            .map(|thread| ThreadView {
+                id: thread.id.as_str().to_string(),
+                anchor: thread.anchor.clone(),
+                status: thread.status,
+                comments: thread
+                    .comments
                     .iter()
-                    .map(|a| AnnotationView {
-                        id: a.id.clone(),
-                        range: a.range.clone(),
-                        body: a.body.clone(),
+                    .map(|comment| ReviewCommentView {
+                        id: comment.id.as_str().to_string(),
+                        author_login: SharedString::from(comment.author_login.as_str()),
+                        body: SharedString::from(comment.body.as_str()),
+                        is_pending: comment.is_pending,
+                        suggestion: comment
+                            .suggestion
+                            .as_ref()
+                            .map(|text| SharedString::from(text.as_str())),
                     })
-                    .collect()
+                    .collect::<Arc<_>>(),
             })
-            .unwrap_or_default()
+            .collect::<Arc<_>>();
+        (views, has_pending)
     }
 
     fn details_is_open(&self, block: &DetailsBlock) -> bool {
@@ -769,11 +936,36 @@ fn format_sync_time(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
+fn diff_anchor_from_range(range: &DiffLineRange) -> DiffAnchor {
+    let start = range.start().min(range.end());
+    let end = range.start().max(range.end());
+    let side = match range.end_side() {
+        DiffSide::Original => DiffLineSide::Left,
+        DiffSide::Modified => DiffLineSide::Right,
+    };
+    DiffAnchor {
+        path: range.path().to_string(),
+        side,
+        start_line: start as u32,
+        end_line: end as u32,
+    }
+}
+
+fn default_review_comment_body(range: &DiffLineRange) -> String {
+    let start = range.start().min(range.end());
+    let end = range.start().max(range.end());
+    let lines = if start == end {
+        format!("line {end}")
+    } else {
+        format!("lines {start}-{end}")
+    };
+    format!("Review comment on {lines}.")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use gpui_kit::component::diff::DiffSide;
     use reviewdesk_core::ReviewState;
 
     const MULTI_FILE: &str = "diff --git a/new b/new\nnew file mode 100644\n--- /dev/null\n+++ b/new\n@@ -0,0 +1 @@\n+added\ndiff --git a/old b/old\ndeleted file mode 100644\n--- a/old\n+++ /dev/null\n@@ -1 +0,0 @@\n-deleted\n";
@@ -852,6 +1044,7 @@ mod tests {
             vec![
                 Effect::FetchDetail { id: pr_id("pr-2") },
                 Effect::FetchPatch { id: pr_id("pr-2") },
+                Effect::FetchThreads { id: pr_id("pr-2") },
             ]
         );
         let view = session.view();
@@ -1055,21 +1248,72 @@ mod tests {
     }
 
     #[test]
-    fn annotations_are_session_scoped_per_pull_request() {
+    fn diff_review_comments_attach_to_shared_thread_set() {
+        use reviewdesk_core::{
+            PendingReview, ReviewComment, ReviewCommentId, Thread, ThreadId, ThreadStatus,
+        };
+
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
-        let range = DiffLineRange::new("new", DiffSide::Modified, 1, 1);
-        let _ = session.apply(Intent::AddAnnotation(range));
-        assert_eq!(session.view().annotations.len(), 1);
-        assert!(
-            session.view().annotations[0]
-                .body
-                .as_str()
-                .contains("line 1")
-        );
+        let snapshot = PullRequestThreads {
+            pending_review: Some(PendingReview {
+                pull_request_id: pr_id("pr-1"),
+                provider_review_id: Some("pending-1".into()),
+                summary_body: None,
+            }),
+            threads: vec![Thread {
+                id: ThreadId::new("t-1"),
+                anchor: Some(DiffAnchor {
+                    path: "new".into(),
+                    side: DiffLineSide::Right,
+                    start_line: 1,
+                    end_line: 1,
+                }),
+                status: ThreadStatus::Open,
+                comments: vec![ReviewComment {
+                    id: ReviewCommentId::new("c-1"),
+                    author_login: "you".into(),
+                    body: "Review comment on line 1.".into(),
+                    is_pending: true,
+                    suggestion: None,
+                }],
+            }],
+        };
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(snapshot),
+        });
+        let view = session.view();
+        assert!(view.has_pending_review);
+        assert_eq!(view.shared_threads.len(), 1);
+        assert!(view.shared_threads[0].comments[0].is_pending);
 
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-2")));
-        assert!(session.view().annotations.is_empty());
+        assert!(!session.view().has_pending_review);
+        assert!(session.view().shared_threads.is_empty());
+    }
+
+    #[test]
+    fn toggling_diff_mode_does_not_clear_pending_review_drafts() {
+        use reviewdesk_core::{PendingReview, PullRequestThreads};
+
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::ThreadsWriteFinished {
+            id: pr_id("pr-1"),
+            result: Ok(PullRequestThreads {
+                threads: Vec::new(),
+                pending_review: Some(PendingReview {
+                    pull_request_id: pr_id("pr-1"),
+                    provider_review_id: None,
+                    summary_body: None,
+                }),
+            }),
+        });
+        assert!(session.view().has_pending_review);
+
+        let _ = session.apply(Intent::ToggleDiffMode);
+        assert!(session.view().has_pending_review);
     }
 
     fn selected_session(id: &str) -> ReviewSession {

@@ -12,13 +12,17 @@ use gpui_kit::{
     Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div,
 };
 use reviewdesk_core::{
-    LocalStoreError, Provider, ProviderError, PullRequestId, PullRequestListOptions,
-    PullRequestListQuery,
+    DiffAnchor, LocalStoreError, PendingDiffReviewComment, Provider, ProviderError, PullRequestId,
+    PullRequestListOptions, PullRequestListQuery, ReviewSubmitEvent,
 };
 use tokio::runtime::Handle;
 
 use crate::PULL_REQUESTS_REFRESH;
 use crate::review_session::{Effect, Intent, ReviewSession};
+use crate::review_writeback::{
+    add_pending_diff_review_comment, discard_pending_review, load_threads_via_store,
+    refresh_threads_from_provider, submit_pending_review,
+};
 use crate::sync::{
     AppLocalStore, load_detail_via_store, load_patch_via_store, refresh_patch,
     refresh_pull_request_detail, sync_pull_requests_from_provider,
@@ -58,6 +62,8 @@ pub struct ReviewDesk {
     _pull_requests_sync_task: Task<()>,
     _detail_task: Task<()>,
     _patch_task: Task<()>,
+    _threads_task: Task<()>,
+    _threads_write_task: Task<()>,
     _refresh_timer: Task<()>,
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
@@ -87,6 +93,8 @@ impl ReviewDesk {
             _pull_requests_sync_task: Task::ready(()),
             _detail_task: Task::ready(()),
             _patch_task: Task::ready(()),
+            _threads_task: Task::ready(()),
+            _threads_write_task: Task::ready(()),
             _refresh_timer: Task::ready(()),
             _window_activation: None,
             skip_next_activation_sync: false,
@@ -123,6 +131,19 @@ impl ReviewDesk {
                 }
                 Effect::FetchDetail { id } => self.run_fetch_detail(id, cx),
                 Effect::FetchPatch { id } => self.run_fetch_patch(id, cx),
+                Effect::FetchThreads { id } => self.run_fetch_threads(id, cx),
+                Effect::RefreshThreads { id } => self.run_refresh_threads(id, cx),
+                Effect::SaveDiffReviewComment { id, anchor, body } => {
+                    self.run_save_diff_review_comment(id, anchor, body, cx)
+                }
+                Effect::SubmitPendingReviewWrite {
+                    id,
+                    event,
+                    summary_body,
+                } => self.run_submit_pending_review(id, event, summary_body, cx),
+                Effect::DiscardPendingReviewWrite { id } => {
+                    self.run_discard_pending_review(id, cx)
+                }
                 Effect::ArmPullRequestsRefreshTimer => self.arm_pull_requests_refresh_timer(cx),
             }
         }
@@ -309,6 +330,193 @@ impl ReviewDesk {
                     Intent::PatchNetworkFinished {
                         id: request_id,
                         had_cache,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_fetch_threads(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
+        let store = self.store.clone();
+        let provider = self.provider.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_task = cx.spawn(async move |this, cx| {
+            let cache_id = request_id.clone();
+            let cached = runtime
+                .spawn({
+                    let store = store.clone();
+                    async move { store.get_pull_request_threads(&cache_id).await }
+                })
+                .await
+                .unwrap_or_else(|e| Err(LocalStoreError::other(e.to_string())));
+            let local_result = cached.map_err(map_store_error);
+            let had_cache = matches!(&local_result, Ok(Some(_)));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsLocalFinished {
+                        id: request_id.clone(),
+                        result: local_result,
+                    },
+                    cx,
+                );
+            });
+
+            let fetch_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    if had_cache {
+                        refresh_threads_from_provider(provider.as_ref(), &store, &fetch_id).await
+                    } else {
+                        load_threads_via_store(provider.as_ref(), &store, &fetch_id).await
+                    }
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsNetworkFinished {
+                        id: request_id,
+                        had_cache,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_refresh_threads(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_task = cx.spawn(async move |this, cx| {
+            let fetch_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    refresh_threads_from_provider(provider.as_ref(), &store, &fetch_id).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsNetworkFinished {
+                        id: request_id,
+                        had_cache: true,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_save_diff_review_comment(
+        &mut self,
+        id: PullRequestId,
+        anchor: DiffAnchor,
+        body: String,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_write_task = cx.spawn(async move |this, cx| {
+            let comment = PendingDiffReviewComment {
+                reply_to_thread: None,
+                anchor,
+                body,
+            };
+            let write_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    add_pending_diff_review_comment(
+                        provider.as_ref(),
+                        &store,
+                        &write_id,
+                        comment,
+                    )
+                    .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsWriteFinished {
+                        id: request_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_submit_pending_review(
+        &mut self,
+        id: PullRequestId,
+        event: ReviewSubmitEvent,
+        summary_body: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_write_task = cx.spawn(async move |this, cx| {
+            let write_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    submit_pending_review(
+                        provider.as_ref(),
+                        &store,
+                        &write_id,
+                        event,
+                        summary_body,
+                    )
+                    .await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsWriteFinished {
+                        id: request_id,
+                        result,
+                    },
+                    cx,
+                );
+            });
+        });
+    }
+
+    fn run_discard_pending_review(&mut self, id: PullRequestId, cx: &mut Context<Self>) {
+        let provider = self.provider.clone();
+        let store = self.store.clone();
+        let runtime = self.runtime.clone();
+        let request_id = id;
+        self._threads_write_task = cx.spawn(async move |this, cx| {
+            let write_id = request_id.clone();
+            let result = runtime
+                .spawn(async move {
+                    discard_pending_review(provider.as_ref(), &store, &write_id).await
+                })
+                .await
+                .unwrap_or_else(|e| Err(ProviderError::other(e.to_string())));
+
+            let _ = this.update(cx, |this, cx| {
+                this.dispatch(
+                    Intent::ThreadsWriteFinished {
+                        id: request_id,
                         result,
                     },
                     cx,

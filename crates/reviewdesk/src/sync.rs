@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use reviewdesk_core::{
     LocalStore, LocalStoreError, Patch, Provider, ProviderError, PullRequestDetail, PullRequestId,
-    PullRequestListItem, PullRequestListOptions, PullRequestListQuery,
+    PullRequestListItem, PullRequestListOptions, PullRequestListQuery, PullRequestThreads,
 };
 use tokio::sync::Mutex;
 
@@ -41,6 +41,23 @@ impl AppLocalStore {
     pub async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
         let _guard = self.store_lock.lock().await;
         self.inner.get_patch(id).await
+    }
+
+    pub async fn get_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.get_pull_request_threads(id).await
+    }
+
+    pub async fn put_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+        threads: &PullRequestThreads,
+    ) -> Result<(), LocalStoreError> {
+        let _guard = self.store_lock.lock().await;
+        self.inner.put_pull_request_threads(id, threads).await
     }
 
     async fn sync_pull_requests_locked(
@@ -215,6 +232,21 @@ mod tests {
         async fn get_patch(&self, _id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
             Ok(None)
         }
+
+        async fn put_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+            _threads: &PullRequestThreads,
+        ) -> Result<(), LocalStoreError> {
+            Ok(())
+        }
+
+        async fn get_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<Option<PullRequestThreads>, LocalStoreError> {
+            Ok(None)
+        }
     }
 
     struct StubProvider {
@@ -238,6 +270,37 @@ mod tests {
             &self,
             _id: &PullRequestId,
         ) -> Result<PullRequestDetail, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
+
+        async fn fetch_pull_request_threads(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
+
+        async fn add_pending_diff_review_comment(
+            &self,
+            _id: &PullRequestId,
+            _comment: reviewdesk_core::PendingDiffReviewComment,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
+
+        async fn submit_pending_review(
+            &self,
+            _id: &PullRequestId,
+            _event: reviewdesk_core::ReviewSubmitEvent,
+            _summary_body: Option<String>,
+        ) -> Result<PullRequestThreads, ProviderError> {
+            Err(ProviderError::other("not used"))
+        }
+
+        async fn discard_pending_review(
+            &self,
+            _id: &PullRequestId,
+        ) -> Result<PullRequestThreads, ProviderError> {
             Err(ProviderError::other("not used"))
         }
     }

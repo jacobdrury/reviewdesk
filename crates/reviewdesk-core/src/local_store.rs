@@ -5,6 +5,7 @@ use crate::id::PullRequestId;
 use crate::patch::Patch;
 use crate::pull_request::PullRequestDetail;
 use crate::pull_request_list::{PullRequestListItem, PullRequestListQuery};
+use crate::review_threads::PullRequestThreads;
 
 /// Errors from the local persistence layer. Distinct from [`ProviderError`](crate::ProviderError).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -75,4 +76,17 @@ pub trait LocalStore: Send + Sync {
 
     /// Returns cached patch text, or `None` on cache miss.
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError>;
+
+    /// Persists the shared Thread set and optional Pending review for a pull request.
+    async fn put_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+        threads: &PullRequestThreads,
+    ) -> Result<(), LocalStoreError>;
+
+    /// Returns cached threads, or `None` on cache miss.
+    async fn get_pull_request_threads(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PullRequestThreads>, LocalStoreError>;
 }
