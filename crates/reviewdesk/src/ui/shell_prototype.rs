@@ -748,9 +748,9 @@ fn render_review_tabs(
                     this.set_prototype_tab(PrototypeReviewTab::from_index(*ix), cx);
                 }))
                 .child(Tab::new().label(PrototypeReviewTab::Overview.label()))
-                .child(Tab::new().label(PrototypeReviewTab::Files.label()))
                 .child(Tab::new().label(PrototypeReviewTab::Pipelines.label()))
-                .child(Tab::new().label(PrototypeReviewTab::Conversation.label())),
+                .child(Tab::new().label(PrototypeReviewTab::Conversation.label()))
+                .child(Tab::new().label(PrototypeReviewTab::Diff.label())),
         )
         .child(
             Button::new("toggle-metadata")
@@ -773,14 +773,6 @@ fn render_tab_body(
         PrototypeReviewTab::Overview => {
             render_overview(&proto.view, proto.entity.clone(), cx).into_any_element()
         }
-        PrototypeReviewTab::Files => render_files(
-            &proto.view,
-            &proto.diff,
-            &proto.files_scroll,
-            proto.entity.clone(),
-            cx,
-        )
-        .into_any_element(),
         PrototypeReviewTab::Pipelines => stub_tab(
             "Pipelines",
             &[
@@ -800,6 +792,14 @@ fn render_tab_body(
                 "bob: CODEOWNERS wants a re-request control here.",
                 "(threaded replies stub)",
             ],
+            cx,
+        )
+        .into_any_element(),
+        PrototypeReviewTab::Diff => render_files(
+            &proto.view,
+            &proto.diff,
+            &proto.files_scroll,
+            proto.entity.clone(),
             cx,
         )
         .into_any_element(),
@@ -1069,11 +1069,11 @@ fn selected_title(view: &SessionView) -> String {
         .unwrap_or_else(|| "Pull request".into())
 }
 
-/// Keep session Overview/Files in sync when the prototype tab changes.
+/// Keep session Overview/Diff in sync when the prototype tab changes.
 pub(crate) fn sync_session_tab(tab: PrototypeReviewTab) -> Option<ReviewTab> {
     match tab {
         PrototypeReviewTab::Overview => Some(ReviewTab::Overview),
-        PrototypeReviewTab::Files => Some(ReviewTab::Files),
+        PrototypeReviewTab::Diff => Some(ReviewTab::Files),
         PrototypeReviewTab::Pipelines | PrototypeReviewTab::Conversation => None,
     }
 }

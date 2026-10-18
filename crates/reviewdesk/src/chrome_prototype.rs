@@ -8,10 +8,13 @@
 //! Standing preference from HITL: Linear-style labeled primary sidebar
 //! (Inbox + Pull requests). Variants only change Metadata placement / density.
 //!
+//! HITL pick so far: A's Linear + right Metadata dock, plus C's full-screen
+//! Review when a PR is opened. Tab order: Overview, Pipelines, Conversation, Diff.
+//!
 //! Three variants on the live app, cycled with the bottom bar (or `[` / `]`):
-//! - A (Linear + Dock Meta): dense sidebar; Metadata as a right dock
+//! - A (Picked): dense Linear sidebar, right Metadata dock, focus Review on open
 //! - B (Linear + Header Meta): roomier; Metadata folds under the tab bar
-//! - C (Linear + Drawer): Metadata as a bottom drawer; opening a PR focuses review
+//! - C (Linear + Drawer): Metadata as a bottom drawer (also focus Review on open)
 //!
 //! Run: `cargo run -p reviewdesk`
 //! Branch: `prototype/primary-shell-chrome` (never merge as-is)
@@ -35,9 +38,10 @@ pub enum ShellNav {
 pub enum PrototypeReviewTab {
     #[default]
     Overview,
-    Files,
     Pipelines,
     Conversation,
+    /// Last tab; paints the existing Files/Diff surface.
+    Diff,
 }
 
 impl ChromeVariant {
@@ -51,7 +55,7 @@ impl ChromeVariant {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::A => "Linear + Dock Meta",
+            Self::A => "Picked (Dock + Focus)",
             Self::B => "Linear + Header Meta",
             Self::C => "Linear + Drawer",
         }
@@ -99,9 +103,9 @@ impl ChromeVariant {
         }
     }
 
-    /// Opening a PR hides the list; Back restores it (C only).
+    /// Opening a PR hides the list; Back restores it (A pick + C).
     pub fn focus_stack(self) -> bool {
-        matches!(self, Self::C)
+        matches!(self, Self::A | Self::C)
     }
 
     /// Metadata as a right dock panel (A).
@@ -132,26 +136,26 @@ impl PrototypeReviewTab {
     pub fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Files => "Files",
             Self::Pipelines => "Pipelines",
             Self::Conversation => "Conversation",
+            Self::Diff => "Diff",
         }
     }
 
     pub fn index(self) -> usize {
         match self {
             Self::Overview => 0,
-            Self::Files => 1,
-            Self::Pipelines => 2,
-            Self::Conversation => 3,
+            Self::Pipelines => 1,
+            Self::Conversation => 2,
+            Self::Diff => 3,
         }
     }
 
     pub fn from_index(ix: usize) -> Self {
         match ix {
-            1 => Self::Files,
-            2 => Self::Pipelines,
-            3 => Self::Conversation,
+            1 => Self::Pipelines,
+            2 => Self::Conversation,
+            3 => Self::Diff,
             _ => Self::Overview,
         }
     }
