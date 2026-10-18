@@ -10,6 +10,6 @@ mod sync;
 
 pub use discovery::discover_macos;
 pub use sync::{
-    apply_sync_result, missing_theme_notification, should_sync_on_activation, Appearance,
-    ToastIntent,
+    Appearance, ToastIntent, apply_sync_result, missing_theme_notification,
+    should_sync_on_activation,
 };

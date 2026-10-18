@@ -212,7 +212,10 @@ fn emit_details_fence(block: &DetailsBlock, open: bool) -> String {
     let state = if open { "open" } else { "closed" };
     let default_open = if block.default_open { "1" } else { "0" };
     // 4-backtick fence so summaries with triple backticks cannot break out.
-    format!("````{DETAILS_FENCE_LANG} {} {state} {default_open}\n{summary}\n````", block.id)
+    format!(
+        "````{DETAILS_FENCE_LANG} {} {state} {default_open}\n{summary}\n````",
+        block.id
+    )
 }
 
 fn parse_segments(source: &str, next_id: &mut usize) -> Vec<BodySegment> {
@@ -434,7 +437,9 @@ mod tests {
         let source = "### Release Notes\n\n<details>\n<summary>pkg (image)</summary>\n\n### v1\n\n- fix\n</details>\n";
         let segments = parse_body_segments(source);
         assert_eq!(segments.len(), 2);
-        assert!(matches!(&segments[0], BodySegment::Markdown(text) if text.contains("Release Notes")));
+        assert!(
+            matches!(&segments[0], BodySegment::Markdown(text) if text.contains("Release Notes"))
+        );
         let BodySegment::Details(details) = &segments[1] else {
             panic!("expected details");
         };
@@ -498,12 +503,8 @@ after
         assert!(composed.contains("visible"));
         assert!(!composed.contains("hidden"));
 
-        let fence = parse_details_fence(
-            Some(DETAILS_FENCE_LANG),
-            Some("1 open 1"),
-            "open one",
-        )
-        .unwrap();
+        let fence =
+            parse_details_fence(Some(DETAILS_FENCE_LANG), Some("1 open 1"), "open one").unwrap();
         assert_eq!(
             fence,
             DetailsFence {
@@ -553,9 +554,8 @@ after
     #[test]
     fn compose_inlines_heavy_body_after_reviewer_opens() {
         let heavy_body = "y".repeat(super::HEAVY_DETAILS_BODY_MIN_CHARS + 1);
-        let source = format!(
-            "<details open>\n<summary>notes</summary>\n\n{heavy_body}\n</details>"
-        );
+        let source =
+            format!("<details open>\n<summary>notes</summary>\n\n{heavy_body}\n</details>");
         let segments = parse_body_segments(&source);
         let composed = compose_body_segments(&segments, &|block| {
             super::details_effective_open(block, Some(true))

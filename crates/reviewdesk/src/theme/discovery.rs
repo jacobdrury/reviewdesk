@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::fallback::ONE_FAMILY_JSON;
-use super::sync::{sync_theme, Appearance, DiscoveryInputs, SyncInputs, SyncResult};
+use super::sync::{Appearance, DiscoveryInputs, SyncInputs, SyncResult, sync_theme};
 
 /// Owned discovery materials loaded from the Zed macOS layout.
 #[derive(Debug, Clone)]
@@ -141,10 +141,8 @@ mod tests {
 
     #[test]
     fn discover_from_roots_reads_settings_index_and_families() {
-        let root = std::env::temp_dir().join(format!(
-            "reviewdesk-theme-discovery-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("reviewdesk-theme-discovery-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         let config = root.join("config");
         let data = root.join("data");
@@ -174,11 +172,13 @@ mod tests {
 
         let discovered = discover_from_roots(config, data);
         assert!(discovered.zed_present);
-        assert!(discovered
-            .settings_text
-            .as_ref()
-            .unwrap()
-            .contains("Ext Dark"));
+        assert!(
+            discovered
+                .settings_text
+                .as_ref()
+                .unwrap()
+                .contains("Ext Dark")
+        );
         assert_eq!(discovered.extension_families.len(), 1);
         assert_eq!(discovered.extension_families[0].0, "ext");
         assert_eq!(discovered.user_families.len(), 1);

@@ -14,15 +14,16 @@ impl From<GitHubIdError> for ProviderError {
 }
 
 /// Format a GitHub pull-request id as `owner/repo#number`.
-pub fn pull_request_id(owner: &str, repo: &str, number: u64) -> Result<PullRequestId, GitHubIdError> {
+pub fn pull_request_id(
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<PullRequestId, GitHubIdError> {
     if owner.is_empty() || repo.is_empty() || number == 0 {
-        return Err(GitHubIdError::Invalid(format!(
-            "{owner}/{repo}#{number}"
-        )));
+        return Err(GitHubIdError::Invalid(format!("{owner}/{repo}#{number}")));
     }
-    PullRequestId::new(format!("{owner}/{repo}#{number}")).map_err(|_| {
-        GitHubIdError::Invalid(format!("{owner}/{repo}#{number}"))
-    })
+    PullRequestId::new(format!("{owner}/{repo}#{number}"))
+        .map_err(|_| GitHubIdError::Invalid(format!("{owner}/{repo}#{number}")))
 }
 
 /// Parse a GitHub `owner/repo#number` id.
