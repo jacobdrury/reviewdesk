@@ -96,6 +96,25 @@ create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_lis
 create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
 ",
     ),
+    (
+        5,
+        "
+create table reviewdesk_views (
+    id text not null primary key,
+    name text not null,
+    kind text not null,
+    position integer not null,
+    filter_json text not null,
+    group_by text not null,
+    sort_json text not null
+);
+create index idx_views_position on reviewdesk_views(position);
+create table reviewdesk_preferences (
+    key text not null primary key,
+    value text not null
+);
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {

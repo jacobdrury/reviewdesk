@@ -3,13 +3,14 @@ use std::path::Path;
 use async_trait::async_trait;
 use reviewdesk_core::{
     LocalStore, LocalStoreError, Patch, PullRequestDetail, PullRequestId, PullRequestListItem,
-    PullRequestListQuery,
+    PullRequestListQuery, View, ViewId,
 };
 use turso::{Builder, Connection, Database};
 
 use crate::detail_patch;
 use crate::error::map_open;
 use crate::migrate;
+use crate::views;
 
 /// Turso-backed local store. Open with [`TursoLocalStore::open`]; migrations run on open.
 pub struct TursoLocalStore {
@@ -80,5 +81,29 @@ impl LocalStore for TursoLocalStore {
 
     async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError> {
         detail_patch::get_patch(&self.conn, id).await
+    }
+
+    async fn list_views(&self) -> Result<Vec<View>, LocalStoreError> {
+        views::list_views(&self.conn).await
+    }
+
+    async fn save_view(&self, view: &View) -> Result<(), LocalStoreError> {
+        views::save_view(&self.conn, view).await
+    }
+
+    async fn delete_view(&self, id: &ViewId) -> Result<(), LocalStoreError> {
+        views::delete_view(&self.conn, id).await
+    }
+
+    async fn reorder_views(&self, order: &[ViewId]) -> Result<(), LocalStoreError> {
+        views::reorder_views(&self.conn, order).await
+    }
+
+    async fn get_last_used_view(&self) -> Result<Option<ViewId>, LocalStoreError> {
+        views::get_last_used_view(&self.conn).await
+    }
+
+    async fn set_last_used_view(&self, id: &ViewId) -> Result<(), LocalStoreError> {
+        views::set_last_used_view(&self.conn, id).await
     }
 }

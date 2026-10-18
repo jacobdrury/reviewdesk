@@ -5,5 +5,6 @@ mod error;
 mod migrate;
 mod pull_request_list;
 mod store;
+mod views;
 
 pub use store::TursoLocalStore;

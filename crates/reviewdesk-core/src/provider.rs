@@ -9,6 +9,9 @@ use crate::pull_request_list::{PullRequestListItem, PullRequestListOptions};
 /// Host that exposes pull requests and their patches.
 #[async_trait]
 pub trait Provider: Send + Sync {
+    /// Login of the single signed-in identity, used to bind "I am author / reviewer" Views.
+    async fn current_user(&self) -> Result<String, ProviderError>;
+
     async fn list_pull_requests(
         &self,
         options: &PullRequestListOptions,

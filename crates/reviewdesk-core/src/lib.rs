@@ -10,6 +10,7 @@ mod patch;
 mod provider;
 mod pull_request;
 mod pull_request_list;
+mod views;
 
 pub use credentials::Credentials;
 pub use error::ProviderError;
@@ -22,4 +23,8 @@ pub use pull_request_list::{
     DraftFilter, PullRequestLabel, PullRequestListFilter, PullRequestListItem,
     PullRequestListOptions, PullRequestListQuery, PullRequestListSort, PullRequestListSortField,
     ReviewState, SortDirection,
+};
+pub use views::{
+    CiStatusFilter, UpdatedWithin, View, ViewFilter, ViewGroupBy, ViewId, ViewKind,
+    VIEW_ID_ALL_PRS, VIEW_ID_BY_PROJECT, VIEW_ID_DRAFTS, VIEW_ID_MINE, VIEW_ID_NEEDS_MY_REVIEW,
 };

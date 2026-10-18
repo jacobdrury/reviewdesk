@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::error_map::from_status;
 use crate::id::parse_pull_request_id;
 use crate::map::{
-    GraphQlResponse, PullRequestData, SearchData, map_pull_request_detail,
+    GraphQlResponse, PullRequestData, SearchData, ViewerData, map_pull_request_detail,
     map_pull_request_list_item,
 };
 use crate::query::pull_request_search_query;
@@ -17,6 +17,12 @@ use crate::query::pull_request_search_query;
 const GRAPHQL_URL: &str = "https://api.github.com/graphql";
 const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = "reviewdesk";
+
+const VIEWER_QUERY: &str = r#"
+query Viewer {
+  viewer { login }
+}
+"#;
 
 const PULL_REQUEST_SEARCH_QUERY: &str = r#"
 query PullRequestSearch($q: String!) {
@@ -148,6 +154,11 @@ impl GitHubProvider {
 
 #[async_trait]
 impl Provider for GitHubProvider {
+    async fn current_user(&self) -> Result<String, ProviderError> {
+        let data: ViewerData = self.graphql(VIEWER_QUERY, json!({})).await?;
+        Ok(data.viewer.login)
+    }
+
     async fn list_pull_requests(
         &self,
         options: &PullRequestListOptions,
