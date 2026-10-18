@@ -169,12 +169,12 @@ fn split_git_paths(value: &str) -> Option<(String, String)> {
         }) {
             return Some((old, new));
         }
-        if let Some(ix) = value.rfind(&format!(" {new_prefix}")) {
-            if value.starts_with(old_prefix) {
-                let old = value[..ix].to_owned();
-                let new = value[ix + 1..].to_owned();
-                return Some((old, new));
-            }
+        if let Some(ix) = value.rfind(&format!(" {new_prefix}"))
+            && value.starts_with(old_prefix)
+        {
+            let old = value[..ix].to_owned();
+            let new = value[ix + 1..].to_owned();
+            return Some((old, new));
         }
     }
     let (old, new) = value.split_once(' ')?;
@@ -203,15 +203,15 @@ fn preferred_display_path(old: &str, new: &str) -> String {
 
 fn strip_git_prefix(path: &str) -> String {
     for (old_prefix, new_prefix) in GIT_PREFIXES {
-        if let Some(stripped) = path.strip_prefix(old_prefix) {
-            if !old_prefix.is_empty() {
-                return stripped.to_owned();
-            }
+        if let Some(stripped) = path.strip_prefix(old_prefix)
+            && !old_prefix.is_empty()
+        {
+            return stripped.to_owned();
         }
-        if let Some(stripped) = path.strip_prefix(new_prefix) {
-            if !new_prefix.is_empty() {
-                return stripped.to_owned();
-            }
+        if let Some(stripped) = path.strip_prefix(new_prefix)
+            && !new_prefix.is_empty()
+        {
+            return stripped.to_owned();
         }
     }
     path.to_owned()
@@ -236,7 +236,7 @@ fn decode_path_token(value: &str) -> String {
                 break;
             };
             if next.is_ascii_digit() {
-                let mut octal = String::from(next.to_string());
+                let mut octal = next.to_string();
                 for _ in 0..2 {
                     if chars.peek().is_some_and(|c| c.is_ascii_digit()) {
                         octal.push(chars.next().unwrap());

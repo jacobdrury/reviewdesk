@@ -3,3 +3,6 @@
 .moon/docker/
 *.rs.bk
 .DS_Store
+
+# Materialized by moon from .prototools (syncToolchainConfig); do not commit.
+/rust-toolchain.toml

@@ -242,10 +242,10 @@ fn map_syntax(syntax: &Map<String, Value>) -> Map<String, Value> {
         if let Some(color) = entry.get("color").and_then(Value::as_str) {
             mapped.insert("color".into(), Value::String(color.to_string()));
         }
-        if let Some(weight) = entry.get("font_weight") {
-            if !weight.is_null() {
-                mapped.insert("font_weight".into(), weight.clone());
-            }
+        if let Some(weight) = entry.get("font_weight")
+            && !weight.is_null()
+        {
+            mapped.insert("font_weight".into(), weight.clone());
         }
         if let Some(font_style) = entry.get("font_style").and_then(Value::as_str) {
             match font_style {
@@ -296,10 +296,10 @@ fn insert_if_absent(colors: &mut Map<String, Value>, key: &str, value: &str) {
 /// Color for kit `list.active.background` (selection wash).
 fn list_active_color(style: &Map<String, Value>) -> Option<String> {
     let selected = style.get("element.selected").and_then(Value::as_str);
-    if let Some(selected) = selected {
-        if hex_has_useful_wash_alpha(selected) {
-            return Some(selected.to_string());
-        }
+    if let Some(selected) = selected
+        && hex_has_useful_wash_alpha(selected)
+    {
+        return Some(selected.to_string());
     }
     if let Some(accent) = style.get("text.accent").and_then(Value::as_str) {
         return Some(accent.to_string());

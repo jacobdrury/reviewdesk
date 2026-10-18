@@ -70,7 +70,7 @@ impl Default for InboxSort {
 }
 
 /// Filter criteria for Inbox queries. Extends [`InboxOptions`] with optional view filters.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InboxFilter {
     pub options: InboxOptions,
     pub repo_label: Option<String>,
@@ -79,32 +79,11 @@ pub struct InboxFilter {
     pub has_label: Option<String>,
 }
 
-impl Default for InboxFilter {
-    fn default() -> Self {
-        Self {
-            options: InboxOptions::default(),
-            repo_label: None,
-            author_login: None,
-            review_state: None,
-            has_label: None,
-        }
-    }
-}
-
 /// Query shape for listing Inbox rows from LocalStore (baseline Inbox and future custom views).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InboxQuery {
     pub filter: InboxFilter,
     pub sort: InboxSort,
-}
-
-impl Default for InboxQuery {
-    fn default() -> Self {
-        Self {
-            filter: InboxFilter::default(),
-            sort: InboxSort::default(),
-        }
-    }
 }
 
 /// One row in the Inbox list.
