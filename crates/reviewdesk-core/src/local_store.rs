@@ -1,6 +1,10 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use crate::id::PullRequestId;
+use crate::patch::Patch;
+use crate::pull_request::PullRequestDetail;
+
 /// Errors from the local persistence layer. Distinct from [`ProviderError`](crate::ProviderError).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum LocalStoreError {
@@ -40,4 +44,22 @@ impl LocalStoreError {
 pub trait LocalStore: Send + Sync {
     /// Schema version after the latest successful migration.
     async fn schema_version(&self) -> Result<u32, LocalStoreError>;
+
+    /// Persists overview detail for a pull request, replacing any prior row for the same id.
+    async fn put_pull_request_detail(
+        &self,
+        detail: &PullRequestDetail,
+    ) -> Result<(), LocalStoreError>;
+
+    /// Returns cached overview detail, or `None` on cache miss.
+    async fn get_pull_request_detail(
+        &self,
+        id: &PullRequestId,
+    ) -> Result<Option<PullRequestDetail>, LocalStoreError>;
+
+    /// Persists unified-diff text for a pull request, replacing any prior row for the same id.
+    async fn put_patch(&self, id: &PullRequestId, patch: &Patch) -> Result<(), LocalStoreError>;
+
+    /// Returns cached patch text, or `None` on cache miss.
+    async fn get_patch(&self, id: &PullRequestId) -> Result<Option<Patch>, LocalStoreError>;
 }

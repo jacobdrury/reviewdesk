@@ -6210,6 +6210,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "reviewdesk-core",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "turso",
