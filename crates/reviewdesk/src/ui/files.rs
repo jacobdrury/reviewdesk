@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     diff::{Diff, DiffAnnotation, DiffLinePosition, DiffMode, DiffSide, DiffState},
     h_flex,
@@ -80,6 +80,7 @@ pub(crate) fn render_files(
 
     let file_paths = view.file_paths.clone();
     let selected_file = view.selected_file.clone();
+    let focused_file = view.focused_file.clone();
     let selected_file_error = view.selected_file_error.clone();
     let mode = view.diff_mode;
     let mode_label = match mode {
@@ -87,18 +88,22 @@ pub(crate) fn render_files(
         DiffMode::Unified => "Split",
         _ => "Toggle",
     };
+    let single_file_focus = focused_file.is_some();
 
-    let diff_threads =
-        diff_threads_for_file(view.shared_threads.as_ref(), selected_file.as_deref());
-    let annotations = diff_threads
-        .iter()
-        .filter_map(diff_annotation_for_thread)
-        .collect::<Vec<_>>();
+    let annotations = diff_annotations_for_surface(
+        view.shared_threads.as_ref(),
+        focused_file.as_deref(),
+        file_paths.as_ref(),
+    );
     let thread_cards = Rc::new(
-        diff_threads
-            .iter()
-            .filter_map(thread_card_entry)
-            .collect::<Vec<_>>(),
+        diff_threads_for_surface(
+            view.shared_threads.as_ref(),
+            focused_file.as_deref(),
+            file_paths.as_ref(),
+        )
+        .iter()
+        .filter_map(thread_card_entry)
+        .collect::<Vec<_>>(),
     );
     let add_entity = entity.clone();
     let pending_entity = entity.clone();
@@ -126,13 +131,23 @@ pub(crate) fn render_files(
                                         .justify_between()
                                         .border_b_1()
                                         .border_color(cx.theme().border)
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .font_medium()
-                                                .child("FILES"),
-                                        )
+                                        .child({
+                                            let chrome_entity = entity.clone();
+                                            let label = if single_file_focus {
+                                                "ALL FILES"
+                                            } else {
+                                                "FILES"
+                                            };
+                                            Button::new("files-chrome")
+                                                .ghost()
+                                                .xsmall()
+                                                .label(label)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = chrome_entity.update(cx, |this, cx| {
+                                                        this.dispatch(Intent::ShowAllFiles, cx);
+                                                    });
+                                                })
+                                        })
                                         .child(
                                             Button::new("diff-mode")
                                                 .ghost()
@@ -145,6 +160,7 @@ pub(crate) fn render_files(
                                 )
                                 .child({
                                     let selected_file = selected_file.clone();
+                                    let focused_file = focused_file.clone();
                                     let file_entity = entity.clone();
                                     div()
                                         .flex_1()
@@ -159,7 +175,9 @@ pub(crate) fn render_files(
                                                         .map(|ix| {
                                                             let path = file_paths[ix].clone();
                                                             let selected = selected_file.as_ref()
-                                                                == Some(&path);
+                                                                == Some(&path)
+                                                                || focused_file.as_ref()
+                                                                    == Some(&path);
                                                             let owner = file_entity.clone();
                                                             ListItem::new(path.clone())
                                                                 .selected(selected)
@@ -171,17 +189,28 @@ pub(crate) fn render_files(
                                                                         .truncate()
                                                                         .child(path.to_string()),
                                                                 )
-                                                                .on_click(move |_, _, cx| {
+                                                                .on_click(move |event, _, cx| {
                                                                     let path = path.clone();
+                                                                    let focus =
+                                                                        event.modifiers().secondary();
                                                                     let _ = owner.update(
                                                                         cx,
                                                                         |this, cx| {
-                                                                            this.dispatch(
-                                                                                Intent::SelectFile(
-                                                                                    path,
-                                                                                ),
-                                                                                cx,
-                                                                            );
+                                                                            if focus {
+                                                                                this.dispatch(
+                                                                                    Intent::FocusFile(
+                                                                                        path,
+                                                                                    ),
+                                                                                    cx,
+                                                                                );
+                                                                            } else {
+                                                                                this.dispatch(
+                                                                                    Intent::SelectFile(
+                                                                                        path,
+                                                                                    ),
+                                                                                    cx,
+                                                                                );
+                                                                            }
                                                                         },
                                                                     );
                                                                 })
@@ -198,7 +227,7 @@ pub(crate) fn render_files(
                         ),
                 )
                 .child({
-                    let retry_path = selected_file.clone();
+                    let retry_path = focused_file.clone();
                     let mut diff_column = v_flex().size_full().min_h_0().min_w_0();
                     if view.has_pending_review {
                         diff_column = diff_column
@@ -244,39 +273,39 @@ pub(crate) fn render_files(
                                     ]
                                 }
                                 None => vec![
-                                        Diff::new(diff)
-                                            .size_full()
-                                            .soft_wrap(true)
-                                            .annotations(annotations)
-                                            .render_annotation({
-                                                let cards = thread_cards.clone();
-                                                move |annotation, _, cx| {
-                                                    let Some(card) = cards
-                                                        .iter()
-                                                        .find(|(id, _)| id == annotation.id())
-                                                    else {
-                                                        return div().into_any_element();
-                                                    };
-                                                    render_diff_thread_annotation(
-                                                        card.1.author.as_ref(),
-                                                        card.1.body.as_ref(),
-                                                        card.1.is_pending,
-                                                        card.1.suggestion.as_deref(),
-                                                        cx,
-                                                    )
-                                                    .into_any_element()
-                                                }
-                                            })
-                                            .on_add_annotation(move |range, _, _cx| {
-                                                let _ = add_entity.update(_cx, |this, cx| {
-                                                    this.dispatch(
-                                                        Intent::AddDiffReviewComment(range.clone()),
-                                                        cx,
-                                                    );
-                                                });
-                                            })
-                                            .into_any_element(),
-                                    ],
+                                    Diff::new(diff)
+                                        .size_full()
+                                        .soft_wrap(true)
+                                        .annotations(annotations)
+                                        .render_annotation({
+                                            let cards = thread_cards.clone();
+                                            move |annotation, _, cx| {
+                                                let Some(card) = cards
+                                                    .iter()
+                                                    .find(|(id, _)| id == annotation.id())
+                                                else {
+                                                    return div().into_any_element();
+                                                };
+                                                render_diff_thread_annotation(
+                                                    card.1.author.as_ref(),
+                                                    card.1.body.as_ref(),
+                                                    card.1.is_pending,
+                                                    card.1.suggestion.as_deref(),
+                                                    cx,
+                                                )
+                                                .into_any_element()
+                                            }
+                                        })
+                                        .on_add_annotation(move |range, _, _cx| {
+                                            let _ = add_entity.update(_cx, |this, cx| {
+                                                this.dispatch(
+                                                    Intent::AddDiffReviewComment(range.clone()),
+                                                    cx,
+                                                );
+                                            });
+                                        })
+                                        .into_any_element(),
+                                ],
                             },
                         )),
                     )
@@ -285,19 +314,34 @@ pub(crate) fn render_files(
         .into_any_element()
 }
 
-fn diff_threads_for_file(threads: &[ThreadView], selected_file: Option<&str>) -> Vec<ThreadView> {
-    let Some(path) = selected_file else {
-        return Vec::new();
-    };
+fn diff_threads_for_surface(
+    threads: &[ThreadView],
+    focused_file: Option<&str>,
+    file_paths: &[SharedString],
+) -> Vec<ThreadView> {
     threads
         .iter()
         .filter(|thread| {
-            thread
-                .anchor
-                .as_ref()
-                .is_some_and(|anchor| anchor.path == path)
+            let Some(anchor) = thread.anchor.as_ref() else {
+                return false;
+            };
+            if let Some(path) = focused_file {
+                return anchor.path == path;
+            }
+            file_paths.iter().any(|path| path.as_str() == anchor.path)
         })
         .cloned()
+        .collect()
+}
+
+fn diff_annotations_for_surface(
+    threads: &[ThreadView],
+    focused_file: Option<&str>,
+    file_paths: &[SharedString],
+) -> Vec<DiffAnnotation> {
+    diff_threads_for_surface(threads, focused_file, file_paths)
+        .iter()
+        .filter_map(diff_annotation_for_thread)
         .collect()
 }
 

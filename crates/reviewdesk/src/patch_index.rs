@@ -22,10 +22,6 @@ impl PatchIndex {
         self.entries.iter().map(|entry| &entry.path)
     }
 
-    pub fn first_path(&self) -> Option<SharedString> {
-        self.entries.first().map(|entry| entry.path.clone())
-    }
-
     pub fn materialize(&self, path: &str) -> Result<DiffFile, ProviderError> {
         let entry = self
             .entries
