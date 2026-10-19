@@ -311,12 +311,24 @@ pub enum ReviewTab {
 
 /// Right-dock visibility for the Metadata panel.
 ///
-/// Open/Hidden only — no folded status strip. Sticky across Review tabs;
-/// restore via the Review pane chrome toggle.
+/// Open/Hidden only — no folded status strip. Tab changes auto-open on
+/// Overview and hide elsewhere; the Review chrome toggle can still open
+/// Metadata on any tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataDock {
     Open,
     Hidden,
+}
+
+impl MetadataDock {
+    fn for_tab(tab: ReviewTab) -> Self {
+        match tab {
+            ReviewTab::Overview => MetadataDock::Open,
+            ReviewTab::Pipelines | ReviewTab::Conversation | ReviewTab::Changes => {
+                MetadataDock::Hidden
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,10 +569,12 @@ impl ReviewSession {
             }
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
+                self.metadata_dock = MetadataDock::for_tab(tab);
                 Vec::new()
             }
             Intent::ActivatePipelines => {
                 self.review_tab = ReviewTab::Pipelines;
+                self.metadata_dock = MetadataDock::for_tab(ReviewTab::Pipelines);
                 Vec::new()
             }
             Intent::RerunPipeline { pipeline_id } => self.begin_rerun_pipeline(pipeline_id),
@@ -2775,22 +2789,38 @@ mod tests {
     }
 
     #[test]
-    fn metadata_stays_open_across_tabs() {
-        let tabs = [
+    fn metadata_hides_off_overview_and_reopens_on_return() {
+        let non_overview = [
             ReviewTab::Pipelines,
             ReviewTab::Conversation,
             ReviewTab::Changes,
-            ReviewTab::Overview,
         ];
-        let mut session = selected_session("pr-1");
-        for tab in tabs {
+        for tab in non_overview {
+            let mut session = selected_session("pr-1");
             let _ = session.apply(Intent::SetReviewTab(tab));
             assert_eq!(
                 session.view().metadata_dock,
+                MetadataDock::Hidden,
+                "leaving Overview for {tab:?} should hide Metadata"
+            );
+
+            let _ = session.apply(Intent::SetReviewTab(ReviewTab::Overview));
+            assert_eq!(
+                session.view().metadata_dock,
                 MetadataDock::Open,
-                "dock should stay open on {tab:?}"
+                "returning to Overview should reopen Metadata"
             );
         }
+    }
+
+    #[test]
+    fn chrome_toggle_opens_metadata_on_non_overview_tabs() {
+        let mut session = selected_session("pr-1");
+        let _ = session.apply(Intent::SetReviewTab(ReviewTab::Changes));
+        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+
+        let _ = session.apply(Intent::ToggleMetadataDock);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
     }
 
     #[test]
@@ -2813,16 +2843,13 @@ mod tests {
     }
 
     #[test]
-    fn hidden_metadata_is_sticky_across_tabs() {
+    fn returning_to_overview_reopens_even_if_hidden_elsewhere() {
         let mut session = selected_session("pr-1");
-        let _ = session.apply(Intent::HideMetadata);
-
         let _ = session.apply(Intent::SetReviewTab(ReviewTab::Pipelines));
         assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
 
-        // Returning to Overview must not auto-open a deliberately hidden dock.
         let _ = session.apply(Intent::SetReviewTab(ReviewTab::Overview));
-        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
+        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
     }
 
     #[test]
