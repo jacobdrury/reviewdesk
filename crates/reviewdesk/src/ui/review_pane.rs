@@ -14,6 +14,7 @@ use gpui_kit::{
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, MetadataDock, ReviewTab, SessionView};
 use crate::ui::{
+    ChangesListChrome,
     pipelines_tab::{PipelinesChrome, render_pipelines_tab},
     render_conversation, render_files, render_metadata_panel, render_overview,
 };
@@ -28,7 +29,7 @@ const TABS: [(ReviewTab, &str); 4] = [
 pub(crate) fn render_review_pane(
     view: &SessionView,
     diff: &Entity<DiffState>,
-    files_scroll: &UniformListScrollHandle,
+    changes: ChangesListChrome<'_>,
     pipelines: PipelinesChrome<'_>,
     conversation_scroll: &UniformListScrollHandle,
     entity: WeakEntity<ReviewDesk>,
@@ -71,7 +72,7 @@ pub(crate) fn render_review_pane(
             render_conversation(view, conversation_scroll, entity.clone(), cx).into_any_element()
         }
         ReviewTab::Changes => {
-            render_files(view, diff, files_scroll, entity.clone(), cx).into_any_element()
+            render_files(view, diff, changes, entity.clone(), cx).into_any_element()
         }
     };
 
