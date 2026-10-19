@@ -34,18 +34,9 @@ pub(crate) fn render_review_pane(
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
+    // Shell only mounts this when a PR is selected (full-bleed focus Review).
     if view.selected_id.is_none() {
-        return v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Select a pull request from Pull requests."),
-            )
-            .into_any_element();
+        return div().into_any_element();
     }
 
     let tab_ix = TABS

@@ -6,13 +6,11 @@ use std::sync::Arc;
 use gpui_kit::component::{
     ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
     diff::{DiffMode, DiffState},
-    h_flex,
-    resizable::{h_resizable, resizable_panel},
-    v_flex,
+    h_flex, v_flex,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div, px,
+    Subscription, Task, UniformListScrollHandle, Window, WindowAppearance, div,
 };
 use reviewdesk_core::{
     DiffAnchor, DraftFilter, LocalStoreError, NotificationListOptions, NotificationQuery,
@@ -1007,67 +1005,55 @@ impl Render for ReviewDesk {
         let entity = cx.entity().downgrade();
         let sync_label = view.pull_requests_pane.sync.status_label();
 
+        // #71 / #58: full-bleed list until a PR is open → focus Review + Back.
+        // Never keep an empty Review column beside the list.
+        let main = if view.selected_id.is_some() {
+            render_review_pane(
+                &view,
+                &self.diff,
+                &self.files_scroll,
+                &self.pipelines_scroll,
+                &self.conversation_scroll,
+                entity.clone(),
+                cx,
+            )
+            .into_any_element()
+        } else if view.sidebar_tab == SidebarTab::Inbox {
+            render_inbox(&view, &self.inbox_scroll, entity.clone(), cx).into_any_element()
+        } else {
+            render_pull_requests(
+                &view,
+                PullRequestsListChrome {
+                    scroll: &self.pull_requests_scroll,
+                    collapsed_groups: &self.collapsed_groups,
+                    filter_menu_open: self.filter_menu_open,
+                },
+                entity.clone(),
+                cx,
+            )
+            .into_any_element()
+        };
+
         v_flex()
             .size_full()
             .child(
                 TitleBar::new().child(
-                    h_flex()
-                        .w_full()
-                        .justify_between()
-                        .items_center()
-                        .pr_2()
-                        .child(div().text_sm().font_medium().child("Review Desk"))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .truncate()
-                                .child(sync_label),
-                        ),
+                    h_flex().w_full().justify_end().items_center().pr_3().child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(sync_label),
+                    ),
                 ),
             )
             .child(
                 div().flex_1().min_h_0().child(
-                    h_resizable("shell")
-                        .child(
-                            resizable_panel()
-                                .size(px(244.))
-                                .size_range(px(200.)..px(360.))
-                                .child(render_sidebar(&view, entity.clone(), cx)),
-                        )
-                        .child({
-                            let middle = if view.sidebar_tab == SidebarTab::Inbox {
-                                render_inbox(&view, &self.inbox_scroll, entity.clone(), cx)
-                                    .into_any_element()
-                            } else {
-                                render_pull_requests(
-                                    &view,
-                                    PullRequestsListChrome {
-                                        scroll: &self.pull_requests_scroll,
-                                        collapsed_groups: &self.collapsed_groups,
-                                        filter_menu_open: self.filter_menu_open,
-                                    },
-                                    entity.clone(),
-                                    cx,
-                                )
-                                .into_any_element()
-                            };
-                            resizable_panel()
-                                .size(px(360.))
-                                .size_range(px(280.)..px(720.))
-                                .child(middle)
-                        })
-                        .child(resizable_panel().size_range(px(480.)..px(2000.)).child(
-                            render_review_pane(
-                                &view,
-                                &self.diff,
-                                &self.files_scroll,
-                                &self.pipelines_scroll,
-                                &self.conversation_scroll,
-                                entity,
-                                cx,
-                            ),
-                        )),
+                    h_flex()
+                        .size_full()
+                        .min_h_0()
+                        .child(render_sidebar(&view, entity, cx))
+                        .child(div().flex_1().min_w_0().min_h_0().h_full().child(main)),
                 ),
             )
     }
