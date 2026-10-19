@@ -27,18 +27,13 @@ pub(crate) fn render_overview(
             .size_full()
             .min_h_0()
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .p_4()
-                    .child(
-                        TextView::markdown("pr-overview", markdown.clone())
-                            .scrollable(true)
-                            .text_sm()
-                            .size_full()
-                            .plugin(DetailsTogglePlugin { owner }),
-                    ),
+                div().flex_1().min_h_0().w_full().p_4().child(
+                    TextView::markdown("pr-overview", markdown.clone())
+                        .scrollable(true)
+                        .text_sm()
+                        .size_full()
+                        .plugin(DetailsTogglePlugin { owner }),
+                ),
             )
             .into_any_element();
     }
