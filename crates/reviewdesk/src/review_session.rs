@@ -107,6 +107,8 @@ pub enum Intent {
         name: String,
     },
     DiscardViewEdits,
+    /// Constructed from the macOS rename prompt only; allow on other targets.
+    #[allow(dead_code)]
     RenameActiveView {
         name: String,
     },
