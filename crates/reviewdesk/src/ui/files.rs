@@ -348,75 +348,82 @@ pub(crate) fn render_files(
                         diff_column = diff_column
                             .child(render_pending_review_bar(pending_entity.clone(), cx));
                     }
-                    resizable_panel().child(diff_column.child(match selected_file_error {
-                        Some(error) => {
-                            let path = retry_path.clone();
-                            v_flex()
-                                .flex_1()
-                                .min_h_0()
-                                .w_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_3()
-                                .px_4()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_center()
-                                        .text_color(cx.theme().danger)
-                                        .child(error.to_string()),
-                                )
-                                .child(
-                                    Button::new("file-retry")
-                                        .outline()
-                                        .small()
-                                        .label("Retry")
-                                        .on_click(move |_, _, cx| {
-                                            let Some(path) = path.clone() else {
-                                                return;
-                                            };
-                                            let _ = entity.update(cx, |this, cx| {
-                                                this.dispatch(Intent::RetryFile(path), cx);
-                                            });
-                                        }),
-                                )
-                                .into_any_element()
-                        }
-                        None => Diff::new(diff)
+                    resizable_panel().child(diff_column.child(
+                        div()
                             .flex_1()
                             .min_h_0()
                             .w_full()
                             .p_2()
-                            .soft_wrap(true)
-                            .annotations(annotations)
-                            .render_annotation({
-                                let cards = thread_cards.clone();
-                                move |annotation, _, cx| {
-                                    let Some(card) =
-                                        cards.iter().find(|(id, _)| id == annotation.id())
-                                    else {
-                                        return div().into_any_element();
-                                    };
-                                    render_diff_thread_annotation(
-                                        card.1.author.as_ref(),
-                                        card.1.body.as_ref(),
-                                        card.1.is_pending,
-                                        card.1.suggestion.as_deref(),
-                                        cx,
-                                    )
-                                    .into_any_element()
+                            .overflow_hidden()
+                            .child(match selected_file_error {
+                                Some(error) => {
+                                    let path = retry_path.clone();
+                                    v_flex()
+                                        .size_full()
+                                        .items_center()
+                                        .justify_center()
+                                        .gap_3()
+                                        .px_4()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_center()
+                                                .text_color(cx.theme().danger)
+                                                .child(error.to_string()),
+                                        )
+                                        .child(
+                                            Button::new("file-retry")
+                                                .outline()
+                                                .small()
+                                                .label("Retry")
+                                                .on_click(move |_, _, cx| {
+                                                    let Some(path) = path.clone() else {
+                                                        return;
+                                                    };
+                                                    let _ = entity.update(cx, |this, cx| {
+                                                        this.dispatch(Intent::RetryFile(path), cx);
+                                                    });
+                                                }),
+                                        )
+                                        .into_any_element()
                                 }
-                            })
-                            .on_add_annotation(move |range, _, _cx| {
-                                let _ = add_entity.update(_cx, |this, cx| {
-                                    this.dispatch(
-                                        Intent::AddDiffReviewComment(range.clone()),
-                                        cx,
-                                    );
-                                });
-                            })
-                            .into_any_element(),
-                    }))
+                                None => Diff::new(diff)
+                                    .size_full()
+                                    .min_h_0()
+                                    // Soft-wrap ties row height to viewport width; the
+                                    // vertical scrollbar then thrash-notifies and can
+                                    // clamp scroll. Prefer horizontal overflow instead.
+                                    .soft_wrap(false)
+                                    .annotations(annotations)
+                                    .render_annotation({
+                                        let cards = thread_cards.clone();
+                                        move |annotation, _, cx| {
+                                            let Some(card) =
+                                                cards.iter().find(|(id, _)| id == annotation.id())
+                                            else {
+                                                return div().into_any_element();
+                                            };
+                                            render_diff_thread_annotation(
+                                                card.1.author.as_ref(),
+                                                card.1.body.as_ref(),
+                                                card.1.is_pending,
+                                                card.1.suggestion.as_deref(),
+                                                cx,
+                                            )
+                                            .into_any_element()
+                                        }
+                                    })
+                                    .on_add_annotation(move |range, _, _cx| {
+                                        let _ = add_entity.update(_cx, |this, cx| {
+                                            this.dispatch(
+                                                Intent::AddDiffReviewComment(range.clone()),
+                                                cx,
+                                            );
+                                        });
+                                    })
+                                    .into_any_element(),
+                            }),
+                    ))
                 }),
             ),
         )

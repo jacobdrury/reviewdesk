@@ -23,7 +23,7 @@ use tokio::runtime::Handle;
 use crate::PULL_REQUESTS_REFRESH;
 use crate::metadata_write::apply_metadata_write;
 use crate::review_session::SidebarTab;
-use crate::review_session::{Effect, Intent, ReviewSession, ReviewTab};
+use crate::review_session::{Effect, Intent, ReviewSession};
 use crate::review_writeback::{
     add_pending_diff_review_comment, discard_pending_review, load_threads_via_store,
     publish_timeline_comment, refresh_threads_from_provider, set_thread_status,
@@ -177,15 +177,9 @@ impl ReviewDesk {
             self.selected_pipeline = 0;
             self.pipelines_collapsed_groups.clear();
         }
-        let entered_changes = matches!(&intent, Intent::SetReviewTab(ReviewTab::Changes));
         let effects = self.session.apply(intent);
         self.run_effects(effects, cx);
         self.sync_diff_widget(cx);
-        // Remeasure Diff ListState after the Changes surface mounts so the
-        // first paint is not stuck with a 0-height scroll viewport.
-        if entered_changes {
-            self.diff.update(cx, |_, cx| cx.notify());
-        }
         cx.notify();
     }
 
@@ -370,7 +364,18 @@ impl ReviewDesk {
                 if state.mode() != mode {
                     state.set_mode(mode, cx);
                 }
-                state.set_files(files, cx);
+                // set_files resets ListState scroll. Local-then-network patch
+                // reloads bump revision with the same paths — skip those so
+                // multibuffer scroll is not yanked mid-gesture.
+                let same_paths = state.files().len() == files.len()
+                    && state
+                        .files()
+                        .iter()
+                        .zip(files.iter())
+                        .all(|(have, next)| have.path() == next.path());
+                if !same_paths {
+                    state.set_files(files, cx);
+                }
             });
         }
 
