@@ -40,7 +40,8 @@ use crate::theme::{
     should_sync_on_activation,
 };
 use crate::ui::{
-    PullRequestsListChrome, render_inbox, render_pull_requests, render_review_pane, render_sidebar,
+    PipelinesChrome, PullRequestsListChrome, render_inbox, render_pull_requests,
+    render_review_pane, render_sidebar,
 };
 
 fn appearance_from_window(window: &Window) -> Appearance {
@@ -72,6 +73,9 @@ pub struct ReviewDesk {
     collapsed_groups: HashSet<String>,
     filter_menu_open: bool,
     pipelines_scroll: UniformListScrollHandle,
+    pipelines_detail_scroll: UniformListScrollHandle,
+    selected_pipeline: usize,
+    pipelines_collapsed_groups: HashSet<String>,
     conversation_scroll: UniformListScrollHandle,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
@@ -119,6 +123,9 @@ impl ReviewDesk {
             collapsed_groups: HashSet::new(),
             filter_menu_open: false,
             pipelines_scroll: UniformListScrollHandle::new(),
+            pipelines_detail_scroll: UniformListScrollHandle::new(),
+            selected_pipeline: 0,
+            pipelines_collapsed_groups: HashSet::new(),
             conversation_scroll: UniformListScrollHandle::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
@@ -158,6 +165,13 @@ impl ReviewDesk {
     }
 
     pub(crate) fn dispatch(&mut self, intent: Intent, cx: &mut Context<Self>) {
+        if matches!(
+            intent,
+            Intent::SelectPullRequest(_) | Intent::BackToPullRequests
+        ) {
+            self.selected_pipeline = 0;
+            self.pipelines_collapsed_groups.clear();
+        }
         let effects = self.session.apply(intent);
         self.run_effects(effects, cx);
         self.sync_diff_widget(cx);
@@ -260,6 +274,20 @@ impl ReviewDesk {
             self.collapsed_groups.remove(&key);
         } else {
             self.collapsed_groups.insert(key);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn select_pipeline(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.selected_pipeline = index;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_pipelines_collapsed_group(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.pipelines_collapsed_groups.contains(&key) {
+            self.pipelines_collapsed_groups.remove(&key);
+        } else {
+            self.pipelines_collapsed_groups.insert(key);
         }
         cx.notify();
     }
@@ -1012,7 +1040,12 @@ impl Render for ReviewDesk {
                 &view,
                 &self.diff,
                 &self.files_scroll,
-                &self.pipelines_scroll,
+                PipelinesChrome {
+                    list_scroll: &self.pipelines_scroll,
+                    detail_scroll: &self.pipelines_detail_scroll,
+                    selected_pipeline: self.selected_pipeline,
+                    collapsed_groups: &self.pipelines_collapsed_groups,
+                },
                 &self.conversation_scroll,
                 entity.clone(),
                 cx,
