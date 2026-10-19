@@ -15,7 +15,7 @@ mod sidebar;
 pub(crate) use conversation::render_conversation;
 pub(crate) use files::render_files;
 pub(crate) use inbox::render_inbox;
-pub(crate) use metadata::{render_metadata_panel, render_metadata_strip};
+pub(crate) use metadata::render_metadata_panel;
 pub(crate) use overview::render_overview;
 pub(crate) use pipelines_tab::PipelinesChrome;
 pub(crate) use pull_requests::{PullRequestsListChrome, render_pull_requests};

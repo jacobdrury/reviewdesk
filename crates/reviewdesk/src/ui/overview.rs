@@ -21,16 +21,24 @@ pub(crate) fn render_overview(
 ) -> impl IntoElement {
     if let Some(markdown) = &view.overview_markdown {
         let owner = entity.clone();
-        return div()
+        // Scrollable TextView needs a bounded height from a flex_1().min_h_0()
+        // chain — size_full alone under an auto-height parent collapses to 0.
+        return v_flex()
             .size_full()
             .min_h_0()
-            .p_4()
             .child(
-                TextView::markdown("pr-overview", markdown.clone())
-                    .scrollable(true)
-                    .text_sm()
-                    .size_full()
-                    .plugin(DetailsTogglePlugin { owner }),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .p_4()
+                    .child(
+                        TextView::markdown("pr-overview", markdown.clone())
+                            .scrollable(true)
+                            .text_sm()
+                            .size_full()
+                            .plugin(DetailsTogglePlugin { owner }),
+                    ),
             )
             .into_any_element();
     }
