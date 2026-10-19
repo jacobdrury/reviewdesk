@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, StyledExt as _, TitleBar, WindowExt as _,
+    ActiveTheme as _, TitleBar, WindowExt as _,
     diff::{DiffMode, DiffState},
     h_flex, v_flex,
 };
