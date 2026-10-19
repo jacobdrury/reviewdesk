@@ -99,6 +99,8 @@ pub enum Intent {
     SetRepoScope {
         repo: Option<String>,
     },
+    /// Reset to All PRs + clear repo scope (Linear “Clear filters”).
+    ClearListFilters,
     SaveActiveView,
     SaveViewAsNew {
         name: String,
@@ -632,6 +634,7 @@ impl ReviewSession {
             }
             Intent::SelectView(id) => self.select_view(id),
             Intent::SetRepoScope { repo } => self.set_repo_scope(repo),
+            Intent::ClearListFilters => self.clear_list_filters(),
             Intent::SaveActiveView => self.save_active_view(),
             Intent::SaveViewAsNew { name } => self.save_view_as_new(name),
             Intent::DiscardViewEdits => {
@@ -1406,6 +1409,21 @@ impl ReviewSession {
             views: self.current_views_vec(),
             last_used: self.active_view_id.clone(),
             scoped_repository: self.repo_scope.clone(),
+        }]
+    }
+
+    fn clear_list_filters(&mut self) -> Vec<Effect> {
+        self.repo_scope = None;
+        let all = ViewId::new(reviewdesk_core::VIEW_ID_ALL_PRS);
+        if self.active_view_id.as_ref() != Some(&all) {
+            self.activate_view(all.clone());
+        } else {
+            self.load_working_from_active_view();
+        }
+        vec![Effect::PersistViews {
+            views: self.current_views_vec(),
+            last_used: Some(all),
+            scoped_repository: None,
         }]
     }
 
@@ -2364,6 +2382,29 @@ mod tests {
         assert!(pane.working_filter.i_am_reviewer);
         assert!(!pane.working_filter.i_am_author);
         assert_eq!(pane.working_filter.drafts, DraftFilter::ReadyOnly);
+    }
+
+    #[test]
+    fn clear_list_filters_resets_to_all_prs_and_clears_scope() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::PullRequestsViewsBootstrapFinished {
+            views: Ok(View::seed_set()),
+            last_used: Ok(None),
+            scoped_repository: Ok(None),
+        });
+        let _ = session.apply(Intent::SetRepoScope {
+            repo: Some("acme/widgets".into()),
+        });
+        let _ = session.apply(Intent::SelectView(ViewId::new(
+            reviewdesk_core::VIEW_ID_NEEDS_MY_REVIEW,
+        )));
+        let _ = session.apply(Intent::ClearListFilters);
+        assert_eq!(
+            session.active_view_id.as_ref().map(|id| id.as_str()),
+            Some(reviewdesk_core::VIEW_ID_ALL_PRS)
+        );
+        assert_eq!(session.view().pull_requests_pane.repo_scope, None);
+        assert!(session.view().pull_requests_pane.working_filter.is_empty());
     }
 
     #[test]

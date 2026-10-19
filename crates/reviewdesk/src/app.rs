@@ -72,6 +72,7 @@ pub struct ReviewDesk {
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     collapsed_groups: HashSet<String>,
+    filter_menu_open: bool,
     pipelines_scroll: UniformListScrollHandle,
     conversation_scroll: UniformListScrollHandle,
     _inbox_reload_task: Task<()>,
@@ -118,6 +119,7 @@ impl ReviewDesk {
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
             collapsed_groups: HashSet::new(),
+            filter_menu_open: false,
             pipelines_scroll: UniformListScrollHandle::new(),
             conversation_scroll: UniformListScrollHandle::new(),
             _inbox_reload_task: Task::ready(()),
@@ -261,6 +263,11 @@ impl ReviewDesk {
         } else {
             self.collapsed_groups.insert(key);
         }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_filter_menu(&mut self, cx: &mut Context<Self>) {
+        self.filter_menu_open = !self.filter_menu_open;
         cx.notify();
     }
 
@@ -1038,6 +1045,7 @@ impl Render for ReviewDesk {
                                     PullRequestsListChrome {
                                         scroll: &self.pull_requests_scroll,
                                         collapsed_groups: &self.collapsed_groups,
+                                        filter_menu_open: self.filter_menu_open,
                                     },
                                     entity.clone(),
                                     cx,

@@ -15,8 +15,8 @@ use gpui_kit::{
     prelude::FluentBuilder as _, px, uniform_list,
 };
 use reviewdesk_core::{
-    CiStatusFilter, DraftFilter, PullRequestListRow, PullRequestsEmptyKind, ReviewState,
-    UpdatedWithin, review_state_label, visible_list_rows,
+    DraftFilter, PullRequestListRow, PullRequestsEmptyKind, ReviewState, UpdatedWithin,
+    VIEW_ID_ALL_PRS, review_state_label, visible_list_rows,
 };
 
 use crate::app::ReviewDesk;
@@ -32,6 +32,7 @@ fn list_row_pl(depth: u8) -> f32 {
 pub(crate) struct PullRequestsListChrome<'a> {
     pub scroll: &'a UniformListScrollHandle,
     pub collapsed_groups: &'a HashSet<String>,
+    pub filter_menu_open: bool,
 }
 
 pub(crate) fn render_pull_requests(
@@ -48,21 +49,12 @@ pub(crate) fn render_pull_requests(
         .size_full()
         .min_h_0()
         .child(render_view_tabs(pane, entity.clone(), cx))
-        .child(render_filter_bar(pane, entity.clone(), cx))
-        .child(
-            div()
-                .px_3()
-                .py(px(2.))
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .truncate()
-                        .child(pane.sync.status_label()),
-                ),
-        )
+        .child(render_linear_filter_display(
+            pane,
+            chrome.filter_menu_open,
+            entity.clone(),
+            cx,
+        ))
         .child(render_list_body(
             view,
             pull_requests_scroll,
@@ -81,6 +73,7 @@ fn render_view_tabs(
         .w_full()
         .px_4()
         .pt_2()
+        .gap_0()
         .items_end()
         .border_b_1()
         .border_color(cx.theme().border);
@@ -124,40 +117,12 @@ fn render_view_tabs(
         );
     }
 
-    tabs.child(div().flex_1()).child(
-        h_flex()
-            .gap_1()
-            .pb(px(6.))
-            .child(
-                Button::new("view-move-left")
-                    .ghost()
-                    .xsmall()
-                    .label("←")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, cx| {
-                            let _ = entity.update(cx, |this, cx| {
-                                this.dispatch(Intent::MoveActiveViewLeft, cx);
-                            });
-                        }
-                    }),
-            )
-            .child(
-                Button::new("view-move-right")
-                    .ghost()
-                    .xsmall()
-                    .label("→")
-                    .on_click({
-                        let entity = entity.clone();
-                        move |_, _, cx| {
-                            let _ = entity.update(cx, |this, cx| {
-                                this.dispatch(Intent::MoveActiveViewRight, cx);
-                            });
-                        }
-                    }),
-            )
-            .when(pane.view_dirty, |el| {
-                el.child(
+    tabs.child(div().flex_1()).when(pane.view_dirty, |el| {
+        el.child(
+            h_flex()
+                .gap_1()
+                .pb(px(6.))
+                .child(
                     Button::new("view-save")
                         .ghost()
                         .xsmall()
@@ -184,168 +149,323 @@ fn render_view_tabs(
                                 });
                             }
                         }),
-                )
-            }),
-    )
+                ),
+        )
+    })
 }
 
-fn render_filter_bar(
+/// Linear Filter row: Filter + composed chips + Clear + Display (#71 @ cb0f2c3).
+fn render_linear_filter_display(
     pane: &crate::pull_requests_pane::PullRequestsPaneView,
+    filter_menu_open: bool,
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
     let filter = &pane.working_filter;
-    let can_rename = pane
-        .views
-        .iter()
-        .any(|view| pane.active_view_id.as_ref() == Some(&view.id) && view.can_rename());
+    let active_id = pane.active_view_id.as_ref().map(|id| id.as_str());
+    let is_all_prs = active_id == Some(VIEW_ID_ALL_PRS);
+    let view_name = pane.active_view_name.clone();
 
-    let drafts_label = match filter.drafts {
-        DraftFilter::All => "Drafts: all",
-        DraftFilter::ReadyOnly => "Drafts: ready",
-        DraftFilter::DraftsOnly => "Drafts: only",
-    };
-    let updated_label = match filter.updated_within {
-        UpdatedWithin::Any => "Updated: any",
-        UpdatedWithin::Last24h => "Updated: 24h",
-        UpdatedWithin::Last7d => "Updated: 7d",
-        UpdatedWithin::Last30d => "Updated: 30d",
-    };
-
-    v_flex()
+    let mut row = h_flex()
         .w_full()
-        .border_b_1()
-        .border_color(cx.theme().border)
+        .px_4()
+        .py_2()
+        .items_center()
+        .gap_2()
         .child(
             h_flex()
-                .w_full()
-                .px_4()
-                .py_2()
+                .id("filter-toggle")
                 .items_center()
-                .gap_2()
-                .flex_wrap()
+                .gap_1()
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .when(filter_menu_open, |el| {
+                    el.bg(cx.theme().secondary.opacity(0.55))
+                })
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.5)))
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            this.toggle_filter_menu(cx);
+                        });
+                    }
+                })
+                .child(
+                    Icon::new(IconName::Menu)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
                 .child(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child("Filter"),
-                )
-                .when_some(pane.active_view_name.as_ref(), |el, name| {
-                    el.child(filter_chip("View", name, cx))
+                ),
+        );
+
+    if !is_all_prs {
+        if let Some(name) = view_name.as_deref() {
+            row = row.child(linear_filter_chip(
+                "view",
+                "View",
+                "is",
+                name,
+                None,
+                "clear",
+                entity.clone(),
+                cx,
+            ));
+        }
+    }
+
+    if let Some(repo) = pane.repo_scope.as_ref() {
+        let short = short_repo_name(repo);
+        row = row.child(linear_filter_chip(
+            "repo",
+            "Repository",
+            "is",
+            &short,
+            Some(IconName::Github),
+            "repo",
+            entity.clone(),
+            cx,
+        ));
+    }
+
+    if filter.i_am_reviewer {
+        row = row.child(linear_filter_chip(
+            "reviewer",
+            "I am reviewer",
+            "is",
+            "me",
+            Some(IconName::Eye),
+            "reviewer",
+            entity.clone(),
+            cx,
+        ));
+    }
+    if filter.i_am_author {
+        row = row.child(linear_filter_chip(
+            "author",
+            "Author",
+            "is",
+            "me",
+            Some(IconName::User),
+            "author",
+            entity.clone(),
+            cx,
+        ));
+    }
+    if filter.drafts != DraftFilter::All {
+        let value = match filter.drafts {
+            DraftFilter::ReadyOnly => "Ready",
+            DraftFilter::DraftsOnly => "Draft",
+            DraftFilter::All => "All",
+        };
+        row = row.child(linear_filter_chip(
+            "draft",
+            "Draft",
+            "is",
+            value,
+            Some(IconName::Square),
+            "draft",
+            entity.clone(),
+            cx,
+        ));
+    }
+    if filter.updated_within != UpdatedWithin::Any {
+        let value = match filter.updated_within {
+            UpdatedWithin::Last24h => "24h",
+            UpdatedWithin::Last7d => "7d",
+            UpdatedWithin::Last30d => "30d",
+            UpdatedWithin::Any => "any",
+        };
+        row = row.child(linear_filter_chip(
+            "updated",
+            "Updated",
+            "is",
+            value,
+            Some(IconName::Calendar),
+            "updated",
+            entity.clone(),
+            cx,
+        ));
+    }
+    if filter.review_states.contains(&ReviewState::Pending) {
+        row = row.child(linear_filter_chip(
+            "status",
+            "Status",
+            "is any of",
+            "Review required",
+            Some(IconName::LoaderCircle),
+            "status",
+            entity.clone(),
+            cx,
+        ));
+    }
+
+    let has_chips = !is_all_prs
+        || pane.repo_scope.is_some()
+        || filter.i_am_author
+        || filter.i_am_reviewer
+        || filter.drafts != DraftFilter::All
+        || filter.updated_within != UpdatedWithin::Any
+        || !filter.review_states.is_empty();
+
+    if has_chips {
+        row = row.child(
+            div()
+                .id("clear-filters")
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.45)))
+                .on_click({
+                    let entity = entity.clone();
+                    move |_, _, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            this.dispatch(Intent::ClearListFilters, cx);
+                        });
+                    }
                 })
-                .when_some(pane.repo_scope.as_ref(), |el, repo| {
-                    el.child(filter_chip("Repository", repo, cx))
-                })
-                .child(toggle_filter_chip(
-                    "Author: me",
-                    filter.i_am_author,
-                    entity.clone(),
-                    cx,
-                    |this, cx| this.dispatch(Intent::ToggleWorkingFilterAuthor, cx),
-                ))
-                .child(toggle_filter_chip(
-                    "Reviewer: me",
-                    filter.i_am_reviewer,
-                    entity.clone(),
-                    cx,
-                    |this, cx| this.dispatch(Intent::ToggleWorkingFilterReviewer, cx),
-                ))
-                .child(cycle_filter_chip(
-                    drafts_label.to_string(),
-                    entity.clone(),
-                    cx,
-                    |this, cx| this.dispatch(Intent::CycleWorkingFilterDrafts, cx),
-                ))
-                .child(cycle_filter_chip(
-                    updated_label.to_string(),
-                    entity.clone(),
-                    cx,
-                    |this, cx| this.dispatch(Intent::CycleWorkingFilterUpdatedWithin, cx),
-                ))
-                .child(toggle_filter_chip(
-                    "Review: pending",
-                    filter.review_states.contains(&ReviewState::Pending),
-                    entity.clone(),
-                    cx,
-                    |this, cx| {
-                        this.dispatch(
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Clear filters"),
+                ),
+        );
+    }
+
+    row = row.child(div().flex_1()).child(
+        h_flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py(px(4.))
+            .rounded_md()
+            .child(
+                Icon::new(IconName::Settings2)
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Display"),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("· {}", pane.group_by_label)),
+            ),
+    );
+
+    let mut bar = v_flex()
+        .w_full()
+        .border_b_1()
+        .border_color(cx.theme().border)
+        .child(row);
+
+    if filter_menu_open {
+        bar = bar.child(render_filter_dimension_menu(entity, cx));
+    }
+
+    bar
+}
+
+fn render_filter_dimension_menu(
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    const DIMENSIONS: &[(&str, IconName, &str)] = &[
+        ("Status", IconName::CircleCheck, "status"),
+        ("Repository", IconName::Github, "repo"),
+        ("Author", IconName::User, "author"),
+        ("Draft", IconName::Square, "draft"),
+        ("I am reviewer", IconName::Eye, "reviewer"),
+        ("Updated", IconName::Calendar, "updated"),
+    ];
+    let mut menu = h_flex()
+        .w_full()
+        .px_4()
+        .pb_2()
+        .gap_1()
+        .items_center()
+        .child(
+            div()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child("Filter by"),
+        );
+    for (label, icon, key) in DIMENSIONS {
+        let entity = entity.clone();
+        let key = *key;
+        menu = menu.child(
+            h_flex()
+                .id(SharedString::from(format!("dim-{key}")))
+                .items_center()
+                .gap_1()
+                .px_2()
+                .py(px(4.))
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().border)
+                .cursor_pointer()
+                .hover(|style| style.bg(cx.theme().secondary.opacity(0.45)))
+                .on_click(move |_, _, cx| {
+                    let _ = entity.update(cx, |this, cx| match key {
+                        "author" => this.dispatch(Intent::ToggleWorkingFilterAuthor, cx),
+                        "reviewer" => this.dispatch(Intent::ToggleWorkingFilterReviewer, cx),
+                        "draft" => this.dispatch(Intent::CycleWorkingFilterDrafts, cx),
+                        "updated" => this.dispatch(Intent::CycleWorkingFilterUpdatedWithin, cx),
+                        "status" => this.dispatch(
                             Intent::ToggleWorkingFilterReviewState {
                                 state: ReviewState::Pending,
                             },
                             cx,
-                        )
-                    },
-                ))
-                .child(disabled_filter_chip("Assignee", "not cached yet", cx))
-                .child(disabled_filter_chip(
-                    "CI status",
-                    match filter.ci_status {
-                        CiStatusFilter::Any => "not cached yet",
-                        _ => "checks not on list rows",
-                    },
-                    cx,
-                )),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .px_4()
-                .pb_2()
-                .items_center()
-                .gap_2()
-                .child(div().flex_1())
+                        ),
+                        _ => {}
+                    });
+                })
+                .child(
+                    Icon::new(icon.clone())
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!("Display · {}", pane.group_by_label)),
-                )
-                .child(
-                    Button::new("view-rename")
-                        .ghost()
-                        .xsmall()
-                        .label("Rename")
-                        .disabled(!can_rename)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Intent::RequestRenameActiveView, cx);
-                        })),
-                )
-                .child(
-                    Button::new("view-save-as")
-                        .ghost()
-                        .xsmall()
-                        .label("Save as new")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let name = this
-                                .session
-                                .view()
-                                .pull_requests_pane
-                                .active_view_name
-                                .unwrap_or_else(|| "Custom View".into());
-                            this.dispatch(Intent::SaveViewAsNew { name }, cx);
-                        })),
-                )
-                .when(
-                    pane.views
-                        .iter()
-                        .any(|v| pane.active_view_id.as_ref() == Some(&v.id) && v.can_delete()),
-                    |el| {
-                        el.child(
-                            Button::new("view-delete")
-                                .ghost()
-                                .xsmall()
-                                .label("Delete")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(Intent::DeleteActiveView, cx);
-                                })),
-                        )
-                    },
+                        .text_sm()
+                        .text_color(cx.theme().foreground)
+                        .child(*label),
                 ),
-        )
+        );
+    }
+    menu
 }
 
-fn filter_chip(field: &str, value: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
+/// Linear composed filter chip: `Status` `is any of` [icon] `value` ×
+fn linear_filter_chip(
+    id: &str,
+    field: &str,
+    op: &str,
+    value: &str,
+    value_icon: Option<IconName>,
+    dismiss_key: &'static str,
+    entity: WeakEntity<ReviewDesk>,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    let field = field.to_string();
+    let op = op.to_string();
+    let value = value.to_string();
     h_flex()
+        .id(SharedString::from(format!("fchip-{id}")))
         .items_center()
         .gap_1()
         .px_2()
@@ -353,91 +473,57 @@ fn filter_chip(field: &str, value: &str, cx: &mut Context<ReviewDesk>) -> impl I
         .rounded_md()
         .border_1()
         .border_color(cx.theme().border)
+        .bg(cx.theme().secondary.opacity(0.35))
+        .child(
+            div()
+                .text_xs()
+                .font_medium()
+                .text_color(cx.theme().muted_foreground)
+                .child(field),
+        )
         .child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(field.to_string()),
+                .child(op),
         )
+        .when_some(value_icon, |el, icon| {
+            el.child(Icon::new(icon).xsmall().text_color(cx.theme().foreground))
+        })
         .child(
             div()
                 .text_xs()
                 .font_medium()
                 .text_color(cx.theme().foreground)
-                .child(value.to_string()),
-        )
-}
-
-fn toggle_filter_chip<F>(
-    label: &str,
-    active: bool,
-    entity: WeakEntity<ReviewDesk>,
-    cx: &mut Context<ReviewDesk>,
-    dispatch: F,
-) -> impl IntoElement
-where
-    F: Fn(&mut ReviewDesk, &mut Context<ReviewDesk>) + 'static,
-{
-    let label = label.to_string();
-    Button::new(SharedString::from(format!("filter-{label}")))
-        .ghost()
-        .xsmall()
-        .label(label)
-        .when(active, |button| {
-            button.bg(cx.theme().secondary.opacity(0.55))
-        })
-        .on_click(move |_, _, cx| {
-            let _ = entity.update(cx, |this, cx| {
-                dispatch(this, cx);
-            });
-        })
-}
-
-fn cycle_filter_chip<F>(
-    label: String,
-    entity: WeakEntity<ReviewDesk>,
-    _cx: &mut Context<ReviewDesk>,
-    dispatch: F,
-) -> impl IntoElement
-where
-    F: Fn(&mut ReviewDesk, &mut Context<ReviewDesk>) + 'static,
-{
-    Button::new(SharedString::from(format!("cycle-{label}")))
-        .ghost()
-        .xsmall()
-        .label(label)
-        .on_click(move |_, _, cx| {
-            let _ = entity.update(cx, |this, cx| {
-                dispatch(this, cx);
-            });
-        })
-}
-
-fn disabled_filter_chip(
-    title: &str,
-    reason: &str,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    h_flex()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(3.))
-        .rounded_md()
-        .border_1()
-        .border_color(cx.theme().border.opacity(0.5))
-        .opacity(0.55)
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(title.to_string()),
+                .child(value),
         )
         .child(
             div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(reason.to_string()),
+                .id(SharedString::from(format!("fchip-x-{id}")))
+                .cursor_pointer()
+                .px_1()
+                .on_click(move |_, _, cx| {
+                    let _ = entity.update(cx, |this, cx| match dismiss_key {
+                        "clear" => this.dispatch(Intent::ClearListFilters, cx),
+                        "repo" => this.dispatch(Intent::SetRepoScope { repo: None }, cx),
+                        "author" => this.dispatch(Intent::ToggleWorkingFilterAuthor, cx),
+                        "reviewer" => this.dispatch(Intent::ToggleWorkingFilterReviewer, cx),
+                        "draft" => this.dispatch(Intent::CycleWorkingFilterDrafts, cx),
+                        "updated" => this.dispatch(Intent::CycleWorkingFilterUpdatedWithin, cx),
+                        "status" => this.dispatch(
+                            Intent::ToggleWorkingFilterReviewState {
+                                state: ReviewState::Pending,
+                            },
+                            cx,
+                        ),
+                        _ => {}
+                    });
+                })
+                .child(
+                    Icon::new(IconName::Close)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                ),
         )
 }
 
