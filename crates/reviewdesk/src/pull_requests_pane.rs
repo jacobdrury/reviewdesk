@@ -1,5 +1,6 @@
 //! Pull requests list pane projection (Views, scope, grouped rows, empty states).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -24,6 +25,10 @@ pub struct PullRequestsPaneView {
     pub group_by_label: String,
     pub repo_scope: Option<String>,
     pub repositories: Arc<[String]>,
+    /// Unscoped Pull requests cache size (sidebar badge).
+    pub cache_count: usize,
+    /// Per-repo counts from the unfiltered cache (Your repositories badges).
+    pub repo_counts: Arc<[(String, usize)]>,
     pub working_filter: ViewFilter,
 }
 
@@ -41,6 +46,8 @@ impl Default for PullRequestsPaneView {
             group_by_label: group_by_display_label(ViewGroupBy::None).to_string(),
             repo_scope: None,
             repositories: Arc::from([]),
+            cache_count: 0,
+            repo_counts: Arc::from([]),
             working_filter: ViewFilter::default(),
         }
     }
@@ -84,9 +91,10 @@ pub fn project_pull_requests_pane(inputs: &PullRequestsPaneInputs<'_>) -> PullRe
         f != inputs.working_filter || *g != inputs.working_group_by || s != inputs.working_sort
     });
 
-    let (rows, empty, repositories) = match inputs.cache {
+    let (rows, empty, repositories, cache_count, repo_counts) = match inputs.cache {
         LoadState::Ready(items) => {
             let repos = distinct_repo_labels(items);
+            let repo_counts = count_by_repo(items);
             let (rows, empty) = build_pull_request_list_rows(
                 items,
                 inputs.working_filter,
@@ -96,11 +104,19 @@ pub fn project_pull_requests_pane(inputs: &PullRequestsPaneInputs<'_>) -> PullRe
                 Utc::now(),
                 inputs.repo_scope.as_deref(),
             );
-            (Arc::from(rows), empty, Arc::from(repos))
+            (
+                Arc::from(rows),
+                empty,
+                Arc::from(repos),
+                items.len(),
+                Arc::from(repo_counts),
+            )
         }
         _ => (
             Arc::from([] as [PullRequestListRow; 0]),
             None,
+            Arc::from([]),
+            0,
             Arc::from([]),
         ),
     };
@@ -117,6 +133,16 @@ pub fn project_pull_requests_pane(inputs: &PullRequestsPaneInputs<'_>) -> PullRe
         group_by_label: group_by_display_label(inputs.working_group_by).to_string(),
         repo_scope: inputs.repo_scope.clone(),
         repositories,
+        cache_count,
+        repo_counts,
         working_filter: inputs.working_filter.clone(),
     }
+}
+
+fn count_by_repo(items: &[PullRequestListItem]) -> Vec<(String, usize)> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for item in items {
+        *counts.entry(item.repo_label.clone()).or_insert(0) += 1;
+    }
+    counts.into_iter().collect()
 }

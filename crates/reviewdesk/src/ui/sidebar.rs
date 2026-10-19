@@ -1,3 +1,8 @@
+//! Linear-style sidebar from locked HITL [#71](https://github.com/jacobdrury/reviewdesk/issues/71)
+//! (`prototype/pull-requests-list-nav` @ `cb0f2c3`), which supersedes #58 for nav contents.
+//!
+//! Inbox + Pull requests (global) + Workspace / Views chrome + Your repositories (scopes list).
+
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
@@ -7,7 +12,7 @@ use gpui_kit::{
 };
 
 use crate::app::ReviewDesk;
-use crate::review_session::{Intent, SessionView, SidebarTab};
+use crate::review_session::{Intent, LoadState, SessionView, SidebarTab};
 
 const SIDEBAR_WIDTH: f32 = 244.;
 
@@ -19,6 +24,10 @@ pub(crate) fn render_sidebar(
     let pane = &view.pull_requests_pane;
     let global_prs = pane.repo_scope.is_none();
     let repos = pane.repositories.clone();
+    let repo_counts = pane.repo_counts.clone();
+    let inbox_selected = view.sidebar_tab == SidebarTab::Inbox;
+    let inbox_badge = inbox_unread_count(view);
+    let pr_badge = (pane.cache_count > 0).then_some(pane.cache_count);
 
     let mut side = v_flex()
         .w(px(SIDEBAR_WIDTH))
@@ -40,10 +49,38 @@ pub(crate) fn render_sidebar(
                 .py(px(6.))
                 .child(
                     div()
+                        .size(px(18.))
+                        .rounded_md()
+                        .bg(cx.theme().accent.opacity(0.55))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_medium()
+                                .text_color(cx.theme().foreground)
+                                .child("R"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
                         .text_sm()
                         .font_medium()
                         .truncate()
                         .child("Review Desk"),
+                )
+                .child(
+                    Icon::new(IconName::Search)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    Icon::new(IconName::Plus)
+                        .xsmall()
+                        .text_color(cx.theme().muted_foreground),
                 ),
         )
         .child(div().h(px(6.)))
@@ -52,8 +89,8 @@ pub(crate) fn render_sidebar(
                 id: SharedString::from("nav-inbox"),
                 icon: IconName::Inbox,
                 label: "Inbox",
-                selected: view.sidebar_tab == SidebarTab::Inbox,
-                badge: None,
+                selected: inbox_selected,
+                badge: inbox_badge,
                 target: NavTarget::Inbox,
                 entity: entity.clone(),
             },
@@ -65,10 +102,18 @@ pub(crate) fn render_sidebar(
                 icon: IconName::Github,
                 label: "Pull requests",
                 selected: view.sidebar_tab == SidebarTab::PullRequests && global_prs,
-                badge: None,
+                badge: pr_badge,
                 target: NavTarget::AllRepos,
                 entity: entity.clone(),
             },
+            cx,
+        ))
+        .child(div().h(px(10.)))
+        .child(side_section("Workspace", cx))
+        .child(side_static(
+            SharedString::from("nav-views"),
+            IconName::Eye,
+            "Views",
             cx,
         ))
         .child(div().h(px(10.)))
@@ -79,13 +124,18 @@ pub(crate) fn render_sidebar(
         let selected =
             view.sidebar_tab == SidebarTab::PullRequests && pane.repo_scope.as_ref() == Some(&repo);
         let label = short_repo(&repo);
+        let badge = repo_counts
+            .iter()
+            .find(|(name, _)| name == &repo)
+            .map(|(_, n)| *n)
+            .filter(|n| *n > 0);
         side = side.child(side_nav_item(
             SideNavItemProps {
                 id: SharedString::from(format!("repo-{repo}")),
                 icon: IconName::Github,
                 label: &label,
                 selected,
-                badge: None,
+                badge,
                 target: NavTarget::Repo(repo),
                 entity: entity.clone(),
             },
@@ -96,6 +146,14 @@ pub(crate) fn render_sidebar(
     side
 }
 
+fn inbox_unread_count(view: &SessionView) -> Option<usize> {
+    let LoadState::Ready(threads) = &view.inbox else {
+        return None;
+    };
+    let n = threads.iter().filter(|t| t.unread).count();
+    (n > 0).then_some(n)
+}
+
 fn side_section(label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
     div()
         .px_2()
@@ -104,6 +162,31 @@ fn side_section(label: &str, cx: &mut Context<ReviewDesk>) -> impl IntoElement {
         .font_medium()
         .text_color(cx.theme().muted_foreground)
         .child(label.to_string())
+}
+
+fn side_static(
+    id: SharedString,
+    icon: IconName,
+    label: &'static str,
+    cx: &mut Context<ReviewDesk>,
+) -> impl IntoElement {
+    div().id(id).w_full().px_2().py(px(5.)).rounded_md().child(
+        h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(
+                Icon::new(icon)
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().sidebar_foreground)
+                    .child(label),
+            ),
+    )
 }
 
 #[derive(Clone)]
@@ -134,6 +217,7 @@ fn side_nav_item(props: SideNavItemProps<'_>, cx: &mut Context<ReviewDesk>) -> i
         entity,
     } = props;
     let label = label.to_string();
+    // Soft selection — opaque sidebar_accent obliterates label text on some themes (#71).
     let selected_bg = cx.theme().secondary.opacity(0.55);
     let hover_bg = cx.theme().secondary.opacity(0.35);
     let label_color = cx.theme().sidebar_foreground;
@@ -142,7 +226,8 @@ fn side_nav_item(props: SideNavItemProps<'_>, cx: &mut Context<ReviewDesk>) -> i
     div()
         .id(id)
         .w_full()
-        .px_2()
+        .pl(px(8.))
+        .pr_2()
         .py(px(5.))
         .rounded_md()
         .cursor_pointer()

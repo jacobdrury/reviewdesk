@@ -625,6 +625,9 @@ fn render_rows(
                             count,
                             depth,
                         } => {
+                            let is_status = is_review_status_label(label);
+                            let is_draft = label.as_str() == "Draft";
+                            let pt = if *depth == 0 { 14. } else { 8. };
                             let chevron = if collapsed.contains(key) {
                                 IconName::ChevronRight
                             } else {
@@ -632,13 +635,33 @@ fn render_rows(
                             };
                             let group_key = Arc::new(key.clone());
                             let owner = entity.clone();
+                            let mut header = h_flex().w_full().items_center().gap_2().child(
+                                Icon::new(chevron)
+                                    .xsmall()
+                                    .text_color(cx.theme().muted_foreground),
+                            );
+                            if is_status {
+                                header = header.child(
+                                    Icon::new(review_status_icon(label, is_draft))
+                                        .xsmall()
+                                        .text_color(review_status_color(label, is_draft, cx)),
+                                );
+                            } else {
+                                header = header.child(
+                                    Icon::new(IconName::Folder)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                );
+                            }
                             div()
                                 .id(SharedString::from(format!("group-{ix}")))
                                 .w_full()
                                 .pl(px(list_row_pl(*depth)))
                                 .pr_4()
-                                .py(px(6.))
+                                .pt(px(pt))
+                                .pb(px(6.))
                                 .cursor_pointer()
+                                .rounded_md()
                                 .hover(|style| style.bg(cx.theme().secondary.opacity(0.3)))
                                 .on_click({
                                     let group_key = group_key.clone();
@@ -653,20 +676,29 @@ fn render_rows(
                                     }
                                 })
                                 .child(
-                                    h_flex()
-                                        .items_center()
-                                        .gap_2()
+                                    header
                                         .child(
-                                            Icon::new(chevron)
+                                            h_flex()
+                                                .items_center()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .font_medium()
+                                                        .child(label.clone()),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(cx.theme().muted_foreground)
+                                                        .child(count.to_string()),
+                                                ),
+                                        )
+                                        .child(div().flex_1())
+                                        .child(
+                                            Icon::new(IconName::Plus)
                                                 .xsmall()
                                                 .text_color(cx.theme().muted_foreground),
-                                        )
-                                        .child(div().text_sm().font_medium().child(label.clone()))
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(count.to_string()),
                                         ),
                                 )
                                 .into_any_element()
@@ -706,18 +738,58 @@ fn render_rows(
         .child(Scrollbar::vertical(&scroll))
 }
 
+/// Linear Issues/backlog row → PR (#71 HITL @ cb0f2c3).
 fn render_dense_row(item: &reviewdesk_core::PullRequestListItem, cx: &App) -> impl IntoElement {
-    let status = review_state_label(item.review_state, item.is_draft);
-    h_flex()
+    let status_label = review_state_label(item.review_state, item.is_draft);
+    let status_color = review_status_color(status_label, item.is_draft, cx);
+    let number = pr_number_label(&item.id);
+    let updated = relative_time(item.updated_at);
+    let author_initial = item
+        .author_login
+        .chars()
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string())
+        .unwrap_or_else(|| "?".into());
+    let short = short_repo_name(&item.repo_label);
+
+    let mut row = h_flex()
         .w_full()
         .items_center()
         .gap_2()
         .child(
-            div().flex_none().w(px(14.)).child(
-                Icon::new(IconName::CircleCheck)
-                    .xsmall()
-                    .text_color(cx.theme().muted_foreground),
-            ),
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(32.))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(number),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(28.))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(updated),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(14.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(review_status_icon(status_label, item.is_draft))
+                                .xsmall()
+                                .text_color(status_color),
+                        ),
+                ),
         )
         .child(
             div()
@@ -727,19 +799,181 @@ fn render_dense_row(item: &reviewdesk_core::PullRequestListItem, cx: &App) -> im
                 .truncate()
                 .child(item.title.clone()),
         )
+        .child(repo_pill(&short, cx));
+
+    for label in item.labels.iter().take(2) {
+        row = row.child(label_pill(&label.name, &label.color, cx));
+    }
+
+    row.child(
+        div()
+            .size(px(20.))
+            .rounded_full()
+            .bg(author_color(&item.author_login, cx))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(cx.theme().background)
+                    .child(author_initial),
+            ),
+    )
+}
+
+fn repo_pill(name: &str, cx: &App) -> impl IntoElement {
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .py(px(2.))
+        .rounded_md()
+        .bg(cx.theme().secondary.opacity(0.65))
+        .flex_shrink_0()
         .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child(status),
+            Icon::new(IconName::Github)
+                .xsmall()
+                .text_color(cx.theme().muted_foreground),
         )
         .child(
             div()
-                .flex_none()
+                .max_w(px(110.))
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .truncate()
-                .child(item.repo_label.clone()),
+                .child(name.to_string()),
         )
+}
+
+fn label_pill(name: &str, hex: &str, cx: &App) -> impl IntoElement {
+    let color = provider_label_color(name, hex, cx);
+    h_flex()
+        .items_center()
+        .gap_1()
+        .px_1()
+        .py(px(2.))
+        .rounded_md()
+        .bg(color.opacity(0.22))
+        .border_1()
+        .border_color(color.opacity(0.55))
+        .flex_shrink_0()
+        .child(div().size(px(6.)).rounded_full().bg(color))
+        .child(
+            div()
+                .max_w(px(120.))
+                .text_xs()
+                .text_color(color)
+                .truncate()
+                .child(name.to_string()),
+        )
+}
+
+fn is_review_status_label(label: &str) -> bool {
+    matches!(
+        label,
+        "Review required"
+            | "Approved"
+            | "Changes requested"
+            | "Draft"
+            | "Commented"
+            | "Dismissed"
+            | "Unknown"
+    )
+}
+
+fn review_status_color(state: &str, is_draft: bool, cx: &App) -> gpui_kit::Hsla {
+    if is_draft || state == "Draft" {
+        return cx.theme().muted_foreground;
+    }
+    match state {
+        "Approved" => cx.theme().success,
+        "Changes requested" => cx.theme().danger,
+        "Review required" => cx.theme().warning,
+        _ => cx.theme().muted_foreground,
+    }
+}
+
+fn review_status_icon(state: &str, is_draft: bool) -> IconName {
+    if is_draft || state == "Draft" {
+        return IconName::Square;
+    }
+    match state {
+        "Approved" => IconName::CircleCheck,
+        "Changes requested" => IconName::CircleAlert,
+        "Review required" => IconName::LoaderCircle,
+        _ => IconName::Dash,
+    }
+}
+
+fn provider_label_color(name: &str, hex: &str, cx: &App) -> gpui_kit::Hsla {
+    let _ = hex;
+    match name {
+        "wayfinder:prototype" => cx.theme().accent,
+        "wayfinder:grilling" => cx.theme().warning,
+        "billing" => cx.theme().success,
+        "design" | "ui" => cx.theme().info,
+        "core" => cx.theme().danger.opacity(0.75),
+        "shell" => cx.theme().accent.opacity(0.8),
+        "infra" => cx.theme().muted_foreground,
+        _ => {
+            let n = name
+                .bytes()
+                .fold(0u32, |acc, b| acc.wrapping_add(u32::from(b)));
+            match n % 5 {
+                0 => cx.theme().accent,
+                1 => cx.theme().success,
+                2 => cx.theme().warning,
+                3 => cx.theme().info,
+                _ => cx.theme().link,
+            }
+        }
+    }
+}
+
+fn author_color(author: &str, cx: &App) -> gpui_kit::Hsla {
+    match author.chars().next().unwrap_or('a').to_ascii_lowercase() {
+        'a'..='e' => cx.theme().accent,
+        'f'..='j' => cx.theme().success,
+        'k'..='o' => cx.theme().warning,
+        _ => cx.theme().info,
+    }
+}
+
+fn pr_number_label(id: &reviewdesk_core::PullRequestId) -> String {
+    id.as_str()
+        .rsplit_once('#')
+        .map(|(_, n)| format!("#{n}"))
+        .unwrap_or_else(|| "#?".into())
+}
+
+fn short_repo_name(full: &str) -> String {
+    full.rsplit_once('/')
+        .map(|(_, name)| name.to_string())
+        .unwrap_or_else(|| full.to_string())
+}
+
+fn relative_time(at: chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let Ok(delta) = now.signed_duration_since(at).to_std() else {
+        return "—".into();
+    };
+    let secs = delta.as_secs();
+    if secs < 60 {
+        return "now".into();
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m");
+    }
+    let hours = mins / 60;
+    if hours < 48 {
+        return format!("{hours}h");
+    }
+    let days = hours / 24;
+    if days < 14 {
+        return format!("{days}d");
+    }
+    format!("{}w", days / 7)
 }
