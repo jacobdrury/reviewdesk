@@ -23,8 +23,6 @@ pub(crate) fn render_inbox(
     v_flex()
         .size_full()
         .min_h_0()
-        .border_r_1()
-        .border_color(cx.theme().border)
         .child(
             gpui_kit::component::h_flex()
                 .w_full()
@@ -64,6 +62,22 @@ pub(crate) fn render_inbox(
                         .child(view.inbox_sync.status_label()),
                 ),
         )
+        .child(if let Some(message) = &view.inbox_auth_error {
+            div()
+                .px_3()
+                .py(px(2.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(message.clone()),
+                )
+                .into_any_element()
+        } else {
+            div().into_any_element()
+        })
         .child(match &view.inbox {
             LoadState::Idle | LoadState::Loading => v_flex()
                 .flex_1()
@@ -76,7 +90,7 @@ pub(crate) fn render_inbox(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Loading Inbox…"),
+                        .child("Loading inbox…"),
                 )
                 .into_any_element(),
             LoadState::Error(error) => {
@@ -122,7 +136,7 @@ pub(crate) fn render_inbox(
                 .into_any_element(),
             LoadState::Ready(items) => {
                 let items = items.clone();
-                let selected = view.selected_id.clone();
+                let selected_id = view.selected_id.clone();
                 div()
                     .flex_1()
                     .min_h_0()
@@ -131,40 +145,74 @@ pub(crate) fn render_inbox(
                         uniform_list("inbox-list", items.len(), move |range, _, cx| {
                             range
                                 .map(|ix| {
-                                    let item = &items[ix];
-                                    let id = item.id.clone();
-                                    let selected = selected.as_ref() == Some(&item.id);
-                                    let owner = entity.clone();
-                                    ListItem::new(SharedString::from(item.id.as_str()))
+                                    let thread = &items[ix];
+                                    let notification_id = thread.id.clone();
+                                    let selected =
+                                        selected_id.as_ref() == Some(&thread.pull_request_id);
+                                    let owner_for_done = entity.clone();
+                                    let done_id = notification_id.clone();
+                                    let owner_for_open = entity.clone();
+                                    ListItem::new(SharedString::from(thread.id.as_str()))
                                         .selected(selected)
                                         .px_3()
                                         .py(px(4.))
                                         .child(
-                                            v_flex()
+                                            gpui_kit::component::h_flex()
                                                 .w_full()
-                                                .gap_1()
+                                                .gap_2()
+                                                .items_start()
                                                 .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .font_medium()
-                                                        .truncate()
-                                                        .child(item.title.clone()),
+                                                    v_flex()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .text_sm()
+                                                                .font_medium()
+                                                                .truncate()
+                                                                .child(thread.title.clone()),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .text_color(
+                                                                    cx.theme().muted_foreground,
+                                                                )
+                                                                .truncate()
+                                                                .child(format!(
+                                                                    "{} · {}",
+                                                                    thread.repo_label,
+                                                                    thread.reason.label()
+                                                                )),
+                                                        ),
                                                 )
                                                 .child(
-                                                    div()
-                                                        .text_xs()
-                                                        .text_color(cx.theme().muted_foreground)
-                                                        .truncate()
-                                                        .child(format!(
-                                                            "{} · {}",
-                                                            item.repo_label, item.author_login
-                                                        )),
+                                                    Button::new(SharedString::from(format!(
+                                                        "inbox-done-{}",
+                                                        thread.id.as_str()
+                                                    )))
+                                                    .ghost()
+                                                    .xsmall()
+                                                    .label("Done")
+                                                    .on_click(move |_, _, cx| {
+                                                        let id = done_id.clone();
+                                                        let _ = owner_for_done.update(
+                                                            cx,
+                                                            |this, cx| {
+                                                                this.dispatch(
+                                                                    Intent::NotificationDone(id),
+                                                                    cx,
+                                                                );
+                                                            },
+                                                        );
+                                                    }),
                                                 ),
                                         )
                                         .on_click(move |_, _, cx| {
-                                            let id = id.clone();
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.dispatch(Intent::SelectPullRequest(id), cx);
+                                            let id = notification_id.clone();
+                                            let _ = owner_for_open.update(cx, |this, cx| {
+                                                this.dispatch(Intent::SelectNotification(id), cx);
                                             });
                                         })
                                         .into_any_element()

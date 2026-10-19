@@ -1,9 +1,12 @@
 mod app;
 mod auth;
+mod metadata_write;
 mod overview_body;
 mod patch_index;
 mod paths;
+mod pull_requests_pane;
 mod review_session;
+mod review_writeback;
 mod sync;
 mod theme;
 mod ui;
@@ -99,5 +102,5 @@ fn main() {
         });
 }
 
-/// Inbox auto-refresh interval while the app is foregrounded.
-pub const INBOX_REFRESH: Duration = Duration::from_secs(5 * 60);
+/// Pull requests list auto-refresh interval while the app is foregrounded.
+pub const PULL_REQUESTS_REFRESH: Duration = Duration::from_secs(5 * 60);

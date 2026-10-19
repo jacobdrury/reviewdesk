@@ -1,6 +1,6 @@
 # UI performance
 
-How to keep Review Desk snappy when building Overview, Diff, Inbox, or any scrollable pane.
+How to keep Review Desk snappy when building Overview, Diff, Pull requests, or any scrollable pane.
 
 Read this before choosing a scroll or disclosure layout. Coding-standards judgement for review lives in root `CODING_STANDARDS.md` (Snappy UI).
 
@@ -14,9 +14,9 @@ Unbounded content must not lay out or paint the whole document on every scroll f
 
 | Principle | What it means in Review Desk | Where to look in [zed-industries/zed](https://github.com/zed-industries/zed) |
 | --- | --- | --- |
-| **Virtualize first** | Inbox and Files file list use `uniform_list`; Overview uses `TextView::scrollable`; Diff uses gpui-kit’s variable-height `list`. Do not lay out unbounded content in fit mode inside a scrolling div. | [`crates/gpui/src/elements/uniform_list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/uniform_list.rs), [`crates/gpui/src/elements/list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/list.rs) (`ListState`, scroll-to) |
+| **Virtualize first** | Pull requests and Files file list use `uniform_list`; Overview uses `TextView::scrollable`; Diff uses gpui-kit’s variable-height `list`. Do not lay out unbounded content in fit mode inside a scrolling div. | [`crates/gpui/src/elements/uniform_list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/uniform_list.rs), [`crates/gpui/src/elements/list.rs`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/list.rs) (`ListState`, scroll-to) |
 | **Flatten collapsed rows** | Closed `<details>` emit toggle fences only; open bodies inline as normal markdown blocks in the composed Overview document. File tree UIs omit children of collapsed folders from the visible row model. | [`crates/project_panel/src/project_panel.rs`](https://github.com/zed-industries/zed/blob/main/crates/project_panel/src/project_panel.rs) (`visible_entries`, expanded-dir filtering) |
-| **One vertical scroll owner** | Overview is one composed markdown document with one vertical scrollbar (title, meta, toggles, and body scroll together). Inbox is one list scroller under its header. | [`crates/agent_ui/src/conversation_view.rs`](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view.rs) (single `list` + `ListState` for the thread) |
+| **One vertical scroll owner** | Overview is one composed markdown document with one vertical scrollbar (title, meta, toggles, and body scroll together). Pull requests is one list scroller under its header. | [`crates/agent_ui/src/conversation_view.rs`](https://github.com/zed-industries/zed/blob/main/crates/agent_ui/src/conversation_view.rs) (single `list` + `ListState` for the thread) |
 | **Sticky as list decoration** | Sticky path/hunk headers must not add a second vertical scroller; they ride on the existing virtualized list as decorations. | [`crates/ui/src/components/sticky_items.rs`](https://github.com/zed-industries/zed/blob/main/crates/ui/src/components/sticky_items.rs) (`UniformListDecoration`, sticky on the list surface) |
 | **Horizontal-only nested scroll** | Wide code, tables, or diff hunks may use horizontal overflow inside a row; the pane’s vertical wheel still drives the pane’s vertical owner. | GPUI [`overflow_x_scroll`](https://github.com/zed-industries/zed/blob/main/crates/gpui/src/elements/div.rs) on inner content; avoid pairing it with a second vertical scroller for the same pane |
 
@@ -26,22 +26,26 @@ Unbounded content must not lay out or paint the whole document on every scroll f
 
 Title, meta, disclosure toggles, and body are composed into **one** `TextView::scrollable` document. Do not pin meta above a nested scrollable body.
 
-### Files tab (two panes, two vertical scrollbars)
+### Changes tab (two panes, two vertical scrollbars; multibuffer Diff)
 
-The Files tab is a **horizontal split**, not one nested scroll region:
+The Changes tab (still rendered by `render_files`) is a **horizontal split**, not one nested scroll region:
 
-1. **File list pane** — virtualized path list under the “FILES” header, with its own vertical scrollbar.
-2. **Diff pane** — gpui-kit Diff for the selected file, with its own vertical scrollbar.
+1. **File list pane** — virtualized path list under the “FILES” / “ALL FILES” chrome, with its own vertical scrollbar.
+2. **Diff pane** — gpui-kit `Diff` / `DiffState` with its own vertical scrollbar.
+
+**Default:** the Diff pane is a **multibuffer** — `DiffState::set_files` with every materialized Patch file in order. gpui-kit Diff already virtualizes rows across files (one `list` / `ListState`, file headers + hunks + code rows). Plain click highlights a path and calls `scroll_to_file`; Cmd/Ctrl+click focuses a single file; “ALL FILES” / the chrome clears focus back to the multibuffer.
+
+**Materialization tradeoff (recorded):** Patch bytes stay lazy via `PatchIndex` spans; opening Changes materializes `DiffFile` structs for all paths once into the session cache so `DiffState` can own one virtualized multi-file document. Do **not** mount a separate Diff widget per file. Offscreen rows stay recycled by Diff’s list; do not lay out every file’s full document in fit mode.
 
 Two vertical scrollbars in one tab is intentional: each pane owns its vertical scroll. Do not merge the list and Diff into a single scroller without engineer approval on the ticket or PR.
 
-### Inbox
+### Pull requests
 
-Same shape as other single-pane lists: pinned “INBOX” header, then one `uniform_list` scroller below (bounded height under the header).
+Same shape as other single-pane lists: pinned “PULL REQUESTS” header, then one `uniform_list` scroller below (bounded height under the header).
 
-## Local persistence and Inbox
+## Local persistence and the Pull requests list
 
-[LocalStore](../adr/0001-localstore-turso-local-first.md) makes Inbox and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Inbox row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Inbox reads from the store and refreshes when data changes.
+[LocalStore](../adr/0001-localstore-turso-local-first.md) makes the Pull requests list and PR data available without waiting on the network, but the list UI must still **virtualize**: use `uniform_list` (or equivalent) so only visible rows lay out each frame. Loading from disk is not a reason to mount or measure every Pull requests row on every scroll tick. Background Provider sync updates LocalStore; the virtualized Pull requests list reads from the store and refreshes when data changes.
 
 ## gpui-kit patterns
 
@@ -64,11 +68,11 @@ Avoid:
 - Nested **vertical** scroll regions (outer `overflow_y_scroll` + inner vertical virtualized scroll) unless the ticket records engineer approval
 - Mounting heavy disclosure bodies while they are closed
 
-The Files tab is the documented exception: two panes, two vertical scrollbars (see above).
+The Changes tab is the documented exception: two panes, two vertical scrollbars; Diff is multibuffer-by-default via gpui-kit’s multi-file virtualized list (see above).
 
 ### Bounded flex under pinned chrome
 
-Pinned chrome (title bar, Inbox header, Review tab bar, Files header) is fine when the virtualized child sits in a **`flex_1().min_h_0()`** (or equivalent) chain so the scroller gets a max height. Pinned chrome that is not itself a scroller is allowed; pinned chrome that shrinks the rest into a **nested vertical scroller** for the main content is not.
+Pinned chrome (title bar, Pull requests header, Review tab bar, Files header) is fine when the virtualized child sits in a **`flex_1().min_h_0()`** (or equivalent) chain so the scroller gets a max height. Pinned chrome that is not itself a scroller is allowed; pinned chrome that shrinks the rest into a **nested vertical scroller** for the main content is not.
 
 ### Disclosure (`<details>` / `<summary>`)
 
@@ -90,14 +94,15 @@ Closed-by-default is both UX (matches GitHub) and perf (Renovate release notes a
 When a ticket touches scroll, markdown, lists, or disclosure, name a concrete heavy case in acceptance criteria. Examples:
 
 - **Overview:** one scrollbar stays smooth with a Renovate / Dependabot release-notes body (for example `home-assistant/core` image updates), including when large `<details>` sections are opened.
-- **Files / Diff:** file list and Diff stay responsive on a **multi-file Patch** (many paths; large hunks on at least one file).
+- **Changes / Diff:** file list and multibuffer Diff stay responsive on a **multi-file Patch** (many paths; large hunks on at least one file). Scrolling the Diff must not lay out every file’s rows each frame.
 
 If the design needs nested vertical scroll or pinned chrome that shrinks content into a nested scroller, the ticket must say the engineer approved that tradeoff.
 
 ## Checklist before you call a UI change done
 
 - [ ] Unbounded content uses a virtualized surface (`TextView::scrollable`, `list`, or `uniform_list`), not fit layout in a scrolling div
-- [ ] Single-pane surfaces (Overview, Inbox, each Files sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Files tab is two panes (list + Diff), each with its own vertical scrollbar
+- [ ] Single-pane surfaces (Overview, Pull requests, each Changes sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Changes tab is two panes (list + multibuffer Diff), each with its own vertical scrollbar
+- [ ] Changes Diff uses one gpui-kit `DiffState` for all files (or the focused file), not N mounted Diff documents
 - [ ] Virtualized children under pinned chrome sit in a bounded `flex_1().min_h_0()` (or equivalent) flex chain so virtualization engages
 - [ ] Sticky headers (if any) are list decorations on the existing vertical owner, not a second vertical scroller
 - [ ] Nested scroll is horizontal-only inside rows; the pane’s vertical wheel drives the pane’s vertical owner

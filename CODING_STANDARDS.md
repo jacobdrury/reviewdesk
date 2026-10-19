@@ -12,14 +12,14 @@ The product should feel immediate. Unbounded content must not lay out or paint t
 
 ### One scroll surface
 
-For Overview, Inbox, and each vertical region inside a pane:
+For Overview, Pull requests, and each vertical region inside a pane:
 
 - Unbounded content scrolls on one virtualized surface (`TextView::scrollable`, `list`, or `uniform_list`).
 - Overview is one composed document with one vertical scrollbar (title, meta, and body together).
 - Fail a fit-mode `TextView` (or other full layout) inside `overflow_y_scroll` when the content can grow without a bound.
 - Fail a pinned header or toggle that shrinks the pane into a nested **vertical** scroller for the rest of the content, unless the PR or ticket records engineer approval.
 - Fail nested **vertical** scroll regions (outer div scroll + inner vertical virtualized scroll) without that recorded approval.
-- Virtualized children under pinned chrome (Inbox header, Review tab bar, Files header) must use a bounded `flex_1().min_h_0()` (or equivalent) chain so the scroller gets a max height.
+- Virtualized children under pinned chrome (Pull requests header, Review tab bar, Files header) must use a bounded `flex_1().min_h_0()` (or equivalent) chain so the scroller gets a max height.
 
 ### Files tab (two panes)
 

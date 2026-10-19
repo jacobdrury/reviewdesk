@@ -1,8 +1,9 @@
 use chrono::{TimeZone, Utc};
 use reviewdesk_core::PullRequestId;
 use reviewdesk_core::{
-    DraftFilter, InboxFilter, InboxItem, InboxLabel, InboxOptions, InboxQuery, InboxSort,
-    InboxSortField, LocalStore, ReviewState, SortDirection,
+    DraftFilter, LocalStore, PullRequestLabel, PullRequestListFilter, PullRequestListItem,
+    PullRequestListOptions, PullRequestListQuery, PullRequestListSort, PullRequestListSortField,
+    ReviewState, SortDirection,
 };
 use reviewdesk_localstore::TursoLocalStore;
 use tempfile::tempdir;
@@ -11,6 +12,7 @@ fn pr(id: &str) -> PullRequestId {
     PullRequestId::new(id).expect("id")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn item(
     id: &str,
     title: &str,
@@ -19,9 +21,9 @@ fn item(
     author_login: &str,
     is_draft: bool,
     review_state: ReviewState,
-    labels: Vec<InboxLabel>,
-) -> InboxItem {
-    InboxItem {
+    labels: Vec<PullRequestLabel>,
+) -> PullRequestListItem {
+    PullRequestListItem {
         id: pr(id),
         title: title.to_string(),
         web_url: format!("https://example.com/{id}"),
@@ -43,7 +45,7 @@ async fn open_store() -> (tempfile::TempDir, TursoLocalStore) {
 }
 
 #[tokio::test]
-async fn sync_inbox_upserts_and_query_returns_default_order() {
+async fn sync_pull_requests_upserts_and_query_returns_default_order() {
     let (_dir, store) = open_store().await;
 
     let older = item(
@@ -54,7 +56,7 @@ async fn sync_inbox_upserts_and_query_returns_default_order() {
         "alice",
         false,
         ReviewState::Pending,
-        vec![InboxLabel {
+        vec![PullRequestLabel {
             name: "bug".to_string(),
             color: "ff0000".to_string(),
         }],
@@ -71,12 +73,12 @@ async fn sync_inbox_upserts_and_query_returns_default_order() {
     );
 
     store
-        .sync_inbox(&[older.clone(), newer.clone()])
+        .sync_pull_requests(&[older.clone(), newer.clone()])
         .await
         .expect("sync");
 
     let listed = store
-        .query_inbox(&InboxQuery::default())
+        .query_pull_requests(&PullRequestListQuery::default())
         .await
         .expect("query");
 
@@ -84,7 +86,7 @@ async fn sync_inbox_upserts_and_query_returns_default_order() {
 }
 
 #[tokio::test]
-async fn sync_inbox_updates_existing_row() {
+async fn sync_pull_requests_updates_existing_row() {
     let (_dir, store) = open_store().await;
 
     let original = item(
@@ -97,7 +99,7 @@ async fn sync_inbox_updates_existing_row() {
         ReviewState::Pending,
         vec![],
     );
-    store.sync_inbox(&[original]).await.expect("sync");
+    store.sync_pull_requests(&[original]).await.expect("sync");
 
     let updated = item(
         "acme/widgets#1",
@@ -107,15 +109,18 @@ async fn sync_inbox_updates_existing_row() {
         "alice",
         false,
         ReviewState::ChangesRequested,
-        vec![InboxLabel {
+        vec![PullRequestLabel {
             name: "enhancement".to_string(),
             color: "00ff00".to_string(),
         }],
     );
-    store.sync_inbox(&[updated.clone()]).await.expect("resync");
+    store
+        .sync_pull_requests(std::slice::from_ref(&updated))
+        .await
+        .expect("resync");
 
     let listed = store
-        .query_inbox(&InboxQuery::default())
+        .query_pull_requests(&PullRequestListQuery::default())
         .await
         .expect("query");
 
@@ -123,7 +128,7 @@ async fn sync_inbox_updates_existing_row() {
 }
 
 #[tokio::test]
-async fn sync_inbox_reconcile_removes_stale_rows() {
+async fn sync_pull_requests_reconcile_removes_stale_rows() {
     let (_dir, store) = open_store().await;
 
     let keep = item(
@@ -146,12 +151,18 @@ async fn sync_inbox_reconcile_removes_stale_rows() {
         ReviewState::Pending,
         vec![],
     );
-    store.sync_inbox(&[keep.clone(), drop]).await.expect("sync");
+    store
+        .sync_pull_requests(&[keep.clone(), drop])
+        .await
+        .expect("sync");
 
-    store.sync_inbox(&[keep.clone()]).await.expect("reconcile");
+    store
+        .sync_pull_requests(std::slice::from_ref(&keep))
+        .await
+        .expect("reconcile");
 
     let listed = store
-        .query_inbox(&InboxQuery::default())
+        .query_pull_requests(&PullRequestListQuery::default())
         .await
         .expect("query");
 
@@ -159,7 +170,7 @@ async fn sync_inbox_reconcile_removes_stale_rows() {
 }
 
 #[tokio::test]
-async fn query_inbox_filters_drafts_repo_author_state_and_label() {
+async fn query_pull_requests_filters_drafts_repo_author_state_and_label() {
     let (_dir, store) = open_store().await;
 
     let ready = item(
@@ -170,7 +181,7 @@ async fn query_inbox_filters_drafts_repo_author_state_and_label() {
         "alice",
         false,
         ReviewState::Approved,
-        vec![InboxLabel {
+        vec![PullRequestLabel {
             name: "bug".to_string(),
             color: "a".to_string(),
         }],
@@ -193,20 +204,20 @@ async fn query_inbox_filters_drafts_repo_author_state_and_label() {
         "carol",
         false,
         ReviewState::Commented,
-        vec![InboxLabel {
+        vec![PullRequestLabel {
             name: "bug".to_string(),
             color: "b".to_string(),
         }],
     );
 
     store
-        .sync_inbox(&[ready.clone(), draft, other_repo.clone()])
+        .sync_pull_requests(&[ready.clone(), draft, other_repo.clone()])
         .await
         .expect("sync");
 
-    let drafts_only = InboxQuery {
-        filter: InboxFilter {
-            options: InboxOptions {
+    let drafts_only = PullRequestListQuery {
+        filter: PullRequestListFilter {
+            options: PullRequestListOptions {
                 include_authored: false,
                 drafts: DraftFilter::DraftsOnly,
             },
@@ -215,75 +226,78 @@ async fn query_inbox_filters_drafts_repo_author_state_and_label() {
             review_state: None,
             has_label: None,
         },
-        sort: InboxSort::default(),
+        sort: PullRequestListSort::default(),
     };
-    let draft_rows = store.query_inbox(&drafts_only).await.expect("drafts");
+    let draft_rows = store
+        .query_pull_requests(&drafts_only)
+        .await
+        .expect("drafts");
     assert_eq!(draft_rows.len(), 1);
     assert_eq!(draft_rows[0].title, "Draft");
 
-    let by_repo = InboxQuery {
-        filter: InboxFilter {
-            options: InboxOptions::default(),
+    let by_repo = PullRequestListQuery {
+        filter: PullRequestListFilter {
+            options: PullRequestListOptions::default(),
             repo_label: Some("acme/b".to_string()),
             author_login: None,
             review_state: None,
             has_label: None,
         },
-        sort: InboxSort::default(),
+        sort: PullRequestListSort::default(),
     };
     assert_eq!(
-        store.query_inbox(&by_repo).await.expect("repo"),
+        store.query_pull_requests(&by_repo).await.expect("repo"),
         vec![other_repo.clone()]
     );
 
-    let by_author = InboxQuery {
-        filter: InboxFilter {
-            options: InboxOptions::default(),
+    let by_author = PullRequestListQuery {
+        filter: PullRequestListFilter {
+            options: PullRequestListOptions::default(),
             repo_label: None,
             author_login: Some("alice".to_string()),
             review_state: None,
             has_label: None,
         },
-        sort: InboxSort::default(),
+        sort: PullRequestListSort::default(),
     };
     assert_eq!(
-        store.query_inbox(&by_author).await.expect("author"),
+        store.query_pull_requests(&by_author).await.expect("author"),
         vec![ready.clone()]
     );
 
-    let by_state = InboxQuery {
-        filter: InboxFilter {
-            options: InboxOptions::default(),
+    let by_state = PullRequestListQuery {
+        filter: PullRequestListFilter {
+            options: PullRequestListOptions::default(),
             repo_label: None,
             author_login: None,
             review_state: Some(ReviewState::Commented),
             has_label: None,
         },
-        sort: InboxSort::default(),
+        sort: PullRequestListSort::default(),
     };
     assert_eq!(
-        store.query_inbox(&by_state).await.expect("state"),
+        store.query_pull_requests(&by_state).await.expect("state"),
         vec![other_repo.clone()]
     );
 
-    let by_label = InboxQuery {
-        filter: InboxFilter {
-            options: InboxOptions::default(),
+    let by_label = PullRequestListQuery {
+        filter: PullRequestListFilter {
+            options: PullRequestListOptions::default(),
             repo_label: None,
             author_login: None,
             review_state: None,
             has_label: Some("bug".to_string()),
         },
-        sort: InboxSort::default(),
+        sort: PullRequestListSort::default(),
     };
-    let labeled = store.query_inbox(&by_label).await.expect("label");
+    let labeled = store.query_pull_requests(&by_label).await.expect("label");
     assert_eq!(labeled.len(), 2);
     assert_eq!(labeled[0].id, other_repo.id);
     assert_eq!(labeled[1].id, ready.id);
 }
 
 #[tokio::test]
-async fn query_inbox_sorts_updated_at_ascending() {
+async fn query_pull_requests_sorts_updated_at_ascending() {
     let (_dir, store) = open_store().await;
 
     let a = item(
@@ -307,16 +321,19 @@ async fn query_inbox_sorts_updated_at_ascending() {
         vec![],
     );
     store
-        .sync_inbox(&[b.clone(), a.clone()])
+        .sync_pull_requests(&[b.clone(), a.clone()])
         .await
         .expect("sync");
 
-    let query = InboxQuery {
-        filter: InboxFilter::default(),
-        sort: InboxSort {
-            field: InboxSortField::UpdatedAt,
+    let query = PullRequestListQuery {
+        filter: PullRequestListFilter::default(),
+        sort: PullRequestListSort {
+            field: PullRequestListSortField::UpdatedAt,
             direction: SortDirection::Asc,
         },
     };
-    assert_eq!(store.query_inbox(&query).await.expect("asc"), vec![a, b]);
+    assert_eq!(
+        store.query_pull_requests(&query).await.expect("asc"),
+        vec![a, b]
+    );
 }

@@ -66,6 +66,108 @@ CREATE INDEX idx_inbox_items_is_draft ON reviewdesk_inbox_items(is_draft);
 CREATE INDEX idx_inbox_item_labels_name ON reviewdesk_inbox_item_labels(name);
 ",
     ),
+    (
+        4,
+        "
+drop table if exists reviewdesk_inbox_item_labels;
+drop table if exists reviewdesk_inbox_items;
+create table reviewdesk_pull_request_list_items (
+    id text not null primary key,
+    title text not null,
+    web_url text not null,
+    updated_at text not null,
+    author_login text not null,
+    author_avatar_url text,
+    repo_label text not null,
+    review_state text not null,
+    is_draft integer not null default 0 check (is_draft in (0, 1))
+);
+create table reviewdesk_pull_request_list_item_labels (
+    pull_request_list_item_id text not null references reviewdesk_pull_request_list_items(id) on delete cascade,
+    name text not null,
+    color text not null,
+    primary key (pull_request_list_item_id, name)
+);
+create index idx_pull_request_list_items_updated_at on reviewdesk_pull_request_list_items(updated_at);
+create index idx_pull_request_list_items_repo_label on reviewdesk_pull_request_list_items(repo_label);
+create index idx_pull_request_list_items_author_login on reviewdesk_pull_request_list_items(author_login);
+create index idx_pull_request_list_items_review_state on reviewdesk_pull_request_list_items(review_state);
+create index idx_pull_request_list_items_is_draft on reviewdesk_pull_request_list_items(is_draft);
+create index idx_pull_request_list_item_labels_name on reviewdesk_pull_request_list_item_labels(name);
+",
+    ),
+    (
+        5,
+        "
+create table reviewdesk_views (
+    id text not null primary key,
+    name text not null,
+    kind text not null,
+    position integer not null,
+    filter_json text not null,
+    group_by text not null,
+    sort_json text not null
+);
+create index idx_views_position on reviewdesk_views(position);
+create table reviewdesk_preferences (
+    key text not null primary key,
+    value text not null
+);
+",
+    ),
+    (
+        6,
+        "
+create table reviewdesk_notification_threads (
+    id text not null primary key,
+    pull_request_id text not null,
+    title text not null,
+    repo_label text not null,
+    reason text not null,
+    unread integer not null default 1 check (unread in (0, 1)),
+    updated_at text not null
+);
+create index idx_notification_threads_updated_at on reviewdesk_notification_threads(updated_at);
+create index idx_notification_threads_unread on reviewdesk_notification_threads(unread);
+",
+    ),
+    (
+        7,
+        "
+create table if not exists pull_request_threads (
+    pull_request_id text not null primary key,
+    threads_json text not null
+);
+",
+    ),
+    (
+        8,
+        "
+alter table pull_request_details add column assignees_json text not null default '[]';
+alter table pull_request_details add column head_ref text not null default '';
+alter table pull_request_details add column base_ref text not null default '';
+alter table pull_request_details add column review_decision text not null default 'unknown';
+alter table pull_request_details add column mergeable text not null default 'unknown';
+alter table pull_request_details add column codeowners_rules_json text not null default '[]';
+alter table pull_request_details add column write_capabilities_json text not null default '{}';
+",
+    ),
+    (
+        9,
+        "
+create table pull_request_pipelines (
+    pull_request_id text not null primary key,
+    snapshot_json text not null
+);
+",
+    ),
+    (
+        10,
+        "
+alter table pull_request_details add column state text not null default 'open';
+alter table pull_request_details add column auto_merge_enabled integer not null default 0 check (auto_merge_enabled in (0, 1));
+",
+    ),
 ];
 
 pub async fn prefer_wal(conn: &Connection) -> Result<(), LocalStoreError> {
