@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     scroll::Scrollbar,
@@ -206,19 +206,17 @@ fn render_linear_filter_display(
                 ),
         );
 
-    if !is_all_prs {
-        if let Some(name) = view_name.as_deref() {
-            row = row.child(linear_filter_chip(
-                "view",
-                "View",
-                "is",
-                name,
-                None,
-                "clear",
-                entity.clone(),
-                cx,
-            ));
-        }
+    if let Some(name) = view_name.as_deref().filter(|_| !is_all_prs) {
+        row = row.child(linear_filter_chip(
+            "view",
+            "View",
+            "is",
+            name,
+            None,
+            "clear",
+            entity.clone(),
+            cx,
+        ));
     }
 
     if let Some(repo) = pane.repo_scope.as_ref() {
@@ -451,6 +449,7 @@ fn render_filter_dimension_menu(
 }
 
 /// Linear composed filter chip: `Status` `is any of` [icon] `value` ×
+#[allow(clippy::too_many_arguments)]
 fn linear_filter_chip(
     id: &str,
     field: &str,

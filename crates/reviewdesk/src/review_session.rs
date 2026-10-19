@@ -102,6 +102,7 @@ pub enum Intent {
     /// Reset to All PRs + clear repo scope (Linear “Clear filters”).
     ClearListFilters,
     SaveActiveView,
+    #[allow(dead_code)] // View CRUD chrome deferred; intents kept for session API.
     SaveViewAsNew {
         name: String,
     },
@@ -109,14 +110,18 @@ pub enum Intent {
     RenameActiveView {
         name: String,
     },
+    #[allow(dead_code)]
     RequestRenameActiveView,
+    #[allow(dead_code)]
     DeleteActiveView,
     /// Drag-reorder / programmatic order; UI today uses left/right moves.
     #[allow(dead_code)]
     ReorderViews {
         order: Vec<ViewId>,
     },
+    #[allow(dead_code)]
     MoveActiveViewLeft,
+    #[allow(dead_code)]
     MoveActiveViewRight,
     ToggleWorkingFilterAuthor,
     ToggleWorkingFilterReviewer,
