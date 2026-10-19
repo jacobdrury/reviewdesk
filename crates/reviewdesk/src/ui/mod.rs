@@ -12,7 +12,7 @@ mod pull_requests;
 mod review_pane;
 mod sidebar;
 
-pub(crate) use conversation::render_conversation;
+pub(crate) use conversation::{render_conversation, render_diff_thread_annotation};
 pub(crate) use files::render_files;
 pub(crate) use inbox::render_inbox;
 pub(crate) use metadata::{render_metadata_panel, render_metadata_strip};
