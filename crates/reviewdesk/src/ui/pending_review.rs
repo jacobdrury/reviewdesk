@@ -44,9 +44,10 @@ pub(crate) fn render_pending_review_chip(
         )
         .child(
             Button::new("pending-submit-chip")
-                .outline()
-                .xsmall()
-                .label("Submit comment")
+                .small()
+                .label("Submit…")
+                .bg(cx.theme().foreground)
+                .text_color(cx.theme().background)
                 .on_click({
                     let owner = entity.clone();
                     move |_, _, cx| {

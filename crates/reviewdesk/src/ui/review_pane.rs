@@ -84,14 +84,7 @@ pub(crate) fn render_review_pane(
         .min_w_0()
         .h_full()
         .child(render_review_chrome(tab_bar, toggle_icon, cx))
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .w_full()
-                .child(content),
-        );
+        .child(div().flex_1().min_h_0().min_w_0().w_full().child(content));
 
     let mut pane = h_flex().size_full().min_h_0().child(main);
     if dock == MetadataDock::Open {

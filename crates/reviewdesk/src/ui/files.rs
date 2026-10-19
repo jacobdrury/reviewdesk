@@ -24,6 +24,7 @@ use crate::review_session::{Intent, LoadState, SessionView, ThreadView};
 use crate::ui::file_icons::{dir_icons, file_icon};
 use crate::ui::file_tree::{TreeRowKind, visible_file_tree_rows};
 use crate::ui::pending_review::render_pending_review_bar;
+use crate::ui::render_diff_thread_annotation;
 
 const TREE_ROW_BASE_PL: f32 = 8.;
 const TREE_NEST_STEP: f32 = 12.;
@@ -395,38 +396,14 @@ pub(crate) fn render_files(
                                                 else {
                                                     return div().into_any_element();
                                                 };
-                                                v_flex()
-                                                    .w_full()
-                                                    .gap_1()
-                                                    .p_2()
-                                                    .rounded_md()
-                                                    .bg(cx.theme().secondary)
-                                                    .child(
-                                                        div()
-                                                            .text_xs()
-                                                            .text_color(
-                                                                cx.theme().muted_foreground,
-                                                            )
-                                                            .child(card.1.header.clone()),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .child(card.1.body.clone()),
-                                                    )
-                                                    .children(card.1.suggestion.as_ref().map(
-                                                        |suggestion| {
-                                                            div()
-                                                                .text_xs()
-                                                                .text_color(
-                                                                    cx.theme().muted_foreground,
-                                                                )
-                                                                .child(format!(
-                                                                    "Suggestion: {suggestion}"
-                                                                ))
-                                                        },
-                                                    ))
-                                                    .into_any_element()
+                                                render_diff_thread_annotation(
+                                                    card.1.author.as_ref(),
+                                                    card.1.body.as_ref(),
+                                                    card.1.is_pending,
+                                                    card.1.suggestion.as_deref(),
+                                                    cx,
+                                                )
+                                                .into_any_element()
                                             }
                                         })
                                         .on_add_annotation(move |range, _, _cx| {
@@ -495,26 +472,20 @@ fn diff_annotation_for_thread(thread: &ThreadView) -> Option<DiffAnnotation> {
 }
 
 struct ThreadCardData {
-    header: SharedString,
+    author: SharedString,
     body: SharedString,
+    is_pending: bool,
     suggestion: Option<SharedString>,
 }
 
 fn thread_card_entry(thread: &ThreadView) -> Option<(ElementId, ThreadCardData)> {
     let comment = thread.comments.first()?;
-    let mut header = if comment.is_pending {
-        "Draft · Review comment".to_string()
-    } else {
-        "Review comment".to_string()
-    };
-    if comment.suggestion.is_some() {
-        header.push_str(" · Suggestion");
-    }
     Some((
         ElementId::from(SharedString::from(thread.id.clone())),
         ThreadCardData {
-            header: SharedString::from(header),
+            author: comment.author_login.clone(),
             body: comment.body.clone(),
+            is_pending: comment.is_pending,
             suggestion: comment.suggestion.clone(),
         },
     ))
