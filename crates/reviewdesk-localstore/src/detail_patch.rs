@@ -34,10 +34,15 @@ struct StoredCodeownersRule {
 
 #[derive(Serialize, Deserialize, Default)]
 struct StoredWriteCapabilities {
+    #[serde(default)]
     labels: bool,
+    #[serde(default)]
     assignees: bool,
+    #[serde(default)]
     reviewers: bool,
+    #[serde(default)]
     draft_ready: bool,
+    #[serde(default)]
     base_ref: bool,
     #[serde(default)]
     merge: bool,
@@ -229,8 +234,12 @@ fn encode_labels(labels: &[PullRequestLabel]) -> Result<String, LocalStoreError>
 }
 
 fn decode_labels(json: &str) -> Result<Vec<PullRequestLabel>, LocalStoreError> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(Vec::new());
+    }
     let stored: Vec<StoredLabel> =
-        serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
+        serde_json::from_str(trimmed).map_err(|e| LocalStoreError::other(e.to_string()))?;
     Ok(stored
         .into_iter()
         .map(|label| PullRequestLabel {
@@ -313,8 +322,12 @@ fn encode_capabilities(caps: &MetadataWriteCapabilities) -> Result<String, Local
 }
 
 fn decode_capabilities(json: &str) -> Result<MetadataWriteCapabilities, LocalStoreError> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(MetadataWriteCapabilities::default());
+    }
     let stored: StoredWriteCapabilities =
-        serde_json::from_str(json).map_err(|e| LocalStoreError::other(e.to_string()))?;
+        serde_json::from_str(trimmed).map_err(|e| LocalStoreError::other(e.to_string()))?;
     Ok(MetadataWriteCapabilities {
         labels: stored.labels,
         assignees: stored.assignees,
@@ -415,6 +428,22 @@ fn optional_text_at(row: &turso::Row, index: usize) -> Result<Option<String>, Lo
         _ => Err(LocalStoreError::other(format!(
             "unexpected value at column {index}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_capabilities_accepts_empty_object() {
+        let caps = decode_capabilities("{}").unwrap();
+        assert_eq!(caps, MetadataWriteCapabilities::default());
+    }
+
+    #[test]
+    fn decode_labels_accepts_empty_array() {
+        assert!(decode_labels("[]").unwrap().is_empty());
     }
 }
 

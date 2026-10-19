@@ -50,6 +50,7 @@ pub struct PullRequestNode {
     pub is_draft: bool,
     pub author: Option<Actor>,
     pub repository: Repository,
+    #[serde(default)]
     pub labels: LabelConnection,
     pub review_decision: Option<String>,
     pub viewer_latest_review: Option<LatestReview>,
@@ -94,8 +95,9 @@ pub struct Owner {
     pub login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct LabelConnection {
+    #[serde(default)]
     pub nodes: Vec<LabelNode>,
 }
 
@@ -411,6 +413,27 @@ mod tests {
         assert_eq!(item.labels[0].name, "ready");
         assert!(!item.is_draft);
         assert_eq!(item.review_state, ReviewState::Pending);
+    }
+
+    #[test]
+    fn pull_request_node_defaults_missing_labels() {
+        let json = r#"{
+          "number": 7,
+          "title": "No labels",
+          "url": "https://example.test/pr/7",
+          "updatedAt": "2026-01-02T00:00:00Z",
+          "isDraft": false,
+          "author": { "login": "alice", "avatarUrl": null },
+          "repository": {
+            "nameWithOwner": "acme/widgets",
+            "owner": { "login": "acme" },
+            "name": "widgets"
+          }
+        }"#;
+        let node: PullRequestNode = serde_json::from_str(json).unwrap();
+        assert!(node.labels.nodes.is_empty());
+        let item = map_pull_request_list_item(&node).unwrap();
+        assert!(item.labels.is_empty());
     }
 
     #[test]
