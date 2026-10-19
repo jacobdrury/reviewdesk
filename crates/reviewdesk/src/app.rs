@@ -94,6 +94,7 @@ pub struct ReviewDesk {
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
     last_diff_revision: u64,
+    last_scroll_request: u64,
 }
 
 impl ReviewDesk {
@@ -141,6 +142,7 @@ impl ReviewDesk {
             _window_activation: None,
             skip_next_activation_sync: false,
             last_diff_revision: 0,
+            last_scroll_request: 0,
         };
         this.sync_theme(window, cx);
         this.skip_next_activation_sync = true;
@@ -301,21 +303,39 @@ impl ReviewDesk {
 
     fn sync_diff_widget(&mut self, cx: &mut Context<Self>) {
         let view = self.session.view();
-        if view.diff_revision == self.last_diff_revision {
+        let files_changed = view.diff_revision != self.last_diff_revision;
+        let scroll_changed = view.scroll_request != self.last_scroll_request;
+        if !files_changed && !scroll_changed {
             return;
         }
-        self.last_diff_revision = view.diff_revision;
+
         let mode = view.diff_mode;
-        let files = match (&view.selected_file_error, &view.selected_diff_file) {
-            (Some(_), _) | (None, None) => Vec::new(),
-            (None, Some(file)) => vec![file.clone()],
+        let files: Vec<_> = if view.selected_file_error.is_some() {
+            Vec::new()
+        } else {
+            view.diff_files.iter().cloned().collect()
         };
-        self.diff.update(cx, |state, cx| {
-            if state.mode() != mode {
-                state.set_mode(mode, cx);
+        let scroll_to = view.scroll_to_path.clone();
+        let scroll_request = view.scroll_request;
+
+        if files_changed {
+            self.last_diff_revision = view.diff_revision;
+            self.diff.update(cx, |state, cx| {
+                if state.mode() != mode {
+                    state.set_mode(mode, cx);
+                }
+                state.set_files(files, cx);
+            });
+        }
+
+        if scroll_changed {
+            self.last_scroll_request = scroll_request;
+            if let Some(path) = scroll_to {
+                self.diff.update(cx, |state, cx| {
+                    state.scroll_to_file(path.as_str(), cx);
+                });
             }
-            state.set_files(files, cx);
-        });
+        }
     }
 
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {

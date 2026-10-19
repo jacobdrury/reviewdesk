@@ -26,12 +26,16 @@ Unbounded content must not lay out or paint the whole document on every scroll f
 
 Title, meta, disclosure toggles, and body are composed into **one** `TextView::scrollable` document. Do not pin meta above a nested scrollable body.
 
-### Files tab (two panes, two vertical scrollbars)
+### Changes tab (two panes, two vertical scrollbars; multibuffer Diff)
 
-The Files tab is a **horizontal split**, not one nested scroll region:
+The Changes tab (still rendered by `render_files`) is a **horizontal split**, not one nested scroll region:
 
-1. **File list pane** — virtualized path list under the “FILES” header, with its own vertical scrollbar.
-2. **Diff pane** — gpui-kit Diff for the selected file, with its own vertical scrollbar.
+1. **File list pane** — virtualized path list under the “FILES” / “ALL FILES” chrome, with its own vertical scrollbar.
+2. **Diff pane** — gpui-kit `Diff` / `DiffState` with its own vertical scrollbar.
+
+**Default:** the Diff pane is a **multibuffer** — `DiffState::set_files` with every materialized Patch file in order. gpui-kit Diff already virtualizes rows across files (one `list` / `ListState`, file headers + hunks + code rows). Plain click highlights a path and calls `scroll_to_file`; Cmd/Ctrl+click focuses a single file; “ALL FILES” / the chrome clears focus back to the multibuffer.
+
+**Materialization tradeoff (recorded):** Patch bytes stay lazy via `PatchIndex` spans; opening Changes materializes `DiffFile` structs for all paths once into the session cache so `DiffState` can own one virtualized multi-file document. Do **not** mount a separate Diff widget per file. Offscreen rows stay recycled by Diff’s list; do not lay out every file’s full document in fit mode.
 
 Two vertical scrollbars in one tab is intentional: each pane owns its vertical scroll. Do not merge the list and Diff into a single scroller without engineer approval on the ticket or PR.
 
@@ -64,7 +68,7 @@ Avoid:
 - Nested **vertical** scroll regions (outer `overflow_y_scroll` + inner vertical virtualized scroll) unless the ticket records engineer approval
 - Mounting heavy disclosure bodies while they are closed
 
-The Files tab is the documented exception: two panes, two vertical scrollbars (see above).
+The Changes tab is the documented exception: two panes, two vertical scrollbars; Diff is multibuffer-by-default via gpui-kit’s multi-file virtualized list (see above).
 
 ### Bounded flex under pinned chrome
 
@@ -90,14 +94,15 @@ Closed-by-default is both UX (matches GitHub) and perf (Renovate release notes a
 When a ticket touches scroll, markdown, lists, or disclosure, name a concrete heavy case in acceptance criteria. Examples:
 
 - **Overview:** one scrollbar stays smooth with a Renovate / Dependabot release-notes body (for example `home-assistant/core` image updates), including when large `<details>` sections are opened.
-- **Files / Diff:** file list and Diff stay responsive on a **multi-file Patch** (many paths; large hunks on at least one file).
+- **Changes / Diff:** file list and multibuffer Diff stay responsive on a **multi-file Patch** (many paths; large hunks on at least one file). Scrolling the Diff must not lay out every file’s rows each frame.
 
 If the design needs nested vertical scroll or pinned chrome that shrinks content into a nested scroller, the ticket must say the engineer approved that tradeoff.
 
 ## Checklist before you call a UI change done
 
 - [ ] Unbounded content uses a virtualized surface (`TextView::scrollable`, `list`, or `uniform_list`), not fit layout in a scrolling div
-- [ ] Single-pane surfaces (Overview, Pull requests, each Files sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Files tab is two panes (list + Diff), each with its own vertical scrollbar
+- [ ] Single-pane surfaces (Overview, Pull requests, each Changes sub-pane) have one vertical scrollbar unless a recorded tradeoff says otherwise; Changes tab is two panes (list + multibuffer Diff), each with its own vertical scrollbar
+- [ ] Changes Diff uses one gpui-kit `DiffState` for all files (or the focused file), not N mounted Diff documents
 - [ ] Virtualized children under pinned chrome sit in a bounded `flex_1().min_h_0()` (or equivalent) flex chain so virtualization engages
 - [ ] Sticky headers (if any) are list decorations on the existing vertical owner, not a second vertical scroller
 - [ ] Nested scroll is horizontal-only inside rows; the pane’s vertical wheel drives the pane’s vertical owner
