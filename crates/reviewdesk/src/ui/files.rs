@@ -21,7 +21,7 @@ use reviewdesk_core::DiffLineSide;
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView, ThreadView};
-use crate::ui::file_icons::{dir_icons, file_icon};
+use crate::ui::file_icons::{dir_icon_color, dir_icons, file_icon, file_icon_color};
 use crate::ui::file_tree::{TreeRowKind, visible_file_tree_rows};
 use crate::ui::pending_review::render_pending_review_bar;
 use crate::ui::render_diff_thread_annotation;
@@ -198,7 +198,7 @@ pub(crate) fn render_files(
                                             uniform_list(
                                                 "file-tree",
                                                 row_count,
-                                                move |range, _, cx| {
+                                                move |range, _, _cx| {
                                                     range
                                                         .map(|ix| {
                                                             let row = &rows[ix];
@@ -224,14 +224,12 @@ pub(crate) fn render_files(
                                                                             .min_w_0()
                                                                             .child(
                                                                                 chevron.text_color(
-                                                                                    cx.theme()
-                                                                                        .muted_foreground,
+                                                                                    dir_icon_color(),
                                                                                 ),
                                                                             )
                                                                             .child(
                                                                                 folder.text_color(
-                                                                                    cx.theme()
-                                                                                        .muted_foreground,
+                                                                                    dir_icon_color(),
                                                                                 ),
                                                                             )
                                                                             .child(
@@ -268,6 +266,8 @@ pub(crate) fn render_files(
                                                                             == Some(&path);
                                                                     let icon =
                                                                         file_icon(&row.name);
+                                                                    let icon_color =
+                                                                        file_icon_color(&row.name);
                                                                     ListItem::new(path.clone())
                                                                         .selected(selected)
                                                                         .px_1()
@@ -287,8 +287,7 @@ pub(crate) fn render_files(
                                                                                 )
                                                                                 .child(
                                                                                     icon.text_color(
-                                                                                        cx.theme()
-                                                                                            .muted_foreground,
+                                                                                        icon_color,
                                                                                     ),
                                                                                 )
                                                                                 .child(
