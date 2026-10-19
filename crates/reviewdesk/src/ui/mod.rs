@@ -2,6 +2,8 @@
 
 mod check_rollup;
 mod conversation;
+mod file_icons;
+mod file_tree;
 mod files;
 mod inbox;
 mod metadata;
@@ -13,9 +15,9 @@ mod review_pane;
 mod sidebar;
 
 pub(crate) use conversation::{render_conversation, render_diff_thread_annotation};
-pub(crate) use files::render_files;
+pub(crate) use files::{ChangesListChrome, render_files};
 pub(crate) use inbox::render_inbox;
-pub(crate) use metadata::{render_metadata_panel, render_metadata_strip};
+pub(crate) use metadata::render_metadata_panel;
 pub(crate) use overview::render_overview;
 pub(crate) use pipelines_tab::PipelinesChrome;
 pub(crate) use pull_requests::{PullRequestsListChrome, render_pull_requests};

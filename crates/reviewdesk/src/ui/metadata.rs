@@ -39,31 +39,20 @@ pub(crate) fn render_metadata_panel(
                 .child("METADATA"),
         )
         .child(
-            h_flex()
-                .gap_1()
-                .child(
-                    Button::new("metadata-fold")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::Minus)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Intent::FoldMetadata, cx);
-                        })),
-                )
-                .child(
-                    Button::new("metadata-hide")
-                        .ghost()
-                        .xsmall()
-                        .icon(IconName::EyeOff)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Intent::HideMetadata, cx);
-                        })),
-                ),
+            Button::new("metadata-hide")
+                .ghost()
+                .xsmall()
+                .icon(IconName::PanelRightClose)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.dispatch(Intent::HideMetadata, cx);
+                })),
         );
 
     v_flex()
         .w(px(320.))
+        .h_full()
         .min_h_0()
+        .flex_shrink_0()
         .border_l_1()
         .border_color(cx.theme().border)
         .child(header)
@@ -577,61 +566,3 @@ fn provider_link(
         .into_any_element()
 }
 
-/// Folded footer strip: keeps status + merge visible after a fold.
-pub(crate) fn render_metadata_strip(
-    view: &SessionView,
-    cx: &mut Context<ReviewDesk>,
-) -> impl IntoElement {
-    let (status, review_gate, mergeable) = match &view.detail {
-        LoadState::Ready(detail) => (
-            if detail.is_draft { "Draft" } else { "Ready" },
-            review_decision_label(detail.review_decision),
-            mergeable_label(detail.mergeable),
-        ),
-        _ => ("…", "…".into(), "…".into()),
-    };
-
-    h_flex()
-        .w_full()
-        .px_3()
-        .py(px(4.))
-        .items_center()
-        .justify_between()
-        .border_t_1()
-        .border_color(cx.theme().border)
-        .child(
-            h_flex()
-                .gap_3()
-                .items_center()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_medium()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("METADATA"),
-                )
-                .child(div().text_xs().child(status))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(review_gate),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(mergeable),
-                )
-                .child(render_compact_check_rollup(view, cx)),
-        )
-        .child(
-            Button::new("metadata-strip-expand")
-                .ghost()
-                .xsmall()
-                .icon(IconName::PanelRightOpen)
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.dispatch(Intent::ToggleMetadataDock, cx);
-                })),
-        )
-}

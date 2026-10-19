@@ -14,9 +14,9 @@ use gpui_kit::{
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, MetadataDock, ReviewTab, SessionView};
 use crate::ui::{
+    ChangesListChrome,
     pipelines_tab::{PipelinesChrome, render_pipelines_tab},
-    render_conversation, render_files, render_metadata_panel, render_metadata_strip,
-    render_overview,
+    render_conversation, render_files, render_metadata_panel, render_overview,
 };
 
 const TABS: [(ReviewTab, &str); 4] = [
@@ -29,7 +29,7 @@ const TABS: [(ReviewTab, &str); 4] = [
 pub(crate) fn render_review_pane(
     view: &SessionView,
     diff: &Entity<DiffState>,
-    files_scroll: &UniformListScrollHandle,
+    changes: ChangesListChrome<'_>,
     pipelines: PipelinesChrome<'_>,
     conversation_scroll: &UniformListScrollHandle,
     entity: WeakEntity<ReviewDesk>,
@@ -48,7 +48,7 @@ pub(crate) fn render_review_pane(
     let dock = view.metadata_dock;
     let toggle_icon = match dock {
         MetadataDock::Open => IconName::PanelRightClose,
-        MetadataDock::Folded | MetadataDock::Hidden => IconName::PanelRightOpen,
+        MetadataDock::Hidden => IconName::PanelRightOpen,
     };
 
     let mut tab_bar = TabBar::new("review-tabs")
@@ -72,26 +72,30 @@ pub(crate) fn render_review_pane(
             render_conversation(view, conversation_scroll, entity.clone(), cx).into_any_element()
         }
         ReviewTab::Changes => {
-            render_files(view, diff, files_scroll, entity.clone(), cx).into_any_element()
+            render_files(view, diff, changes, entity.clone(), cx).into_any_element()
         }
     };
 
-    let mut body = h_flex()
+    // Main column: chrome + tab body. Metadata dock is a full-height sibling
+    // so its header lines up with the tab row.
+    let main = v_flex()
         .flex_1()
         .min_h_0()
-        .w_full()
-        .child(div().flex_1().min_h_0().min_w_0().child(content));
-    if dock == MetadataDock::Open {
-        body = body.child(render_metadata_panel(view, cx));
-    }
-
-    let mut pane = v_flex()
-        .size_full()
-        .min_h_0()
+        .min_w_0()
+        .h_full()
         .child(render_review_chrome(tab_bar, toggle_icon, cx))
-        .child(body);
-    if dock == MetadataDock::Folded {
-        pane = pane.child(render_metadata_strip(view, cx));
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .w_full()
+                .child(content),
+        );
+
+    let mut pane = h_flex().size_full().min_h_0().child(main);
+    if dock == MetadataDock::Open {
+        pane = pane.child(render_metadata_panel(view, cx));
     }
 
     pane.into_any_element()

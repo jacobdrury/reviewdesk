@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::component::{
     ActiveTheme as _, Sizable as _,
@@ -19,13 +21,27 @@ use reviewdesk_core::DiffLineSide;
 
 use crate::app::ReviewDesk;
 use crate::review_session::{Intent, LoadState, SessionView, ThreadView};
+use crate::ui::file_icons::{dir_icons, file_icon};
+use crate::ui::file_tree::{TreeRowKind, visible_file_tree_rows};
 use crate::ui::pending_review::render_pending_review_bar;
 use crate::ui::render_diff_thread_annotation;
+
+const TREE_ROW_BASE_PL: f32 = 8.;
+const TREE_NEST_STEP: f32 = 12.;
+
+fn tree_row_pl(depth: u8) -> f32 {
+    TREE_ROW_BASE_PL + TREE_NEST_STEP * f32::from(depth)
+}
+
+pub(crate) struct ChangesListChrome<'a> {
+    pub scroll: &'a UniformListScrollHandle,
+    pub collapsed_dirs: &'a HashSet<String>,
+}
 
 pub(crate) fn render_files(
     view: &SessionView,
     diff: &Entity<DiffState>,
-    files_scroll: &UniformListScrollHandle,
+    chrome: ChangesListChrome<'_>,
     entity: WeakEntity<ReviewDesk>,
     cx: &mut Context<ReviewDesk>,
 ) -> impl IntoElement {
@@ -78,7 +94,12 @@ pub(crate) fn render_files(
         LoadState::Ready(()) => {}
     }
 
+    let files_scroll = chrome.scroll;
     let file_paths = view.file_paths.clone();
+    let tree_rows = Arc::new(visible_file_tree_rows(
+        file_paths.as_ref(),
+        chrome.collapsed_dirs,
+    ));
     let selected_file = view.selected_file.clone();
     let focused_file = view.focused_file.clone();
     let selected_file_error = view.selected_file_error.clone();
@@ -162,59 +183,148 @@ pub(crate) fn render_files(
                                     let selected_file = selected_file.clone();
                                     let focused_file = focused_file.clone();
                                     let file_entity = entity.clone();
+                                    let row_count = tree_rows.len();
+                                    let rows = tree_rows.clone();
                                     div()
                                         .flex_1()
                                         .min_h_0()
                                         .relative()
                                         .child(
                                             uniform_list(
-                                                "file-list",
-                                                file_paths.len(),
-                                                move |range, _, _cx| {
+                                                "file-tree",
+                                                row_count,
+                                                move |range, _, cx| {
                                                     range
                                                         .map(|ix| {
-                                                            let path = file_paths[ix].clone();
-                                                            let selected = selected_file.as_ref()
-                                                                == Some(&path)
-                                                                || focused_file.as_ref()
-                                                                    == Some(&path);
+                                                            let row = &rows[ix];
                                                             let owner = file_entity.clone();
-                                                            ListItem::new(path.clone())
-                                                                .selected(selected)
-                                                                .px_3()
-                                                                .py_2()
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .truncate()
-                                                                        .child(path.to_string()),
-                                                                )
-                                                                .on_click(move |event, _, cx| {
-                                                                    let path = path.clone();
-                                                                    let focus =
-                                                                        event.modifiers().secondary();
-                                                                    let _ = owner.update(
-                                                                        cx,
-                                                                        |this, cx| {
-                                                                            if focus {
-                                                                                this.dispatch(
-                                                                                    Intent::FocusFile(
-                                                                                        path,
+                                                            match row.kind {
+                                                                TreeRowKind::Dir => {
+                                                                    let path = row.path.clone();
+                                                                    let (chevron, folder) =
+                                                                        dir_icons(row.expanded);
+                                                                    ListItem::new(
+                                                                        SharedString::from(
+                                                                            format!("dir:{path}"),
+                                                                        ),
+                                                                    )
+                                                                    .px_1()
+                                                                    .py_1()
+                                                                    .pl(px(tree_row_pl(row.depth)))
+                                                                    .child(
+                                                                        h_flex()
+                                                                            .w_full()
+                                                                            .items_center()
+                                                                            .gap_1()
+                                                                            .min_w_0()
+                                                                            .child(
+                                                                                chevron.text_color(
+                                                                                    cx.theme()
+                                                                                        .muted_foreground,
+                                                                                ),
+                                                                            )
+                                                                            .child(
+                                                                                folder.text_color(
+                                                                                    cx.theme()
+                                                                                        .muted_foreground,
+                                                                                ),
+                                                                            )
+                                                                            .child(
+                                                                                div()
+                                                                                    .text_sm()
+                                                                                    .truncate()
+                                                                                    .child(
+                                                                                        row.name
+                                                                                            .clone(),
                                                                                     ),
-                                                                                    cx,
+                                                                            ),
+                                                                    )
+                                                                    .on_click(move |_, _, cx| {
+                                                                        let path = path.clone();
+                                                                        let _ = owner.update(
+                                                                            cx,
+                                                                            |this, cx| {
+                                                                                this.toggle_collapsed_file_dir(
+                                                                                    path, cx,
                                                                                 );
-                                                                            } else {
-                                                                                this.dispatch(
-                                                                                    Intent::SelectFile(
-                                                                                        path,
-                                                                                    ),
-                                                                                    cx,
-                                                                                );
-                                                                            }
-                                                                        },
+                                                                            },
+                                                                        );
+                                                                    })
+                                                                    .into_any_element()
+                                                                }
+                                                                TreeRowKind::File => {
+                                                                    let path = SharedString::from(
+                                                                        row.path.clone(),
                                                                     );
-                                                                })
-                                                                .into_any_element()
+                                                                    let selected = selected_file
+                                                                        .as_ref()
+                                                                        == Some(&path)
+                                                                        || focused_file.as_ref()
+                                                                            == Some(&path);
+                                                                    let icon =
+                                                                        file_icon(&row.name);
+                                                                    ListItem::new(path.clone())
+                                                                        .selected(selected)
+                                                                        .px_1()
+                                                                        .py_1()
+                                                                        .pl(px(tree_row_pl(
+                                                                            row.depth,
+                                                                        )))
+                                                                        .child(
+                                                                            h_flex()
+                                                                                .w_full()
+                                                                                .items_center()
+                                                                                .gap_1()
+                                                                                .min_w_0()
+                                                                                .child(
+                                                                                    // Chevron gutter so files align with dir labels.
+                                                                                    div().w(px(12.)),
+                                                                                )
+                                                                                .child(
+                                                                                    icon.text_color(
+                                                                                        cx.theme()
+                                                                                            .muted_foreground,
+                                                                                    ),
+                                                                                )
+                                                                                .child(
+                                                                                    div()
+                                                                                        .text_sm()
+                                                                                        .truncate()
+                                                                                        .child(
+                                                                                            row.name
+                                                                                                .clone(),
+                                                                                        ),
+                                                                                ),
+                                                                        )
+                                                                        .on_click(
+                                                                            move |event, _, cx| {
+                                                                                let path =
+                                                                                    path.clone();
+                                                                                let focus = event
+                                                                                    .modifiers()
+                                                                                    .secondary();
+                                                                                let _ = owner
+                                                                                    .update(
+                                                                                    cx,
+                                                                                    |this, cx| {
+                                                                                        if focus {
+                                                                                            this.dispatch(
+                                                                                                Intent::FocusFile(path),
+                                                                                                cx,
+                                                                                            );
+                                                                                        } else {
+                                                                                            this.dispatch(
+                                                                                                Intent::SelectFile(path),
+                                                                                                cx,
+                                                                                            );
+                                                                                        }
+                                                                                    },
+                                                                                );
+                                                                            },
+                                                                        )
+                                                                        .into_any_element()
+                                                                }
+                                                            }
                                                         })
                                                         .collect()
                                                 },

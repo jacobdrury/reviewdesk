@@ -40,7 +40,7 @@ use crate::theme::{
     should_sync_on_activation,
 };
 use crate::ui::{
-    PipelinesChrome, PullRequestsListChrome, render_inbox, render_pull_requests,
+    ChangesListChrome, PipelinesChrome, PullRequestsListChrome, render_inbox, render_pull_requests,
     render_review_pane, render_sidebar,
 };
 
@@ -71,6 +71,8 @@ pub struct ReviewDesk {
     pull_requests_scroll: UniformListScrollHandle,
     files_scroll: UniformListScrollHandle,
     collapsed_groups: HashSet<String>,
+    /// Collapsed directory path keys in the Changes file tree.
+    collapsed_file_dirs: HashSet<String>,
     filter_menu_open: bool,
     pipelines_scroll: UniformListScrollHandle,
     pipelines_detail_scroll: UniformListScrollHandle,
@@ -122,6 +124,7 @@ impl ReviewDesk {
             pull_requests_scroll: UniformListScrollHandle::new(),
             files_scroll: UniformListScrollHandle::new(),
             collapsed_groups: HashSet::new(),
+            collapsed_file_dirs: HashSet::new(),
             filter_menu_open: false,
             pipelines_scroll: UniformListScrollHandle::new(),
             pipelines_detail_scroll: UniformListScrollHandle::new(),
@@ -276,6 +279,15 @@ impl ReviewDesk {
             self.collapsed_groups.remove(&key);
         } else {
             self.collapsed_groups.insert(key);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_collapsed_file_dir(&mut self, path: String, cx: &mut Context<Self>) {
+        if self.collapsed_file_dirs.contains(&path) {
+            self.collapsed_file_dirs.remove(&path);
+        } else {
+            self.collapsed_file_dirs.insert(path);
         }
         cx.notify();
     }
@@ -1059,7 +1071,10 @@ impl Render for ReviewDesk {
             render_review_pane(
                 &view,
                 &self.diff,
-                &self.files_scroll,
+                ChangesListChrome {
+                    scroll: &self.files_scroll,
+                    collapsed_dirs: &self.collapsed_file_dirs,
+                },
                 PipelinesChrome {
                     list_scroll: &self.pipelines_scroll,
                     detail_scroll: &self.pipelines_detail_scroll,

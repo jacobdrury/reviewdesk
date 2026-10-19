@@ -54,7 +54,6 @@ pub enum Intent {
         pipeline_id: String,
     },
     ToggleMetadataDock,
-    FoldMetadata,
     HideMetadata,
     ToggleDetails {
         id: usize,
@@ -310,29 +309,14 @@ pub enum ReviewTab {
     Changes,
 }
 
-/// Right-dock visibility policy for the Metadata panel.
+/// Right-dock visibility for the Metadata panel.
 ///
-/// `Open` is the full panel; `Folded` collapses to a status+merge strip;
-/// `Hidden` removes the panel entirely (restored only from Review pane chrome).
+/// Open/Hidden only — no folded status strip. Sticky across Review tabs;
+/// restore via the Review pane chrome toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetadataDock {
     Open,
-    Folded,
     Hidden,
-}
-
-impl MetadataDock {
-    /// Auto policy when the active tab changes: open on Overview, folded
-    /// elsewhere. A hidden dock stays hidden — hide restores via chrome only.
-    fn for_tab(self, tab: ReviewTab) -> Self {
-        if self == MetadataDock::Hidden {
-            return MetadataDock::Hidden;
-        }
-        match tab {
-            ReviewTab::Overview => MetadataDock::Open,
-            _ => MetadataDock::Folded,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -573,24 +557,18 @@ impl ReviewSession {
             }
             Intent::SetReviewTab(tab) => {
                 self.review_tab = tab;
-                self.metadata_dock = self.metadata_dock.for_tab(tab);
                 Vec::new()
             }
             Intent::ActivatePipelines => {
                 self.review_tab = ReviewTab::Pipelines;
-                self.metadata_dock = self.metadata_dock.for_tab(ReviewTab::Pipelines);
                 Vec::new()
             }
             Intent::RerunPipeline { pipeline_id } => self.begin_rerun_pipeline(pipeline_id),
             Intent::ToggleMetadataDock => {
                 self.metadata_dock = match self.metadata_dock {
                     MetadataDock::Open => MetadataDock::Hidden,
-                    MetadataDock::Folded | MetadataDock::Hidden => MetadataDock::Open,
+                    MetadataDock::Hidden => MetadataDock::Open,
                 };
-                Vec::new()
-            }
-            Intent::FoldMetadata => {
-                self.metadata_dock = MetadataDock::Folded;
                 Vec::new()
             }
             Intent::HideMetadata => {
@@ -2797,38 +2775,22 @@ mod tests {
     }
 
     #[test]
-    fn metadata_folds_when_leaving_overview_and_reopens_on_return() {
-        let non_overview = [
+    fn metadata_stays_open_across_tabs() {
+        let tabs = [
             ReviewTab::Pipelines,
             ReviewTab::Conversation,
             ReviewTab::Changes,
+            ReviewTab::Overview,
         ];
-        for tab in non_overview {
-            let mut session = selected_session("pr-1");
+        let mut session = selected_session("pr-1");
+        for tab in tabs {
             let _ = session.apply(Intent::SetReviewTab(tab));
             assert_eq!(
                 session.view().metadata_dock,
-                MetadataDock::Folded,
-                "leaving Overview for {tab:?} should fold Metadata"
-            );
-
-            let _ = session.apply(Intent::SetReviewTab(ReviewTab::Overview));
-            assert_eq!(
-                session.view().metadata_dock,
                 MetadataDock::Open,
-                "returning to Overview should reopen Metadata"
+                "dock should stay open on {tab:?}"
             );
         }
-    }
-
-    #[test]
-    fn chrome_toggle_restores_metadata_after_fold() {
-        let mut session = selected_session("pr-1");
-        let _ = session.apply(Intent::SetReviewTab(ReviewTab::Changes));
-        assert_eq!(session.view().metadata_dock, MetadataDock::Folded);
-
-        let _ = session.apply(Intent::ToggleMetadataDock);
-        assert_eq!(session.view().metadata_dock, MetadataDock::Open);
     }
 
     #[test]
@@ -2847,16 +2809,6 @@ mod tests {
         assert_eq!(session.view().metadata_dock, MetadataDock::Open);
 
         let _ = session.apply(Intent::ToggleMetadataDock);
-        assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
-    }
-
-    #[test]
-    fn fold_keeps_strip_while_hide_removes_it() {
-        let mut session = selected_session("pr-1");
-        let _ = session.apply(Intent::FoldMetadata);
-        assert_eq!(session.view().metadata_dock, MetadataDock::Folded);
-
-        let _ = session.apply(Intent::HideMetadata);
         assert_eq!(session.view().metadata_dock, MetadataDock::Hidden);
     }
 
