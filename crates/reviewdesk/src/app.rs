@@ -40,7 +40,7 @@ use crate::theme::{
     should_sync_on_activation,
 };
 use crate::ui::{
-    ChangesListChrome, PullRequestsListChrome, render_inbox, render_pull_requests,
+    ChangesListChrome, PipelinesChrome, PullRequestsListChrome, render_inbox, render_pull_requests,
     render_review_pane, render_sidebar,
 };
 
@@ -75,6 +75,9 @@ pub struct ReviewDesk {
     collapsed_file_dirs: HashSet<String>,
     filter_menu_open: bool,
     pipelines_scroll: UniformListScrollHandle,
+    pipelines_detail_scroll: UniformListScrollHandle,
+    selected_pipeline: usize,
+    pipelines_collapsed_groups: HashSet<String>,
     conversation_scroll: UniformListScrollHandle,
     _inbox_reload_task: Task<()>,
     _inbox_sync_task: Task<()>,
@@ -97,6 +100,7 @@ pub struct ReviewDesk {
     _window_activation: Option<Subscription>,
     skip_next_activation_sync: bool,
     last_diff_revision: u64,
+    last_scroll_request: u64,
 }
 
 impl ReviewDesk {
@@ -123,6 +127,9 @@ impl ReviewDesk {
             collapsed_file_dirs: HashSet::new(),
             filter_menu_open: false,
             pipelines_scroll: UniformListScrollHandle::new(),
+            pipelines_detail_scroll: UniformListScrollHandle::new(),
+            selected_pipeline: 0,
+            pipelines_collapsed_groups: HashSet::new(),
             conversation_scroll: UniformListScrollHandle::new(),
             _inbox_reload_task: Task::ready(()),
             _inbox_sync_task: Task::ready(()),
@@ -145,6 +152,7 @@ impl ReviewDesk {
             _window_activation: None,
             skip_next_activation_sync: false,
             last_diff_revision: 0,
+            last_scroll_request: 0,
         };
         this.sync_theme(window, cx);
         this.skip_next_activation_sync = true;
@@ -162,6 +170,13 @@ impl ReviewDesk {
     }
 
     pub(crate) fn dispatch(&mut self, intent: Intent, cx: &mut Context<Self>) {
+        if matches!(
+            intent,
+            Intent::SelectPullRequest(_) | Intent::BackToPullRequests
+        ) {
+            self.selected_pipeline = 0;
+            self.pipelines_collapsed_groups.clear();
+        }
         let effects = self.session.apply(intent);
         self.run_effects(effects, cx);
         self.sync_diff_widget(cx);
@@ -277,6 +292,20 @@ impl ReviewDesk {
         cx.notify();
     }
 
+    pub(crate) fn select_pipeline(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.selected_pipeline = index;
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_pipelines_collapsed_group(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.pipelines_collapsed_groups.contains(&key) {
+            self.pipelines_collapsed_groups.remove(&key);
+        } else {
+            self.pipelines_collapsed_groups.insert(key);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn toggle_filter_menu(&mut self, cx: &mut Context<Self>) {
         self.filter_menu_open = !self.filter_menu_open;
         cx.notify();
@@ -314,21 +343,39 @@ impl ReviewDesk {
 
     fn sync_diff_widget(&mut self, cx: &mut Context<Self>) {
         let view = self.session.view();
-        if view.diff_revision == self.last_diff_revision {
+        let files_changed = view.diff_revision != self.last_diff_revision;
+        let scroll_changed = view.scroll_request != self.last_scroll_request;
+        if !files_changed && !scroll_changed {
             return;
         }
-        self.last_diff_revision = view.diff_revision;
+
         let mode = view.diff_mode;
-        let files = match (&view.selected_file_error, &view.selected_diff_file) {
-            (Some(_), _) | (None, None) => Vec::new(),
-            (None, Some(file)) => vec![file.clone()],
+        let files: Vec<_> = if view.selected_file_error.is_some() {
+            Vec::new()
+        } else {
+            view.diff_files.iter().cloned().collect()
         };
-        self.diff.update(cx, |state, cx| {
-            if state.mode() != mode {
-                state.set_mode(mode, cx);
+        let scroll_to = view.scroll_to_path.clone();
+        let scroll_request = view.scroll_request;
+
+        if files_changed {
+            self.last_diff_revision = view.diff_revision;
+            self.diff.update(cx, |state, cx| {
+                if state.mode() != mode {
+                    state.set_mode(mode, cx);
+                }
+                state.set_files(files, cx);
+            });
+        }
+
+        if scroll_changed {
+            self.last_scroll_request = scroll_request;
+            if let Some(path) = scroll_to {
+                self.diff.update(cx, |state, cx| {
+                    state.scroll_to_file(path.as_str(), cx);
+                });
             }
-            state.set_files(files, cx);
-        });
+        }
     }
 
     fn sync_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1028,7 +1075,12 @@ impl Render for ReviewDesk {
                     scroll: &self.files_scroll,
                     collapsed_dirs: &self.collapsed_file_dirs,
                 },
-                &self.pipelines_scroll,
+                PipelinesChrome {
+                    list_scroll: &self.pipelines_scroll,
+                    detail_scroll: &self.pipelines_detail_scroll,
+                    selected_pipeline: self.selected_pipeline,
+                    collapsed_groups: &self.pipelines_collapsed_groups,
+                },
                 &self.conversation_scroll,
                 entity.clone(),
                 cx,

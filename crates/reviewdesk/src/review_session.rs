@@ -60,7 +60,12 @@ pub enum Intent {
         id: usize,
         currently_open: bool,
     },
+    /// Plain click in the file list: highlight and scroll to that file in the multibuffer.
     SelectFile(SharedString),
+    /// Cmd/Ctrl+click: open only that file's Diff (single-file focus).
+    FocusFile(SharedString),
+    /// Return from single-file focus to the multibuffer default.
+    ShowAllFiles,
     RetryFile(SharedString),
     ToggleDiffMode,
     AddDiffReviewComment(DiffLineRange),
@@ -107,6 +112,8 @@ pub enum Intent {
         name: String,
     },
     DiscardViewEdits,
+    /// Constructed from the macOS rename prompt only; allow on other targets.
+    #[allow(dead_code)]
     RenameActiveView {
         name: String,
     },
@@ -418,12 +425,20 @@ pub struct SessionView {
     pub overview_markdown: Option<SharedString>,
     pub patch_index: LoadState<()>,
     pub file_paths: Arc<[SharedString]>,
+    /// List highlight; also the scroll target after [`Intent::SelectFile`].
     pub selected_file: Option<SharedString>,
-    pub selected_diff_file: Option<DiffFile>,
+    /// When set, Diff shows only this path; `None` is the multibuffer default.
+    pub focused_file: Option<SharedString>,
+    /// DiffFiles currently shown (all Patch files, or one when focused).
+    pub diff_files: Arc<[DiffFile]>,
+    /// Error for the focused file only (single-file focus with a bad slice).
     pub selected_file_error: Option<ProviderError>,
     pub diff_mode: DiffMode,
-    /// Bumps when Diff surface inputs change (mode, selected file, materialization).
+    /// Bumps when Diff surface inputs change (mode, files, materialization).
     pub diff_revision: u64,
+    /// Bumps when the Diff pane should scroll to [`Self::scroll_to_path`].
+    pub scroll_request: u64,
+    pub scroll_to_path: Option<SharedString>,
     /// Shared Thread set for Conversation (#80) and Diff surfaces.
     pub shared_threads: Arc<[ThreadView]>,
     pub has_pending_review: bool,
@@ -472,9 +487,12 @@ pub struct ReviewSession {
     file_cache: HashMap<SharedString, DiffFile>,
     file_errors: HashMap<SharedString, ProviderError>,
     selected_file: Option<SharedString>,
-    selected_diff_file: Option<DiffFile>,
+    focused_file: Option<SharedString>,
+    diff_files: Arc<[DiffFile]>,
     diff_mode: DiffMode,
     diff_revision: u64,
+    scroll_request: u64,
+    scroll_to_path: Option<SharedString>,
     threads: LoadState<PullRequestThreads>,
     threads_syncing: bool,
     hide_resolved_threads: bool,
@@ -518,9 +536,12 @@ impl ReviewSession {
             file_cache: HashMap::new(),
             file_errors: HashMap::new(),
             selected_file: None,
-            selected_diff_file: None,
+            focused_file: None,
+            diff_files: Arc::from([]),
             diff_mode: DiffMode::Split,
             diff_revision: 0,
+            scroll_request: 0,
+            scroll_to_path: None,
             threads: LoadState::Idle,
             threads_syncing: false,
             hide_resolved_threads: false,
@@ -584,10 +605,20 @@ impl ReviewSession {
                 self.select_file(path);
                 Vec::new()
             }
+            Intent::FocusFile(path) => {
+                self.focus_file(path);
+                Vec::new()
+            }
+            Intent::ShowAllFiles => {
+                self.show_all_files();
+                Vec::new()
+            }
             Intent::RetryFile(path) => {
                 self.file_errors.remove(&path);
                 self.file_cache.remove(&path);
-                self.materialize_file(path);
+                if self.focused_file.as_ref() == Some(&path) || self.focused_file.is_none() {
+                    self.rebuild_diff_files();
+                }
                 Vec::new()
             }
             Intent::ToggleDiffMode => {
@@ -780,7 +811,7 @@ impl ReviewSession {
         };
         let overview_markdown = ready_detail.map(|detail| self.cached_overview_markdown(&detail));
         let selected_file_error = self
-            .selected_file
+            .focused_file
             .as_ref()
             .and_then(|path| self.file_errors.get(path).cloned());
         let (shared_threads, has_pending_review) = self.thread_projection();
@@ -824,10 +855,13 @@ impl ReviewSession {
             patch_index,
             file_paths: self.file_list_paths.clone(),
             selected_file: self.selected_file.clone(),
-            selected_diff_file: self.selected_diff_file.clone(),
+            focused_file: self.focused_file.clone(),
+            diff_files: self.diff_files.clone(),
             selected_file_error,
             diff_mode: self.diff_mode,
             diff_revision: self.diff_revision,
+            scroll_request: self.scroll_request,
+            scroll_to_path: self.scroll_to_path.clone(),
             shared_threads,
             has_pending_review,
             threads_syncing: self.threads_syncing,
@@ -868,6 +902,11 @@ impl ReviewSession {
 
     fn bump_diff_revision(&mut self) {
         self.diff_revision = self.diff_revision.wrapping_add(1);
+    }
+
+    fn request_scroll_to_file(&mut self, path: SharedString) {
+        self.scroll_to_path = Some(path);
+        self.scroll_request = self.scroll_request.wrapping_add(1);
     }
 
     fn boot(&mut self) -> Vec<Effect> {
@@ -1068,7 +1107,9 @@ impl ReviewSession {
         self.file_cache.clear();
         self.file_errors.clear();
         self.selected_file = None;
-        self.selected_diff_file = None;
+        self.focused_file = None;
+        self.diff_files = Arc::from([]);
+        self.scroll_to_path = None;
         self.overview_segments.clear();
         self.details_open.clear();
         self.overview_compose_cache = None;
@@ -1099,7 +1140,9 @@ impl ReviewSession {
         self.file_cache.clear();
         self.file_errors.clear();
         self.selected_file = None;
-        self.selected_diff_file = None;
+        self.focused_file = None;
+        self.diff_files = Arc::from([]);
+        self.scroll_to_path = None;
         self.file_list_paths = Arc::from([]);
         self.bump_diff_revision();
         vec![Effect::FetchPatch { id }]
@@ -1196,7 +1239,9 @@ impl ReviewSession {
             Err(error) => {
                 self.file_list_paths = Arc::from([]);
                 self.selected_file = None;
-                self.selected_diff_file = None;
+                self.focused_file = None;
+                self.diff_files = Arc::from([]);
+                self.scroll_to_path = None;
                 self.patch_index = LoadState::Error(error);
                 self.bump_diff_revision();
             }
@@ -1292,27 +1337,25 @@ impl ReviewSession {
         match index_patch(patch) {
             Ok(index) => {
                 self.file_list_paths = index.paths().cloned().collect::<Vec<_>>().into();
-                if let Some(path) = index.first_path() {
-                    self.selected_file = Some(path.clone());
-                    self.patch_index = LoadState::Ready(index);
-                    self.materialize_file(path);
-                    return;
-                }
                 self.selected_file = None;
-                self.selected_diff_file = None;
+                self.focused_file = None;
+                self.scroll_to_path = None;
                 self.patch_index = LoadState::Ready(index);
-                self.bump_diff_revision();
+                self.rebuild_diff_files();
             }
             Err(error) => {
                 self.file_list_paths = Arc::from([]);
                 self.selected_file = None;
-                self.selected_diff_file = None;
+                self.focused_file = None;
+                self.diff_files = Arc::from([]);
+                self.scroll_to_path = None;
                 self.patch_index = LoadState::Error(error);
                 self.bump_diff_revision();
             }
         }
     }
 
+    /// Plain click: highlight + scroll in the multibuffer (leaves single-file focus).
     fn select_file(&mut self, path: SharedString) {
         let LoadState::Ready(index) = &self.patch_index else {
             return;
@@ -1321,35 +1364,77 @@ impl ReviewSession {
             return;
         }
         self.selected_file = Some(path.clone());
-        self.materialize_file(path);
+        let left_focus = self.focused_file.take().is_some();
+        if left_focus {
+            self.rebuild_diff_files();
+        }
+        self.request_scroll_to_file(path);
     }
 
-    fn materialize_file(&mut self, path: SharedString) {
-        if let Some(file) = self.file_cache.get(&path) {
-            self.selected_diff_file = Some(file.clone());
-            self.bump_diff_revision();
-            return;
-        }
-        if self.file_errors.contains_key(&path) {
-            self.selected_diff_file = None;
-            self.bump_diff_revision();
-            return;
-        }
+    /// Cmd/Ctrl+click: Diff shows only this file.
+    fn focus_file(&mut self, path: SharedString) {
         let LoadState::Ready(index) = &self.patch_index else {
             return;
         };
+        if !index.paths().any(|entry| entry.as_str() == path.as_str()) {
+            return;
+        }
+        self.selected_file = Some(path.clone());
+        self.focused_file = Some(path);
+        self.scroll_to_path = None;
+        self.rebuild_diff_files();
+    }
+
+    fn show_all_files(&mut self) {
+        if self.focused_file.is_none() && self.selected_file.is_none() {
+            return;
+        }
+        self.focused_file = None;
+        self.selected_file = None;
+        self.scroll_to_path = None;
+        self.rebuild_diff_files();
+    }
+
+    fn rebuild_diff_files(&mut self) {
+        let LoadState::Ready(_) = &self.patch_index else {
+            self.diff_files = Arc::from([]);
+            self.bump_diff_revision();
+            return;
+        };
+        let paths: Vec<SharedString> = match &self.focused_file {
+            Some(path) => vec![path.clone()],
+            None => self.file_list_paths.iter().cloned().collect(),
+        };
+        let mut files = Vec::with_capacity(paths.len());
+        for path in paths {
+            if let Some(file) = self.materialize_cached(&path) {
+                files.push(file);
+            }
+        }
+        self.diff_files = files.into();
+        self.bump_diff_revision();
+    }
+
+    fn materialize_cached(&mut self, path: &SharedString) -> Option<DiffFile> {
+        if let Some(file) = self.file_cache.get(path) {
+            return Some(file.clone());
+        }
+        if self.file_errors.contains_key(path) {
+            return None;
+        }
+        let LoadState::Ready(index) = &self.patch_index else {
+            return None;
+        };
         match index.materialize(path.as_str()) {
             Ok(file) => {
-                self.file_errors.remove(&path);
-                self.file_cache.insert(path, file.clone());
-                self.selected_diff_file = Some(file);
-                self.bump_diff_revision();
+                self.file_errors.remove(path);
+                self.file_cache.insert(path.clone(), file.clone());
+                Some(file)
             }
             Err(error) => {
-                self.file_cache.remove(&path);
-                self.file_errors.insert(path, error);
-                self.selected_diff_file = None;
-                self.bump_diff_revision();
+                self.file_cache.remove(path);
+                self.file_errors.insert(path.clone(), error);
+                None
             }
         }
     }
@@ -2319,7 +2404,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_patch_index_auto_selects_first_path() {
+    fn successful_patch_index_opens_multibuffer_by_default() {
         let mut session = ReviewSession::new();
         let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
         let _ = session.apply(Intent::PatchLocalFinished {
@@ -2328,13 +2413,71 @@ mod tests {
         });
         let view = session.view();
         assert!(matches!(view.patch_index, LoadState::Ready(())));
-        assert_eq!(view.selected_file.as_deref(), Some("new"));
-        assert!(view.selected_diff_file.is_some());
+        assert!(view.selected_file.is_none());
+        assert!(view.focused_file.is_none());
+        assert_eq!(view.diff_files.len(), 2);
         assert!(view.selected_file_error.is_none());
     }
 
     #[test]
-    fn select_file_and_retry_surface_materialize_errors() {
+    fn select_file_scrolls_in_multibuffer_without_focusing() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::PatchLocalFinished {
+            id: pr_id("pr-1"),
+            result: Ok(Some(Patch::new(MULTI_FILE))),
+        });
+        let before = session.view().scroll_request;
+        let _ = session.apply(Intent::SelectFile("old".into()));
+        let view = session.view();
+        assert_eq!(view.selected_file.as_deref(), Some("old"));
+        assert!(view.focused_file.is_none());
+        assert_eq!(view.diff_files.len(), 2);
+        assert_eq!(view.scroll_to_path.as_deref(), Some("old"));
+        assert_eq!(view.scroll_request, before.wrapping_add(1));
+    }
+
+    #[test]
+    fn focus_file_opens_single_file_and_show_all_returns() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::PatchLocalFinished {
+            id: pr_id("pr-1"),
+            result: Ok(Some(Patch::new(MULTI_FILE))),
+        });
+        let _ = session.apply(Intent::FocusFile("old".into()));
+        let focused = session.view();
+        assert_eq!(focused.focused_file.as_deref(), Some("old"));
+        assert_eq!(focused.selected_file.as_deref(), Some("old"));
+        assert_eq!(focused.diff_files.len(), 1);
+        assert_eq!(focused.diff_files[0].path().as_str(), "old");
+
+        let _ = session.apply(Intent::ShowAllFiles);
+        let all = session.view();
+        assert!(all.focused_file.is_none());
+        assert!(all.selected_file.is_none());
+        assert_eq!(all.diff_files.len(), 2);
+    }
+
+    #[test]
+    fn select_file_from_focus_returns_to_multibuffer() {
+        let mut session = ReviewSession::new();
+        let _ = session.apply(Intent::SelectPullRequest(pr_id("pr-1")));
+        let _ = session.apply(Intent::PatchLocalFinished {
+            id: pr_id("pr-1"),
+            result: Ok(Some(Patch::new(MULTI_FILE))),
+        });
+        let _ = session.apply(Intent::FocusFile("new".into()));
+        assert_eq!(session.view().diff_files.len(), 1);
+        let _ = session.apply(Intent::SelectFile("old".into()));
+        let view = session.view();
+        assert!(view.focused_file.is_none());
+        assert_eq!(view.diff_files.len(), 2);
+        assert_eq!(view.scroll_to_path.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn focus_file_and_retry_surface_materialize_errors() {
         let mut broken = MULTI_FILE.to_owned();
         broken.push_str("diff --git a/bad b/bad\n--- a/bad\n+++ b/bad\n@@ not a hunk @@\n");
         let mut session = ReviewSession::new();
@@ -2343,9 +2486,12 @@ mod tests {
             id: pr_id("pr-1"),
             result: Ok(Some(Patch::new(broken))),
         });
-        let _ = session.apply(Intent::SelectFile("bad".into()));
+        // Multibuffer still shows the good files; bad is omitted.
+        assert_eq!(session.view().diff_files.len(), 2);
+
+        let _ = session.apply(Intent::FocusFile("bad".into()));
         assert!(session.view().selected_file_error.is_some());
-        assert!(session.view().selected_diff_file.is_none());
+        assert!(session.view().diff_files.is_empty());
 
         // Retry clears error slot then re-materializes; bad file stays an error.
         let _ = session.apply(Intent::RetryFile("bad".into()));
@@ -2366,7 +2512,8 @@ mod tests {
             result: Err(ProviderError::other("blip")),
         });
         assert!(matches!(session.view().patch_index, LoadState::Ready(())));
-        assert_eq!(session.view().selected_file.as_deref(), Some("new"));
+        assert!(session.view().focused_file.is_none());
+        assert_eq!(session.view().diff_files.len(), 2);
     }
 
     #[test]
