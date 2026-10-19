@@ -1,5 +1,9 @@
 ## Agent skills
 
+### Before push, PR, or handoff
+
+Pass `moon run :format :lint :test :build` (exit 0) before pushing, opening or updating a PR, or handing work back. Same gate as CI.
+
 ### Issue tracker
 
 Issues live in GitHub Issues for `jacobdrury/reviewdesk` (via `gh`). See `docs/agents/issue-tracker.md`.
