@@ -442,12 +442,14 @@ fn render_run_detail(
                                     state,
                                     depth,
                                 } => group_header_row(
-                                    key,
-                                    label,
-                                    *count,
-                                    *state,
-                                    *depth,
-                                    collapsed.contains(key),
+                                    GroupHeader {
+                                        key,
+                                        label,
+                                        count: *count,
+                                        state: *state,
+                                        depth: *depth,
+                                        is_collapsed: collapsed.contains(key),
+                                    },
                                     entity.clone(),
                                     cx,
                                 )
@@ -466,30 +468,34 @@ fn render_run_detail(
         .into_any_element()
 }
 
-fn group_header_row(
-    key: &str,
-    label: &str,
+struct GroupHeader<'a> {
+    key: &'a str,
+    label: &'a str,
     count: usize,
     state: Option<JobState>,
     depth: u8,
     is_collapsed: bool,
+}
+
+fn group_header_row(
+    group: GroupHeader<'_>,
     entity: WeakEntity<ReviewDesk>,
     cx: &App,
 ) -> impl IntoElement {
-    let chevron = if is_collapsed {
+    let chevron = if group.is_collapsed {
         IconName::ChevronRight
     } else {
         IconName::ChevronDown
     };
-    let group_key = key.to_string();
-    let pt = if depth == 0 { 14. } else { 8. };
+    let group_key = group.key.to_string();
+    let pt = if group.depth == 0 { 14. } else { 8. };
 
     let mut header = h_flex().w_full().items_center().gap_2().child(
         Icon::new(chevron)
             .xsmall()
             .text_color(cx.theme().muted_foreground),
     );
-    if let Some(state) = state {
+    if let Some(state) = group.state {
         header = header.child(
             Icon::new(job_icon(state))
                 .xsmall()
@@ -504,9 +510,9 @@ fn group_header_row(
     }
 
     div()
-        .id(SharedString::from(format!("group-{key}")))
+        .id(SharedString::from(format!("group-{}", group.key)))
         .w_full()
-        .pl(px(list_row_pl(depth)))
+        .pl(px(list_row_pl(group.depth)))
         .pr_4()
         .pt(px(pt))
         .pb(px(6.))
@@ -525,12 +531,12 @@ fn group_header_row(
                     h_flex()
                         .items_center()
                         .gap_1()
-                        .child(div().text_sm().font_medium().child(label.to_string()))
+                        .child(div().text_sm().font_medium().child(group.label.to_string()))
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(cx.theme().muted_foreground)
-                                .child(count.to_string()),
+                                .child(group.count.to_string()),
                         ),
                 )
                 .child(div().flex_1()),
